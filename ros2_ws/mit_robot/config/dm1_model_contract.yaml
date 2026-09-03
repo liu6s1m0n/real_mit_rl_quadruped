@@ -1,0 +1,42 @@
+model: DM1
+contract_version: 1
+joint_order: [FR_hip, FR_thigh, FR_calf, FL_hip, FL_thigh, FL_calf, RR_hip, RR_thigh, RR_calf, RL_hip, RL_thigh, RL_calf]
+leg_order: [FR, FL, RR, RL]
+joint_order_per_leg: [hip, thigh, calf]
+motor_zero_position_rad: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+kinematic_joint_offset_rad: [0, -0.203, -2.25]
+stand_joint_position_front_rad: [0, -0.597, 1.432]
+stand_joint_position_rear_rad: [0, -0.597, 1.468]
+nominal_body_height_m: 0.39
+body_mass_kg: 6.889103
+motor:
+  name: DM-J6248P-2EC
+  continuous_torque_nm: 30
+  peak_torque_nm: 97
+  rated_speed_rpm: 40
+  no_load_speed_rpm: 60
+  feedback_timeout_s: 0.05
+control:
+  minimum_standing_height_m: 0.30
+  maximum_standing_height_m: 0.42
+  standing_height_rate_mps: 0.08
+  physics_timestep_s: 0.002
+  policy_period_s: 0.02
+  policy_observation_size: 45
+  policy_history_length: 6
+  policy_action_scale: 0.25
+  policy_filter_time_constant_s: 0.08
+  policy_max_action_delta: 0.10
+  policy_max_target_velocity_rad_s: 2.0
+  modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, walk_rl, stairs_rl]
+rl:
+  flat_checkpoint: model_3285
+  flat_checkpoint_sha256: aaafcccd6aa6a65d247051f7f7f419b518314e5a7ec934454267d41d5a753d1f
+  stairs_checkpoint: model_4700
+  stairs_checkpoint_sha256: cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d
+  stairs_is_simulation_baseline_only: true
+  inference_uses_vae_posterior_mean: true
+mjcf:
+  file: src/dm1_description/dm1/dm1.xml
+  sha256: 5aa751a3c01860e9914594d0384f352a722b7fc0c83f1f90d6133eb10c43e6de
+  fixed_installation_rotations_baked_in: false

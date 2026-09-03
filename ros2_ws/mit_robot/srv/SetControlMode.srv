@@ -1,0 +1,24 @@
+# 请求切换到的控制模式
+# 0: PASSIVE（被动）
+# 1: JOINT_PD（关节位置控制）
+# 2: BALANCE_STAND（平衡站立）
+# 3: LOCOMOTION（行走）
+# 4: STAND_UP（平滑起立）
+# 5: RECOVERY_STAND（翻身恢复站立）
+# 6: WALK_CLASSIC（经典 MPC/WBC 行走）
+# 7: WALK_RL（平地强化学习行走）
+# 8: STAIRS_RL（楼梯强化学习行走；需要冻结策略白名单）
+uint8 mode
+
+# 是否允许绕过常规状态转换检查
+bool force
+
+---
+# 是否成功切换
+bool success
+
+# 当前实际控制模式，编号与请求中的 mode 定义相同
+uint8 current_mode
+
+# 状态切换结果或失败原因
+string message
