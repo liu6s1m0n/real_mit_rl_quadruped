@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+/*Linux/POSIX 串口相关接口*/
 #include <fcntl.h>
 #include <poll.h>
 #include <termios.h>
@@ -18,12 +19,12 @@
 
 namespace
 {
-constexpr std::size_t kRecordSize = 19;
-constexpr std::size_t kPacketSize = 3 * kRecordSize;
-constexpr std::uint8_t kFrameHeader = 0x55;
-constexpr std::uint8_t kFrameFlag = 0xAA;
-constexpr std::uint8_t kSlaveId = 0x01;
-constexpr int kReadTimeoutMs = 20;
+constexpr std::size_t kRecordSize = 19; /*每个数据记录固定 19 字节*/
+constexpr std::size_t kPacketSize = 3 * kRecordSize; /*一整帧由三个记录组成*/
+constexpr std::uint8_t kFrameHeader = 0x55; /*帧头*/
+constexpr std::uint8_t kFrameFlag = 0xAA;   /*帧标志*/
+constexpr std::uint8_t kSlaveId = 0x01;     /*从机ID*/
+constexpr int kReadTimeoutMs = 20;          /*读取超时时间（毫秒）*/
 
 int baudConstant(int baudrate)
 {

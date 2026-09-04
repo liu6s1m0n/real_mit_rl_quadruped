@@ -75,7 +75,7 @@ TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)
       action.fill(0.0F);
       return true;
     }, RlPolicyMetadata{
-      "model_3285", kDm1FlatCheckpointSha256, false, true, true});
+      "model_3960", kDm1FlatCheckpointSha256, false, true, true});
   std::array<float, kRlObservationSize> observation{};
   std::array<float, kRlObservationSize * kRlHistoryLength> history{};
   std::array<float, kRlActionSize> action{};
@@ -87,14 +87,20 @@ TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)
   EXPECT_FALSE(policy->metadata().supports_stairs);
 }
 
+TEST(Dm1Contract, RlReferenceMatchesIsaacTrainingContract)
+{
+  EXPECT_FLOAT_EQ(kDm1RlDefaultJointPosition[0], 0.0F);
+  EXPECT_FLOAT_EQ(kDm1RlDefaultJointPosition[1], -0.520F);
+  EXPECT_FLOAT_EQ(kDm1RlDefaultJointPosition[2], 1.330F);
+  EXPECT_EQ(kDm1RlDefaultJointPosition.size(), kRlActionSize);
+}
+
 // 换模型要修改的地方：测试名称和 metadata 期望值
-TEST(Dm1Contract, FrozenModel3610AdapterProducesFiniteActions)
+TEST(Dm1Contract, FrozenModel3960AdapterProducesFiniteActions)
 {
   FrozenDwaqPolicy policy;
   const RlPolicyMetadata metadata = policy.metadata();
-  // Keep the legacy selector name because FSM_State_Locomotion is unchanged;
-  // the active checkpoint is identified by the new SHA below.
-  EXPECT_EQ(metadata.name, "model_3285");
+  EXPECT_EQ(metadata.name, "model_3960");
   EXPECT_EQ(metadata.checkpoint_sha256, kDm1FlatCheckpointSha256);
   EXPECT_TRUE(metadata.frozen);
   EXPECT_TRUE(metadata.uses_vae_posterior_mean);
@@ -109,7 +115,7 @@ TEST(Dm1Contract, FrozenModel3610AdapterProducesFiniteActions)
   }));
 }
 
-TEST(Dm1Contract, FrozenModel3610AdapterMatchesRepeatedInitialHistory)
+TEST(Dm1Contract, FrozenModel3960AdapterMatchesRepeatedInitialHistory)
 {
   FrozenDwaqPolicy policy;
   std::array<float, kRlObservationSize> observation{};

@@ -19,16 +19,19 @@
 constexpr std::size_t kRlObservationSize = 45;
 constexpr std::size_t kRlHistoryLength = 6;
 constexpr std::size_t kRlActionSize = 12;
+/*换模型要修改的地方：必须与 Isaac 训练配置 init_state.default_joint_angles 一致*/
+inline constexpr std::array<float, kRlActionSize> kDm1RlDefaultJointPosition{
+  0.0F, -0.520F, 1.330F,
+  0.0F, -0.520F, 1.330F,
+  0.0F, -0.520F, 1.330F,
+  0.0F, -0.520F, 1.330F};
 // 换模型要修改的地方：当前模型路径、模型编号和 SHA256
-// Active deployment checkpoint: model_3610
-// /home/simon/RL_Robot/logs/dm1_trot_phase_refine_3510/
-// Sep04_10-46-32_trot_phase_refine_from3510_100/model_3610.pt
-// The symbol name remains the legacy flat-RL contract so the existing FSM
-// validation remains unchanged; its value identifies the active checkpoint.
+// Active deployment checkpoint: model_3960
+// /home/simon/RL_Robot/frozen_models/dm1_trot_right_finish_refine_3910_model3960/model_3960.pt
 inline constexpr char kDm1FlatCheckpointSha256[] =
-  "cf6f88a2c7be9365dbe3e62c9a4c022d37d88f7fd692373842c32280f7e88421";
-// Previous checkpoint (commented, not active): model_3485
-// SHA256 aa6de9ce583635d78ae8c9a8e6ad62457f3b56e6bd02cc26650125b2b0e4e17e
+  "5a05f95dd5e7ddef83a48a076415267ef22bee6dad55fcb43b92a5f2adf4ab08";
+// Previous checkpoint (commented, not active): model_3610
+// SHA256 cf6f88a2c7be9365dbe3e62c9a4c022d37d88f7fd692373842c32280f7e88421
 inline constexpr char kDm1StairsCheckpointSha256[] =
   "cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d";
 

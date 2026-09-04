@@ -399,13 +399,10 @@ bool FSM_State_Locomotion<T>::buildRlObservation(
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & data = this->_data->leg_controller->datas[leg];
     if (!data.valid) {return false;}
-    const auto & home = this->_data->quadruped->leg(
-      static_cast<LegId>(leg)).joints.home_position;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t index = leg * kJointsPerLeg + joint;
       observation[9 + index] = static_cast<float>(data.q(
-        static_cast<Eigen::Index>(joint)) - home(
-        static_cast<Eigen::Index>(joint)));
+        static_cast<Eigen::Index>(joint))) - kDm1RlDefaultJointPosition[index];
       observation[21 + index] = static_cast<float>(data.qd(
         static_cast<Eigen::Index>(joint))) * 0.05F;
       observation[33 + index] = rl_previous_action_[index];
@@ -433,7 +430,7 @@ void FSM_State_Locomotion<T>::RlControlStep()
     (active_mode_ == ControlMode::StairsRl && metadata.name == "model_4700" &&
     metadata.checkpoint_sha256 == kDm1StairsCheckpointSha256) ||
     /*换模型要修改的地方：RL 模型兼容槽位名；需与 metadata() 保持一致*/
-    (active_mode_ == ControlMode::WalkRl && metadata.name == "model_3285" &&
+    (active_mode_ == ControlMode::WalkRl && metadata.name == "model_3960" &&
     metadata.checkpoint_sha256 == kDm1FlatCheckpointSha256);
   if (!expected_checkpoint || !metadata.frozen ||
     !metadata.uses_vae_posterior_mean ||
@@ -475,7 +472,9 @@ void FSM_State_Locomotion<T>::RlControlStep()
       this->_data->control_parameters->rl_action_filter_time_constant + policy_dt);
     const float max_delta = this->_data->control_parameters->rl_max_action_delta;
     for (std::size_t i = 0; i < kRlActionSize; ++i) {
-      const float raw = std::clamp(action[i], -100.0F, 100.0F);
+      // Isaac 在策略输出进入滤波器前执行 clip_actions=(-1, 1)；部署端
+      // 必须保持同一策略坐标语义，不能用更宽的数值保护范围替代它。
+      const float raw = std::clamp(action[i], -1.0F, 1.0F);
       const float low_passed = rl_previous_action_[i] +
         alpha * (raw - rl_previous_action_[i]);
       rl_previous_action_[i] += std::clamp(
@@ -503,13 +502,11 @@ void FSM_State_Locomotion<T>::RlControlStep()
     auto & command = controller.commands[leg];
     const auto & joints = this->_data->quadruped->leg(
       static_cast<LegId>(leg)).joints;
-    const auto & home = joints.home_position;
     command.kp_joint.setConstant(T(100));
     command.kd_joint.setConstant(T(2));
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t index = leg * kJointsPerLeg + joint;
-      const float raw_target = static_cast<float>(home(
-        static_cast<Eigen::Index>(joint))) +
+      const float raw_target = kDm1RlDefaultJointPosition[index] +
         this->_data->control_parameters->rl_action_scale * rl_previous_action_[index];
       const float bounded_target = std::clamp(
         raw_target, static_cast<float>(joints.lower_limit(

@@ -98,6 +98,7 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
 {
   setHomeCalfContactsEnabled(control_parameters_.start_in_prone_home);
   joint_initialization_duration_ = control_parameters_.joint_initialization_duration;
+  // 换站立速度要修改的地方：硬件和仿真共用的抬升速率限制。
   standing_height_rate_limit_ = control_parameters_.standing_height_rate;
 
   PositionVelocityEstimatorParameters<float> estimator_parameters;

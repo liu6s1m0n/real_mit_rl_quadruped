@@ -13,6 +13,7 @@ FSM_State_StandUp<T>::FSM_State_StandUp(ControlFSMData<T> * control_fsm_data)
   }
   this->turnOffAllSafetyChecks();
   this->checkPDesFoot = false;
+  /*换站立速度要修改的地方：展开阶段时长来自共享控制参数*/
   const T stand_up_duration = control_fsm_data->control_parameters->stand_up_duration;
   ramp_iterations_ = std::max<std::size_t>(
     1, static_cast<std::size_t>(

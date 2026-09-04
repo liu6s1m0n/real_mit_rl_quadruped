@@ -191,7 +191,7 @@ source install/setup.bash
 ```bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
 <!-- 换模型要修改的地方：当前模型编号 -->
-# 启动时选择冻结的 model_3610 RL；不加该参数仍是 MPC/WBC
+# 启动时选择冻结的 model_3960 RL；不加该参数仍是 MPC/WBC
 ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 ```
 
@@ -211,7 +211,7 @@ ros2 launch mymit_robot dm1_control.launch.py
 ## 更换 RL 模型
 
 <!-- 换模型要修改的地方：当前模型编号 -->
-当前平地 RL 模型为 `model_3610.pt`。如果新 checkpoint 与当前模型结构相同
+当前平地 RL 模型为 `model_3960.pt`。如果新 checkpoint 与当前模型结构相同
 （45 维观测、6 帧历史、12 维动作），只替换模型权重和身份信息，不需要修改
 MPC/WBC 行走代码。
 
@@ -225,27 +225,26 @@ sha256sum /新模型的绝对路径/model_XXXX.pt
 
 1. `ros2_ws/mit_robot/CMakeLists.txt` 第 53～88 行：
    - 将 `MYMIT_DM1_RL_CHECKPOINT_DEFAULT` 改为新 checkpoint 的绝对路径。
-   - 将 `generated/dm1_policy_3610.hpp` 改为
+   - 将 `generated/dm1_policy_3960.hpp` 改为
      `generated/dm1_policy_XXXX.hpp`。
    - 更新对应注释和导出提示；旧模型路径可继续作为注释保留。
 2. `ros2_ws/mit_robot/tools/export_dm1_policy_header.py`：
    - 第 37 行 `EXPECTED_SHA256` 改为新模型 SHA256。
-   - 第 57、80、82、92 行的模型编号和 `dm1_policy_3610` namespace
+   - 第 57、80、82、92 行的模型编号和 `dm1_policy_3960` namespace
      改为新编号。
 3. `ros2_ws/mit_robot/include/controller/RlPolicy.hpp` 第 22～30 行：
    - 将 `kDm1FlatCheckpointSha256` 改为新模型 SHA256。
    - 把旧模型名和 SHA 留在注释中，便于回退。
 4. `ros2_ws/mit_robot/src/controller/frozen_dwaq_policy.cpp`：
    - 第 8 行改为包含新的 `dm1_policy_XXXX.hpp`。
-   - 第 43～132 行将所有 `dm1_policy_3610::` 改为新的 namespace。
+   - 第 43～132 行将所有 `dm1_policy_3960::` 改为新的 namespace。
 5. `ros2_ws/mit_robot/config/dm1_model_contract.yaml` 第 33～34 行：
    - 更新 `flat_checkpoint` 和 `flat_checkpoint_sha256`。
 6. `ros2_ws/mit_robot/test/dm1_control_contract_test.cpp`：
    - 更新测试名称、模型身份和 SHA 期望值。
 
-为了保持现有运动控制代码不变，`FrozenDwaqPolicy::metadata()` 当前仍使用
-`model_3285` 作为兼容槽位名，实际模型由新 checkpoint 路径和 SHA256 决定。
-如果需要把这个内部槽位名也改为新模型名，必须同时修改：
+`FrozenDwaqPolicy::metadata()` 与 FSM 白名单当前都使用活动模型名
+`model_3960`，并同时校验 SHA256；更换模型时两处必须同步更新。
 
 - `ros2_ws/mit_robot/src/controller/frozen_dwaq_policy.cpp` 第 141～146 行；
 - `ros2_ws/mit_robot/src/FSM/FSM_State_Locomotion.cpp` 第 433～436 行。
@@ -271,10 +270,33 @@ colcon test-result --verbose
 ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 ```
 
+RL 适配器使用训练侧的默认关节参考 `[0, -0.520, 1.330]`，该值已在代码中标注
+为“换模型要修改的地方”，必须与新模型训练配置保持一致。
+
 如果新模型的观测维度、历史长度、动作维度、网络层形状、归一化方式或动作缩放
 发生变化，就不能只替换权重；还需要同步修改 `RlPolicy.hpp` 中的接口维度、
 `export_dm1_policy_header.py` 中的 `EXPECTED` 张量形状，以及
 `frozen_dwaq_policy.cpp` 中的网络层和输入拼接逻辑。
+
+## 调整站立速度
+
+硬件版和 MuJoCo 仿真共用同一套站立速度参数。当前已将站立动作调慢：支撑后
+机身抬升速率为 `0.04 m/s`，趴地展开阶段为 `1.8 s`。以后调整站立速度时，修改
+带有“换站立速度要修改的地方”标记的位置：
+
+- `ros2_ws/mit_robot/include/model/robot_control_parameters.hpp`：修改实际运行参数；
+- `ros2_ws/mit_robot/config/dm1_model_contract.yaml`：同步修改契约记录；
+- `ros2_ws/mit_robot/src/FSM/FSM_State_StandUp.cpp` 和
+  `ros2_ws/mit_robot/user/RobotRunner.cpp`：只需在改变站立控制逻辑时修改，通常不动。
+
+修改后重新构建：
+
+```bash
+cd /home/simon/real_mitrl_dog/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select mymit_robot --symlink-install
+source install/setup.bash
+```
 
 ## 测试
 

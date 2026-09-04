@@ -455,7 +455,7 @@ void runPhysics(
       model->opt.timestep, slow_walking_forward_speed, fast_walking_forward_speed,
       walking_backward_speed, walking_lateral_speed, turning_yaw_rate,
       // 换模型要修改的地方：启动日志模型编号
-      initial_walking_mode == ControlMode::WalkRl ? "RL model_3610" : "MPC");
+      initial_walking_mode == ControlMode::WalkRl ? "RL model_3960" : "MPC");
 
     bool controller_ready = false;
     std::size_t consecutive_failures = 0;
@@ -508,7 +508,7 @@ void runPhysics(
           std::printf(
             "Walking controller selected: %s (takes effect on the next direction command)\n",
             // 换模型要修改的地方：切换日志模型编号
-            walking_mode == ControlMode::WalkRl ? "RL model_3610" : "MPC");
+            walking_mode == ControlMode::WalkRl ? "RL model_3960" : "MPC");
         } else {
           std::printf(
             "Controller selection ignored while walking; press Stand up first\n");

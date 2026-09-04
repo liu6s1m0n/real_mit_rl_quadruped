@@ -167,7 +167,8 @@ private:
   float standing_height_target_ = 0.27F;
   float standing_height_command_ = 0.27F;
   /*高度变化速率限制为：*/
-  float standing_height_rate_limit_ = 0.16F;
+  // 换站立速度要修改的地方：初始化默认值，构造时会由控制参数覆盖。
+  float standing_height_rate_limit_ = 0.04F;
   /*标记是否已经开始关节初始化*/
   bool joint_initialization_started_ = false;
   /*是否已经根据当前估计高度初始化过高度命令*/

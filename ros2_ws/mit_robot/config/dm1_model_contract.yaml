@@ -19,7 +19,11 @@ motor:
 control:
   minimum_standing_height_m: 0.30
   maximum_standing_height_m: 0.42
-  standing_height_rate_mps: 0.08
+  # 站立速度参数：硬件版和 MuJoCo 共用。
+  # 换站立速度要修改的地方：抬升速率（m/s）。
+  standing_height_rate_mps: 0.04
+  # 换站立速度要修改的地方：趴地展开阶段持续时间（s），对应 C++ stand_up_duration。
+  stand_up_duration_s: 1.8
   physics_timestep_s: 0.002
   policy_period_s: 0.02
   policy_observation_size: 45
@@ -31,8 +35,8 @@ control:
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, walk_rl, stairs_rl]
 rl:
   # 换模型要修改的地方：模型编号和 SHA256
-  flat_checkpoint: model_3610
-  flat_checkpoint_sha256: cf6f88a2c7be9365dbe3e62c9a4c022d37d88f7fd692373842c32280f7e88421
+  flat_checkpoint: model_3960
+  flat_checkpoint_sha256: 5a05f95dd5e7ddef83a48a076415267ef22bee6dad55fcb43b92a5f2adf4ab08
   stairs_checkpoint: model_4700
   stairs_checkpoint_sha256: cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d
   stairs_is_simulation_baseline_only: true

@@ -99,7 +99,7 @@ private:
   float turning_yaw_rate_ = 0.35F;            ///< 原地自转角速度绝对值，rad/s。
   double standing_height_slider_ = 0.39;      ///< MuJoCo UI 滑块使用的双精度高度缓存，m。
   // 换模型要修改的地方：模型编号仅用于成员说明
-  ControlMode walking_mode_ = ControlMode::Locomotion;  ///< MPC 或 frozen model_3610 RL。
+  ControlMode walking_mode_ = ControlMode::Locomotion;  ///< MPC 或 frozen model_3960 RL。
   RlPolicyPtr rl_policy_;                    ///< 仅 RL 模式注入，MPC 不触碰。
 };
 

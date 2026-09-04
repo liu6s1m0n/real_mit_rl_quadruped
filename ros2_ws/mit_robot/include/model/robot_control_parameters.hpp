@@ -70,8 +70,10 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
   }
 
   // 数值与 dm1_model_contract.yaml、RL_Robot DM1 训练配置保持一致。
+  // 换站立速度要修改的地方：站立速度由这两个共享参数控制。
+  // standing_height_rate 限制支撑后抬升速度，stand_up_duration 限制趴地展开速度。
   return {
-    T(0.30), T(0.42), T(0.08), T(0.00016), T(1.2),
+    T(0.30), T(0.42), T(0.04), T(0.00016), T(1.2),
     Vec3<T>(T(28), T(36), T(36)), Vec3<T>(T(4), T(5), T(5)),
     true, Vec3<T>::Zero(),
     Vec3<T>(T(1000), T(280), T(280)), Vec3<T>(T(25), T(12), T(12)),
@@ -79,7 +81,7 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     Vec3<T>(T(100), T(100), T(40)), Vec3<T>(T(18), T(18), T(8)),
     Vec3<T>(T(100), T(100), T(40)), Vec3<T>(T(18), T(18), T(8)),
     T(300), T(1), T(150), T(14.705035),
-    T(1.2), Vec3<T>(T(0), T(0.1), T(-2.15)),
+    T(1.8), Vec3<T>(T(0), T(0.1), T(-2.15)),
     Vec3<T>(T(35), T(70), T(80)), Vec3<T>(T(5), T(8), T(10)),
     Vec3<T>(T(220), T(220), T(300)), Vec3<T>(T(12), T(12), T(16)),
     Vec3<T>(T(70), T(70), T(35)), Vec3<T>(T(12), T(12), T(6)),
