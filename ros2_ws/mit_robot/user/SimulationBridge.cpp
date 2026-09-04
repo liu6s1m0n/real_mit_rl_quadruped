@@ -454,7 +454,7 @@ void runPhysics(
       "DM1",
       model->opt.timestep, slow_walking_forward_speed, fast_walking_forward_speed,
       walking_backward_speed, walking_lateral_speed, turning_yaw_rate,
-      initial_walking_mode == ControlMode::WalkRl ? "RL model_3285" : "MPC");
+      initial_walking_mode == ControlMode::WalkRl ? "RL model_3485" : "MPC");
 
     bool controller_ready = false;
     std::size_t consecutive_failures = 0;
@@ -506,7 +506,7 @@ void runPhysics(
             ControlMode::WalkRl : ControlMode::Locomotion;
           std::printf(
             "Walking controller selected: %s (takes effect on the next direction command)\n",
-            walking_mode == ControlMode::WalkRl ? "RL model_3285" : "MPC");
+            walking_mode == ControlMode::WalkRl ? "RL model_3485" : "MPC");
         } else {
           std::printf(
             "Controller selection ignored while walking; press Stand up first\n");

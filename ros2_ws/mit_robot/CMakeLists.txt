@@ -45,14 +45,27 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-# model_3285.pt is a regular PyTorch training checkpoint, not TorchScript.
+# model_3485.pt is a regular PyTorch training checkpoint, not TorchScript.
 # Convert it during the build to a generated C++ header so the running MuJoCo
 # executable has no Python/libtorch runtime dependency.
 set(MYMIT_RL_PYTHON "/opt/rl-gym/venv/bin/python" CACHE FILEPATH
   "Python interpreter with PyTorch used to export the frozen RL actor")
-set(MYMIT_DM1_RL_CHECKPOINT
-  "/home/simon/RL_Robot/frozen_models/dm1_walking_complete_model3285/model_3285.pt"
-  CACHE FILEPATH "Frozen DM1 model_3285 checkpoint")
+# Active checkpoint: trot_hip_refine/model_3485.
+# Previous frozen baseline (kept commented for rollback):
+# /home/simon/RL_Robot/frozen_models/dm1_walking_complete_model3285/model_3285.pt
+/*换模型要修改的地方*/
+set(MYMIT_DM1_RL_CHECKPOINT_DEFAULT
+  "/home/simon/.codex/worktrees/b9d0/RL_Robot/logs/dm1_trot_hip_refine/Sep04_09-08-42_trot_hip_refine_200/model_3485.pt")
+# Migrate an existing build cache that still points at the old model, while
+# preserving an explicitly supplied custom checkpoint.
+if(NOT DEFINED MYMIT_DM1_RL_CHECKPOINT OR
+  MYMIT_DM1_RL_CHECKPOINT MATCHES "/model_3285\\.pt$")
+  set(MYMIT_DM1_RL_CHECKPOINT "${MYMIT_DM1_RL_CHECKPOINT_DEFAULT}"
+    CACHE FILEPATH "Frozen DM1 model_3485 checkpoint" FORCE)
+else()
+  set(MYMIT_DM1_RL_CHECKPOINT "${MYMIT_DM1_RL_CHECKPOINT}"
+    CACHE FILEPATH "Frozen DM1 model_3485 checkpoint")
+endif()
 if(NOT EXISTS "${MYMIT_RL_PYTHON}")
   message(FATAL_ERROR "MYMIT_RL_PYTHON does not exist: ${MYMIT_RL_PYTHON}")
 endif()
@@ -60,8 +73,9 @@ if(NOT EXISTS "${MYMIT_DM1_RL_CHECKPOINT}")
   message(FATAL_ERROR
     "MYMIT_DM1_RL_CHECKPOINT does not exist: ${MYMIT_DM1_RL_CHECKPOINT}")
 endif()
+/*换模型要修改的地方*/
 set(MYMIT_DM1_RL_HEADER
-  "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_3285.hpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_3485.hpp")
 add_custom_command(
   OUTPUT "${MYMIT_DM1_RL_HEADER}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -73,7 +87,7 @@ add_custom_command(
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
     "${MYMIT_DM1_RL_CHECKPOINT}"
-  COMMENT "Exporting frozen DM1 model_3285 for C++ RL inference"
+  COMMENT "Exporting frozen DM1 model_3485 for C++ RL inference"
   VERBATIM
 )
 add_custom_target(mymit_robot_frozen_rl_policy DEPENDS "${MYMIT_DM1_RL_HEADER}")
@@ -161,7 +175,9 @@ add_library(mymit_robot_model
   src/controller/leg_controller.cpp
   src/model/quadruped.cpp
   src/sensor/imu.cpp
+  src/sensor/imu_driver.cpp
   src/sensor/leg.cpp
+  Middlewares/dm_imu/src/bsp_crc.cpp
 )
 target_compile_features(mymit_robot_model PUBLIC cxx_std_17)
 target_include_directories(mymit_robot_model BEFORE PRIVATE
@@ -169,17 +185,17 @@ target_include_directories(mymit_robot_model BEFORE PRIVATE
 )
 target_include_directories(mymit_robot_model PRIVATE
   "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dm_imu/include"
 )
 add_dependencies(mymit_robot_model mymit_robot_frozen_rl_policy)
 target_include_directories(mymit_robot_model PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(mymit_robot_model PUBLIC
+target_link_libraries(mymit_robot_model
   Eigen3::Eigen
   /usr/local/lib/libmujoco.so
 )
-
 install(TARGETS mymit_robot_model
   EXPORT mymit_robot_model_targets
   ARCHIVE DESTINATION lib
@@ -244,27 +260,27 @@ target_link_libraries(mymit_robot_height_service
 
 # DM1 real-hardware executable. The vendor CAN/IMU calls are intentionally
 # isolated in Dm1HardwareDriver.cpp and default to fail-closed until connected.
-add_executable(mymit_robot_hardware
+add_executable(hardware_main
   user/hardware_main.cpp
   user/HardwareBridge.cpp
   user/Dm1HardwareDriver.cpp
   user/RobotRunner.cpp
 )
-target_compile_features(mymit_robot_hardware PRIVATE cxx_std_17)
-target_include_directories(mymit_robot_hardware PRIVATE
+target_compile_features(hardware_main PRIVATE cxx_std_17)
+target_include_directories(hardware_main PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/user
 )
-target_include_directories(mymit_robot_hardware BEFORE PRIVATE
+target_include_directories(hardware_main BEFORE PRIVATE
   "${MYMIT_LOCAL_MUJOCO_INCLUDE}"
 )
-target_link_libraries(mymit_robot_hardware
+target_link_libraries(hardware_main
   mymit_robot_model
   Eigen3::Eigen
   pthread
 )
 
-install(TARGETS mymit_robot_user mymit_robot_height_service mymit_robot_hardware
+install(TARGETS mymit_robot_user mymit_robot_height_service hardware_main
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 

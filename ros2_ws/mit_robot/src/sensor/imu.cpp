@@ -1,14 +1,18 @@
 // ============================================================
-// IMU 数据源实现
-// 包含仿真器数据源（SimImu）与真实硬件数据源（HardwareImu，占位），
-// 以及按来源类型创建数据源的工厂函数 makeImu()。
+// IMU 数据源实现。
+// 真实硬件路径在本文件内直接完成串口接收、DM 协议校验和数据转换；
+// 不再依赖独立的 ROS IMU 接收节点。
 // ============================================================
 
 #include "sensor/imu.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
+
+#include "sensor/imu_driver.hpp"
 
 // ---------- 内部辅助函数（匿名命名空间） ----------
 namespace
@@ -209,9 +213,85 @@ bool HardwareImu::update(const HardwareImuMeasurement & measurement)
   return update(sample);
 }
 
+HardwareImu::HardwareImu(std::string serial_device, int baudrate)
+: serial_device_(std::move(serial_device)), baudrate_(baudrate)
+{
+  if (!serial_device_.empty()) {
+    driver_ = std::make_unique<ImuDriver>(serial_device_, baudrate_);
+  }
+}
+
+HardwareImu::~HardwareImu()
+{
+  close();
+}
+
+bool HardwareImu::open()
+{
+  if (serial_device_.empty()) {return false;}
+  if (driver_ == nullptr) {
+    driver_ = std::make_unique<ImuDriver>(serial_device_, baudrate_);
+  }
+  return driver_->start();
+}
+
+void HardwareImu::close() noexcept
+{
+  if (driver_ != nullptr) {driver_->stop();}
+}
+
+bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
+{
+  sample = ImuData<float>{};
+  if (!std::isfinite(timestamp) || serial_device_.empty()) {
+    imu = sample;
+    return false;
+  }
+  if (!open()) {
+    imu = sample;
+    return false;
+  }
+
+  DmImuRawSample raw_sample;
+  if (driver_ == nullptr || !driver_->latest(raw_sample)) {
+    imu = ImuData<float>{};
+    sample = imu;
+    return false;
+  }
+  constexpr float kDegreesToRadians = 0.01745329251994329577F;
+  const float roll = raw_sample.rpy_degrees[0] * kDegreesToRadians;
+  const float pitch = raw_sample.rpy_degrees[1] * kDegreesToRadians;
+  const float yaw = raw_sample.rpy_degrees[2] * kDegreesToRadians;
+  sample = ImuData<float>{};
+  sample.orientation_world_from_body =
+    Eigen::AngleAxisf(yaw, Vec3<float>::UnitZ()) *
+    Eigen::AngleAxisf(pitch, Vec3<float>::UnitY()) *
+    Eigen::AngleAxisf(roll, Vec3<float>::UnitX());
+  sample.angular_velocity_body <<
+    raw_sample.angular_velocity[0], raw_sample.angular_velocity[1],
+    raw_sample.angular_velocity[2];
+  sample.acceleration_body <<
+    raw_sample.acceleration[0], raw_sample.acceleration[1],
+    raw_sample.acceleration[2];
+  sample.timestamp = timestamp;
+  sample.orientation_valid = true;
+  sample.acceleration_valid = true;
+  sample.angular_acceleration_valid = false;
+  sample.valid = true;
+  imu = sample;
+  return true;
+}
+
 ImuData<float> HardwareImu::read()
 {
-  // 驱动与控制循环同步运行：驱动先 update()，估计器随后 read()。
+  if (!serial_device_.empty()) {
+    ImuData<float> sample;
+    const float timestamp = std::chrono::duration<float>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+    readAt(sample, timestamp);
+    return sample;
+  }
+  // 无串口参数时保留同步注入模式，供仿真控制管线和单元测试使用。
   return imu;
 }
 

@@ -1,7 +1,9 @@
 // DM1 真机入口。ROS 2 工程结构保持不变；底层设备调用集中在
 // Dm1HardwareDriver.cpp，控制算法集中在 RobotRunner。
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -10,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include "Dm1HardwareDriver.hpp"
 #include "HardwareBridge.hpp"
@@ -27,21 +30,22 @@ struct Arguments
 {
   std::string calibration_path;
   std::string can_interface = "can0";
-  std::string imu_device = "/dev/ttyUSB0";
+  std::string imu_device = "/dev/ttyACM0";
   float control_time_step = 0.002F;
   float zero_tolerance_rad = 0.05F;
   bool enable_output = false;
   bool stand_up = false;
+  bool imu_only = false;
 };
 
 [[noreturn]] void usageError(const std::string & message)
 {
   throw std::invalid_argument(
     message +
-    "\nusage: mymit_robot_hardware --calibration FILE [--can can0] "
-    "[--imu /dev/ttyUSB0] [--control-dt 0.002] "
+    "\nusage: hardware_main --calibration FILE [--can can0] "
+    "[--imu /dev/ttyACM0] [--control-dt 0.002] "
     "[--zero-tolerance 0.05] "
-    "[--enable-output] [--stand-up]");
+    "[--enable-output] [--stand-up] [--imu-only]");
 }
 
 Arguments parseArguments(int argc, char ** argv)
@@ -67,17 +71,52 @@ Arguments parseArguments(int argc, char ** argv)
       result.enable_output = true;
     } else if (argument == "--stand-up") {
       result.stand_up = true;
+    } else if (argument == "--imu-only") {
+      result.imu_only = true;
     } else if (argument == "--help" || argument == "-h") {
       usageError("DM1 hardware bridge options");
     } else {
       usageError("unknown argument: " + argument);
     }
   }
-  if (result.calibration_path.empty()) {usageError("--calibration is required");}
+  if (!result.imu_only && result.calibration_path.empty()) {
+    usageError("--calibration is required unless --imu-only is used");
+  }
+  if (result.imu_only && (result.enable_output || result.stand_up)) {
+    usageError("--imu-only cannot be combined with --enable-output or --stand-up");
+  }
   if (result.stand_up && !result.enable_output) {
     usageError("--stand-up requires --enable-output");
   }
   return result;
+}
+
+int runImuOnly(const std::string & device, float control_time_step)
+{
+  HardwareImu imu(device, 921600);
+  if (!imu.open()) {
+    throw std::runtime_error("unable to open IMU serial port: " + device);
+  }
+
+  std::fprintf(
+    stderr,
+    "IMU-only mode active; press Ctrl+C to stop. No motor CAN commands will be sent.\n");
+  const auto start = std::chrono::steady_clock::now();
+  const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    std::chrono::duration<double>(std::max(0.001F, control_time_step)));
+  auto next_cycle = start;
+  while (!g_stop_requested.load()) {
+    next_cycle += period;
+    ImuData<float> sample;
+    const float timestamp = static_cast<float>(
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+    // readAt() is non-blocking: the receive thread owns the serial port and this
+    // loop only copies the newest validated sample.
+    static_cast<void>(imu.readAt(sample, timestamp));
+    std::this_thread::sleep_until(next_cycle);
+  }
+  imu.close();
+  return 0;
 }
 
 dm1_hardware::Dm1MitInterface::CalibrationArray loadCalibration(
@@ -132,9 +171,14 @@ int main(int argc, char ** argv)
 {
   try {
     const Arguments arguments = parseArguments(argc, argv);
-    const auto calibration = loadCalibration(arguments.calibration_path);
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
+
+    if (arguments.imu_only) {
+      return runImuOnly(arguments.imu_device, arguments.control_time_step);
+    }
+
+    const auto calibration = loadCalibration(arguments.calibration_path);
 
     Dm1HardwareDriver driver(arguments.can_interface, arguments.imu_device);
     HardwareBridge::Options options;
@@ -150,7 +194,8 @@ int main(int argc, char ** argv)
         "DM1 hardware bridge is read-only; add --enable-output only after "
         "checking motor IDs, directions and mechanical zeros.\n");
     }
-    return bridge.run(g_stop_requested);
+    const int result = bridge.run(g_stop_requested);
+    return result;
   } catch (const std::exception & error) {
     std::fprintf(stderr, "DM1 hardware startup failed: %s\n", error.what());
     return 1;

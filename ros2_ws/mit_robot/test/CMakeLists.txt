@@ -19,8 +19,6 @@ target_compile_definitions(test_model_dm1_load PRIVATE
   MYMIT_ROBOT_DM1_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
 )
 
-# Sensor adapters
-
 # State and contact estimation
 add_robot_unit_test(test_estimator_orientation estimation/orientation_estimator_test.cpp)
 

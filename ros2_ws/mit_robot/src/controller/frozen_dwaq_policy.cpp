@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstddef>
 
-#include "dm1_policy_3285.hpp"
+#include "dm1_policy_3485.hpp"
 
 namespace
 {
@@ -40,29 +40,29 @@ void applyElu(std::array<float, Size> & values) noexcept
 }
 
 const DenseLayer kEncoder0{
-  dm1_policy_3285::k_vae_encoder_encoder_0_weight.data(),
-  dm1_policy_3285::k_vae_encoder_encoder_0_bias.data(), 128, 270};
+  dm1_policy_3485::k_vae_encoder_encoder_0_weight.data(),
+  dm1_policy_3485::k_vae_encoder_encoder_0_bias.data(), 128, 270};
 const DenseLayer kEncoder2{
-  dm1_policy_3285::k_vae_encoder_encoder_2_weight.data(),
-  dm1_policy_3285::k_vae_encoder_encoder_2_bias.data(), 64, 128};
+  dm1_policy_3485::k_vae_encoder_encoder_2_weight.data(),
+  dm1_policy_3485::k_vae_encoder_encoder_2_bias.data(), 64, 128};
 const DenseLayer kLatentMu{
-  dm1_policy_3285::k_vae_latent_mu_weight.data(),
-  dm1_policy_3285::k_vae_latent_mu_bias.data(), 16, 64};
+  dm1_policy_3485::k_vae_latent_mu_weight.data(),
+  dm1_policy_3485::k_vae_latent_mu_bias.data(), 16, 64};
 const DenseLayer kVelocityMu{
-  dm1_policy_3285::k_vae_vel_mu_weight.data(),
-  dm1_policy_3285::k_vae_vel_mu_bias.data(), 3, 64};
+  dm1_policy_3485::k_vae_vel_mu_weight.data(),
+  dm1_policy_3485::k_vae_vel_mu_bias.data(), 3, 64};
 const DenseLayer kActor0{
-  dm1_policy_3285::k_actor_0_weight.data(),
-  dm1_policy_3285::k_actor_0_bias.data(), 512, 64};
+  dm1_policy_3485::k_actor_0_weight.data(),
+  dm1_policy_3485::k_actor_0_bias.data(), 512, 64};
 const DenseLayer kActor2{
-  dm1_policy_3285::k_actor_2_weight.data(),
-  dm1_policy_3285::k_actor_2_bias.data(), 256, 512};
+  dm1_policy_3485::k_actor_2_weight.data(),
+  dm1_policy_3485::k_actor_2_bias.data(), 256, 512};
 const DenseLayer kActor4{
-  dm1_policy_3285::k_actor_4_weight.data(),
-  dm1_policy_3285::k_actor_4_bias.data(), 128, 256};
+  dm1_policy_3485::k_actor_4_weight.data(),
+  dm1_policy_3485::k_actor_4_bias.data(), 128, 256};
 const DenseLayer kActor6{
-  dm1_policy_3285::k_actor_6_weight.data(),
-  dm1_policy_3285::k_actor_6_bias.data(), 12, 128};
+  dm1_policy_3485::k_actor_6_weight.data(),
+  dm1_policy_3485::k_actor_6_bias.data(), 12, 128};
 }  // namespace
 
 bool FrozenDwaqPolicy::infer(
@@ -129,7 +129,7 @@ bool FrozenDwaqPolicy::infer(
   dense(kActor4, actor_hidden2.data(), actor_hidden4.data());
   applyElu(actor_hidden4);
   dense(kActor6, actor_hidden4.data(), action.data());
-  if (dm1_policy_3285::kSquashActionMean) {
+  if (dm1_policy_3485::kSquashActionMean) {
     for (float & value : action) {value = std::tanh(value);}
   }
   for (const float value : action) {
@@ -141,5 +141,7 @@ bool FrozenDwaqPolicy::infer(
 RlPolicyMetadata FrozenDwaqPolicy::metadata() const
 {
   return RlPolicyMetadata{
+    // Keep the legacy contract name for the unchanged FSM selector; the
+    // checkpoint hash above is the active model_3485 identity.
     "model_3285", kDm1FlatCheckpointSha256, false, true, true};
 }

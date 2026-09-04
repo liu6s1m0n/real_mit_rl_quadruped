@@ -30,8 +30,8 @@ control:
   policy_max_target_velocity_rad_s: 2.0
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, walk_rl, stairs_rl]
 rl:
-  flat_checkpoint: model_3285
-  flat_checkpoint_sha256: aaafcccd6aa6a65d247051f7f7f419b518314e5a7ec934454267d41d5a753d1f
+  flat_checkpoint: model_3485
+  flat_checkpoint_sha256: aa6de9ce583635d78ae8c9a8e6ad62457f3b56e6bd02cc26650125b2b0e4e17e
   stairs_checkpoint: model_4700
   stairs_checkpoint_sha256: cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d
   stairs_is_simulation_baseline_only: true

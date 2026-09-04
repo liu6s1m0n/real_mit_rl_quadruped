@@ -39,7 +39,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "walk_mode",
             default_value="mpc",
-            description="Walking controller selection: mpc or rl (model_3285)",
+            description="Walking controller selection: mpc or rl (model_3485)",
         ),
         *_desktop_session_environment(),
         Node(

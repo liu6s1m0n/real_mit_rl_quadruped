@@ -10,14 +10,18 @@
 #include <string>
 
 #include "hardware/dm1_hardware_io.hpp"
+#include "sensor/imu.hpp"
 
 class Dm1HardwareDriver final : public dm1_hardware::Dm1HardwareIo
 {
 public:
-  Dm1HardwareDriver(std::string can_interface, std::string imu_device);
+  Dm1HardwareDriver(
+    std::string can_interface, std::string imu_device);
 
   bool open() override;
   bool read(dm1_hardware::HardwareSample & sample, double now_s) override;
+  /** @brief Read and convert one DM IMU frame into the control-layer format. */
+  bool readImu(ImuData<float> & sample, double now_s);
   bool setMotorZero(std::uint8_t motor_id) override;
   bool sendMit(const dm1_hardware::MitFrame & frame) override;
   void disableAll() noexcept override;
@@ -26,6 +30,7 @@ public:
 private:
   std::string can_interface_;
   std::string imu_device_;
+  HardwareImu imu_reader_;
   bool opened_ = false;
 };
 

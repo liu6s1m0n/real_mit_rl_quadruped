@@ -45,6 +45,8 @@ struct HardwareImuMeasurement
   bool valid = false;
 };
 
+class ImuDriver;
+
 /**
  * @brief 统一的 IMU 数据源接口。
  *
@@ -121,16 +123,34 @@ private:
 };
 
 /**
- * @brief 真实硬件 IMU 数据源的同步注入适配器。
+ * @brief 真实硬件 IMU 数据源。
  *
- * 硬件驱动在每个控制周期先调用 update() 注入最新采样，控制管线再通过 read()
- * 读取。只有陀螺仪和加速度计时允许 orientation_valid=false，IMU_FUSION 会用
- * 重力方向初始化 roll/pitch，并将启动航向定义为 yaw=0。
+ * 该类直接打开并读取 IMU 串口，在 imu.cpp 内完成协议校验、数据转换和姿态
+ * 四元数计算。设备端必须已经配置为持续输出数据；本类只接收，不向设备发送
+ * 配置命令。无串口参数构造时仍保留 update()/read() 的注入模式，供仿真和单元测试使用。
  */
 class HardwareImu : public ImuSensor
 {
 public:
   HardwareImu() = default;
+  explicit HardwareImu(std::string serial_device, int baudrate = 921600);
+  ~HardwareImu() override;
+
+  HardwareImu(const HardwareImu &) = delete;
+  HardwareImu & operator=(const HardwareImu &) = delete;
+
+  /** @brief 打开并配置本地接收串口；不会向 IMU 发送任何命令。 */
+  bool open();
+
+  /** @brief 关闭接收串口。 */
+  void close() noexcept;
+
+  /**
+   * @brief 从串口接收并转换一帧 DM IMU 数据。
+   * @param sample 输出的控制层 IMU 数据。
+   * @param timestamp 控制循环使用的单调时间戳，单位秒。
+   */
+  bool readAt(ImuData<float> & sample, float timestamp);
 
   /**
    * @brief 注入硬件驱动读取的一帧 IMU 数据。
@@ -144,6 +164,11 @@ public:
   bool update(const HardwareImuMeasurement & measurement);
 
   ImuData<float> read() override;
+
+private:
+  std::string serial_device_;
+  int baudrate_ = 921600;
+  std::unique_ptr<ImuDriver> driver_;
 };
 
 /**

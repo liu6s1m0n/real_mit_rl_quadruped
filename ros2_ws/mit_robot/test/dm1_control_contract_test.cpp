@@ -86,10 +86,12 @@ TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)
   EXPECT_FALSE(policy->metadata().supports_stairs);
 }
 
-TEST(Dm1Contract, FrozenModel3285AdapterProducesFiniteActions)
+TEST(Dm1Contract, FrozenModel3485AdapterProducesFiniteActions)
 {
   FrozenDwaqPolicy policy;
   const RlPolicyMetadata metadata = policy.metadata();
+  // Keep the legacy selector name because FSM_State_Locomotion is unchanged;
+  // the active checkpoint is identified by the new SHA below.
   EXPECT_EQ(metadata.name, "model_3285");
   EXPECT_EQ(metadata.checkpoint_sha256, kDm1FlatCheckpointSha256);
   EXPECT_TRUE(metadata.frozen);
@@ -105,7 +107,7 @@ TEST(Dm1Contract, FrozenModel3285AdapterProducesFiniteActions)
   }));
 }
 
-TEST(Dm1Contract, FrozenModel3285AdapterMatchesRepeatedInitialHistory)
+TEST(Dm1Contract, FrozenModel3485AdapterMatchesRepeatedInitialHistory)
 {
   FrozenDwaqPolicy policy;
   std::array<float, kRlObservationSize> observation{};

@@ -1,0 +1,16 @@
+<launch>
+
+   <node name="legged_damiao_hw" pkg="legged_damiao_hw" type="legged_damiao_hw" respawn="false"
+          clear_params="true" output="screen"  />
+
+     
+    <node pkg="dm_imu" type="dm_imu_node" name="dm_imu_node" required="true" output = "screen" >
+    <param name="port"  type="string" value="/dev/ttyACM0" />
+    <param name="baud"  type="int"    value="921600"/>
+  </node>
+
+   
+
+</launch>
+
+

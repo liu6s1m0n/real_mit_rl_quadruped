@@ -1,0 +1,18 @@
+<launch>
+    <arg name="robot_type" default="$(env ROBOT_TYPE)" doc="Robot type: [dmgo]"/>
+    <arg name="rviz" default="true"/>
+    <param name="legged_robot_description" command="$(find xacro)/xacro $(find legged_damiao_description)/urdf/robot.xacro
+       robot_type:=$(arg robot_type)
+    "/>
+    <node name="generate_urdf" pkg="legged_common" type="generate_urdf.sh" output="screen"
+          args="$(find legged_damiao_description)/urdf/robot.xacro $(arg robot_type)"/>
+
+     <!-- <param name="legged_robot_description" textfile="$(find legged_damiao_description)/urdf/$(arg robot_type)/$(arg robot_type).urdf"/> -->
+    
+    <node if="$(arg rviz)" name="rviz" pkg="rviz" type="rviz" args="-d $(find legged_controllers)/rviz/legged_robot.rviz" required="true" />
+    
+    <rosparam file="$(find legged_damiao_hw)/config/$(arg robot_type).yaml" command="load"/>
+
+    <param name="robot_type" value="$(arg robot_type)"/>
+    <include file="$(find legged_damiao_hw)/launch/$(arg robot_type).launch"/>
+</launch>
