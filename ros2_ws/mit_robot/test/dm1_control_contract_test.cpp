@@ -65,6 +65,7 @@ TEST(Dm1Contract, AnalyticKinematicsIsFiniteAtHome)
 TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)
 {
   bool called = false;
+  // 换模型要修改的地方：测试用 metadata 模型槽位名
   auto policy = std::make_shared<CallbackRlPolicy>(
     [&called](const std::array<float, kRlObservationSize> & observation,
       const std::array<float, kRlObservationSize * kRlHistoryLength> & history,
@@ -86,7 +87,8 @@ TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)
   EXPECT_FALSE(policy->metadata().supports_stairs);
 }
 
-TEST(Dm1Contract, FrozenModel3485AdapterProducesFiniteActions)
+// 换模型要修改的地方：测试名称和 metadata 期望值
+TEST(Dm1Contract, FrozenModel3610AdapterProducesFiniteActions)
 {
   FrozenDwaqPolicy policy;
   const RlPolicyMetadata metadata = policy.metadata();
@@ -107,7 +109,7 @@ TEST(Dm1Contract, FrozenModel3485AdapterProducesFiniteActions)
   }));
 }
 
-TEST(Dm1Contract, FrozenModel3485AdapterMatchesRepeatedInitialHistory)
+TEST(Dm1Contract, FrozenModel3610AdapterMatchesRepeatedInitialHistory)
 {
   FrozenDwaqPolicy policy;
   std::array<float, kRlObservationSize> observation{};

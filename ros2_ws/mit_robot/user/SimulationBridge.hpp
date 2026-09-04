@@ -63,7 +63,8 @@ public:
   void setTurningYawRate(float yaw_rate);
 
   /**
-   * @brief 选择行走控制器；MPC 保持原有 Locomotion 控制链，RL 使用 model_3485。
+   * @brief 选择行走控制器；MPC 保持原有 Locomotion 控制链，RL 使用 model_3610。
+   * 换模型要修改的地方：模型编号仅用于界面说明。
    * @param mode 只接受 ControlMode::Locomotion（MPC）或 ControlMode::WalkRl（RL）。
    */
   void setWalkingControllerMode(ControlMode mode);
@@ -97,7 +98,8 @@ private:
   float walking_lateral_speed_ = 0.25F;       ///< 左右平移档速度绝对值，m/s。
   float turning_yaw_rate_ = 0.35F;            ///< 原地自转角速度绝对值，rad/s。
   double standing_height_slider_ = 0.39;      ///< MuJoCo UI 滑块使用的双精度高度缓存，m。
-  ControlMode walking_mode_ = ControlMode::Locomotion;  ///< MPC 或 frozen model_3485 RL。
+  // 换模型要修改的地方：模型编号仅用于成员说明
+  ControlMode walking_mode_ = ControlMode::Locomotion;  ///< MPC 或 frozen model_3610 RL。
   RlPolicyPtr rl_policy_;                    ///< 仅 RL 模式注入，MPC 不触碰。
 };
 

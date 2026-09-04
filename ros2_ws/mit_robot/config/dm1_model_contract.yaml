@@ -30,8 +30,9 @@ control:
   policy_max_target_velocity_rad_s: 2.0
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, walk_rl, stairs_rl]
 rl:
-  flat_checkpoint: model_3485
-  flat_checkpoint_sha256: aa6de9ce583635d78ae8c9a8e6ad62457f3b56e6bd02cc26650125b2b0e4e17e
+  # 换模型要修改的地方：模型编号和 SHA256
+  flat_checkpoint: model_3610
+  flat_checkpoint_sha256: cf6f88a2c7be9365dbe3e62c9a4c022d37d88f7fd692373842c32280f7e88421
   stairs_checkpoint: model_4700
   stairs_checkpoint_sha256: cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d
   stairs_is_simulation_baseline_only: true

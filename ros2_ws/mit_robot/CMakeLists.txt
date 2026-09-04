@@ -45,26 +45,28 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-# model_3485.pt is a regular PyTorch training checkpoint, not TorchScript.
+# model_3610.pt is a regular PyTorch training checkpoint, not TorchScript.
 # Convert it during the build to a generated C++ header so the running MuJoCo
 # executable has no Python/libtorch runtime dependency.
 set(MYMIT_RL_PYTHON "/opt/rl-gym/venv/bin/python" CACHE FILEPATH
   "Python interpreter with PyTorch used to export the frozen RL actor")
-# Active checkpoint: trot_hip_refine/model_3485.
-# Previous frozen baseline (kept commented for rollback):
+# Active checkpoint: trot_phase_refine/model_3610.
+# Previous checkpoint (kept commented for rollback):
+# /home/simon/.codex/worktrees/b9d0/RL_Robot/logs/dm1_trot_hip_refine/Sep04_09-08-42_trot_hip_refine_200/model_3485.pt
+# Earlier frozen baseline:
 # /home/simon/RL_Robot/frozen_models/dm1_walking_complete_model3285/model_3285.pt
-/*换模型要修改的地方*/
+# 换模型要修改的地方：checkpoint 路径
 set(MYMIT_DM1_RL_CHECKPOINT_DEFAULT
-  "/home/simon/.codex/worktrees/b9d0/RL_Robot/logs/dm1_trot_hip_refine/Sep04_09-08-42_trot_hip_refine_200/model_3485.pt")
+  "/home/simon/RL_Robot/logs/dm1_trot_phase_refine_3510/Sep04_10-46-32_trot_phase_refine_from3510_100/model_3610.pt")
 # Migrate an existing build cache that still points at the old model, while
 # preserving an explicitly supplied custom checkpoint.
 if(NOT DEFINED MYMIT_DM1_RL_CHECKPOINT OR
-  MYMIT_DM1_RL_CHECKPOINT MATCHES "/model_3285\\.pt$")
+  MYMIT_DM1_RL_CHECKPOINT MATCHES "/model_(3285|3485)\\.pt$")
   set(MYMIT_DM1_RL_CHECKPOINT "${MYMIT_DM1_RL_CHECKPOINT_DEFAULT}"
-    CACHE FILEPATH "Frozen DM1 model_3485 checkpoint" FORCE)
+    CACHE FILEPATH "Frozen DM1 model_3610 checkpoint" FORCE)
 else()
   set(MYMIT_DM1_RL_CHECKPOINT "${MYMIT_DM1_RL_CHECKPOINT}"
-    CACHE FILEPATH "Frozen DM1 model_3485 checkpoint")
+    CACHE FILEPATH "Frozen DM1 model_3610 checkpoint")
 endif()
 if(NOT EXISTS "${MYMIT_RL_PYTHON}")
   message(FATAL_ERROR "MYMIT_RL_PYTHON does not exist: ${MYMIT_RL_PYTHON}")
@@ -73,9 +75,9 @@ if(NOT EXISTS "${MYMIT_DM1_RL_CHECKPOINT}")
   message(FATAL_ERROR
     "MYMIT_DM1_RL_CHECKPOINT does not exist: ${MYMIT_DM1_RL_CHECKPOINT}")
 endif()
-/*换模型要修改的地方*/
+# 换模型要修改的地方：生成头文件名
 set(MYMIT_DM1_RL_HEADER
-  "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_3485.hpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_3610.hpp")
 add_custom_command(
   OUTPUT "${MYMIT_DM1_RL_HEADER}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -87,7 +89,7 @@ add_custom_command(
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
     "${MYMIT_DM1_RL_CHECKPOINT}"
-  COMMENT "Exporting frozen DM1 model_3485 for C++ RL inference"
+  COMMENT "Exporting frozen DM1 model_3610 for C++ RL inference"
   VERBATIM
 )
 add_custom_target(mymit_robot_frozen_rl_policy DEPENDS "${MYMIT_DM1_RL_HEADER}")

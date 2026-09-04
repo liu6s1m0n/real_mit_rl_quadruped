@@ -190,7 +190,8 @@ source install/setup.bash
 
 ```bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
-# 启动时选择冻结的 model_3485 RL；不加该参数仍是 MPC/WBC
+<!-- 换模型要修改的地方：当前模型编号 -->
+# 启动时选择冻结的 model_3610 RL；不加该参数仍是 MPC/WBC
 ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 ```
 
@@ -209,7 +210,8 @@ ros2 launch mymit_robot dm1_control.launch.py
 
 ## 更换 RL 模型
 
-当前平地 RL 模型为 `model_3485.pt`。如果新 checkpoint 与当前模型结构相同
+<!-- 换模型要修改的地方：当前模型编号 -->
+当前平地 RL 模型为 `model_3610.pt`。如果新 checkpoint 与当前模型结构相同
 （45 维观测、6 帧历史、12 维动作），只替换模型权重和身份信息，不需要修改
 MPC/WBC 行走代码。
 
@@ -223,19 +225,19 @@ sha256sum /新模型的绝对路径/model_XXXX.pt
 
 1. `ros2_ws/mit_robot/CMakeLists.txt` 第 53～88 行：
    - 将 `MYMIT_DM1_RL_CHECKPOINT_DEFAULT` 改为新 checkpoint 的绝对路径。
-   - 将 `generated/dm1_policy_3485.hpp` 改为
+   - 将 `generated/dm1_policy_3610.hpp` 改为
      `generated/dm1_policy_XXXX.hpp`。
    - 更新对应注释和导出提示；旧模型路径可继续作为注释保留。
 2. `ros2_ws/mit_robot/tools/export_dm1_policy_header.py`：
    - 第 37 行 `EXPECTED_SHA256` 改为新模型 SHA256。
-   - 第 57、80、82、92 行的模型编号和 `dm1_policy_3485` namespace
+   - 第 57、80、82、92 行的模型编号和 `dm1_policy_3610` namespace
      改为新编号。
 3. `ros2_ws/mit_robot/include/controller/RlPolicy.hpp` 第 22～30 行：
    - 将 `kDm1FlatCheckpointSha256` 改为新模型 SHA256。
    - 把旧模型名和 SHA 留在注释中，便于回退。
 4. `ros2_ws/mit_robot/src/controller/frozen_dwaq_policy.cpp`：
    - 第 8 行改为包含新的 `dm1_policy_XXXX.hpp`。
-   - 第 43～132 行将所有 `dm1_policy_3485::` 改为新的 namespace。
+   - 第 43～132 行将所有 `dm1_policy_3610::` 改为新的 namespace。
 5. `ros2_ws/mit_robot/config/dm1_model_contract.yaml` 第 33～34 行：
    - 更新 `flat_checkpoint` 和 `flat_checkpoint_sha256`。
 6. `ros2_ws/mit_robot/test/dm1_control_contract_test.cpp`：

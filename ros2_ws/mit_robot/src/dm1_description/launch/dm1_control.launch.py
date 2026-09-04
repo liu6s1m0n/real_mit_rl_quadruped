@@ -39,7 +39,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "walk_mode",
             default_value="mpc",
-            description="Walking controller selection: mpc or rl (model_3485)",
+            # 换模型要修改的地方：launch 参数说明中的模型编号
+            description="Walking controller selection: mpc or rl (model_3610)",
         ),
         *_desktop_session_environment(),
         Node(

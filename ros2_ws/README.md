@@ -11,7 +11,8 @@ source /opt/ros/humble/setup.bash
 colcon build --packages-select mymit_robot
 source install/setup.bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
-# 默认是原有 MPC/WBC；也可启动时选择冻结的 model_3485 RL
+# 换模型要修改的地方：当前模型编号
+# 默认是原有 MPC/WBC；也可启动时选择冻结的 model_3610 RL
 ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 ```
 
@@ -19,13 +20,13 @@ ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 
 ```bash
 ros2 launch mymit_robot dm1_control.launch.py
-# 或直接让 launch 以 model_3485 RL 启动
+# 或直接让 launch 以 model_3610 RL 启动
 ros2 launch mymit_robot dm1_control.launch.py walk_mode:=rl
 ```
 
 窗口打开后机器人处于趴地零位；先点击 `Stand up`，站起完成后再点击方向按钮。
 默认方向按钮进入原有经典 MPC/WBC 行走链。也可以使用 `--walk-mode rl` 启动
-model_3485，或在窗口中先点击 `Use RL` / `Use MPC` 再点击方向按钮。切换策略前
+model_3610，或在窗口中先点击 `Use RL` / `Use MPC` 再点击方向按钮。切换策略前
 先点击 `Stand up` 回到 BalanceStand；行走过程中不会热切换。
 
 只查看 MuJoCo 模型：
@@ -53,10 +54,10 @@ MPC/WBC 行走、平地 RL 行走和楼梯 RL 行走。平地 policy 的观测�
 需要冻结策略白名单后才能请求部署模式。控制器之间必须先回到 BalanceStand，
 不能在 Locomotion 内热切换。
 
-`model_3485.pt` 是构建时从
-`/home/simon/.codex/worktrees/b9d0/RL_Robot/logs/dm1_trot_hip_refine/`
+`model_3610.pt` 是构建时从
+`/home/simon/RL_Robot/logs/dm1_trot_phase_refine_3510/`
 提取为 C++ 权重的，运行程序不依赖 Python 或 PyTorch；其 SHA256 由 RL 接口
-契约校验。原冻结基线 `model_3285.pt` 仅保留为注释回退记录，不参与构建。
+契约校验。上一版 `model_3485.pt` 仅保留为注释回退记录，不参与构建。
 
 ## 真机接入
 

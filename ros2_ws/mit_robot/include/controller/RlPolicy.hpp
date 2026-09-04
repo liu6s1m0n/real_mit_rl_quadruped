@@ -19,15 +19,16 @@
 constexpr std::size_t kRlObservationSize = 45;
 constexpr std::size_t kRlHistoryLength = 6;
 constexpr std::size_t kRlActionSize = 12;
-// Active deployment checkpoint: model_3485
-// /home/simon/.codex/worktrees/b9d0/RL_Robot/logs/dm1_trot_hip_refine/
-// Sep04_09-08-42_trot_hip_refine_200/model_3485.pt
+// 换模型要修改的地方：当前模型路径、模型编号和 SHA256
+// Active deployment checkpoint: model_3610
+// /home/simon/RL_Robot/logs/dm1_trot_phase_refine_3510/
+// Sep04_10-46-32_trot_phase_refine_from3510_100/model_3610.pt
 // The symbol name remains the legacy flat-RL contract so the existing FSM
 // validation remains unchanged; its value identifies the active checkpoint.
 inline constexpr char kDm1FlatCheckpointSha256[] =
-  "aa6de9ce583635d78ae8c9a8e6ad62457f3b56e6bd02cc26650125b2b0e4e17e";
-// Previous frozen baseline (commented, not active): model_3285
-// SHA256 aaafcccd6aa6a65d247051f7f7f419b518314e5a7ec934454267d41d5a753d1f
+  "cf6f88a2c7be9365dbe3e62c9a4c022d37d88f7fd692373842c32280f7e88421";
+// Previous checkpoint (commented, not active): model_3485
+// SHA256 aa6de9ce583635d78ae8c9a8e6ad62457f3b56e6bd02cc26650125b2b0e4e17e
 inline constexpr char kDm1StairsCheckpointSha256[] =
   "cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d";
 
