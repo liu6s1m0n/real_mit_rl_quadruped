@@ -11,6 +11,7 @@
 
 #include "FSM/FSM_State.h"
 #include "WBC/LocomotionCtrl/LocomotionCtrl.hpp"
+#include "controller/RlPolicy.hpp"
 
 template < typename T >
 class FSM_State_BalanceStand: public FSM_State < T >

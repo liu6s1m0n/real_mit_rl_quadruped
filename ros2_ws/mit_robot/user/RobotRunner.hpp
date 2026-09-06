@@ -32,7 +32,8 @@ public:
   /** @brief 创建指定机型的完整控制管线。 */
   RobotRunner(
     mjModel * model, const mjData * data,
-    RobotType robot_type = RobotType::DM1);
+    RobotType robot_type = RobotType::DM1,
+    float control_time_step = 0.0F);
   /** @brief 创建真机控制管线；传感器由 updateHardwareFeedback() 注入。 */
   explicit RobotRunner(
     float control_time_step,
@@ -93,6 +94,28 @@ public:
   }
   /** 当前是否已经处在允许行走的站立控制状态。 */
   bool standingReady() const noexcept;
+  /** RL 入场姿态是否已经连续满足高度、关节和姿态条件。 */
+  bool rlEntryReady() const noexcept;
+  /** 最近一次 RL 原始动作，供仿真诊断读取，不参与控制。 */
+  const std::array<float, kRlActionSize> & rlLastRawAction() const noexcept
+  {
+    return control_fsm_->rlLastRawAction();
+  }
+  bool hasRlRawAction() const noexcept
+  {
+    return control_fsm_->hasRlRawAction();
+  }
+
+  /** 最近一次 RL 策略帧快照，仅供 Sim2Sim 对拍，不参与控制。 */
+  const RlPolicyFrameTrace & rlLastFrameTrace() const noexcept
+  {
+    return control_fsm_->rlLastFrameTrace();
+  }
+
+  bool hasRlFrameTrace() const noexcept
+  {
+    return control_fsm_->hasRlFrameTrace();
+  }
 
 private:
   /*保存四条腿传感器对象的所有权。*/
@@ -117,6 +140,8 @@ private:
   void disableCommands() noexcept;
   /** 仅在 DM1 Home 启用整段小腿贴地代理，运动前关闭以免擦地。 */
   void setHomeCalfContactsEnabled(bool enabled) noexcept;
+  float measuredBodyHeight() const noexcept;
+  bool rlEntryPostureStable() const noexcept;
   void initializeController(OrientationEstimatorMode orientation_mode);
   float currentTime() const noexcept;
  
@@ -175,6 +200,10 @@ private:
   bool standing_height_command_initialized_ = false;
   /*是否已经建立首次闭环期望状态*/
   bool desired_state_initialized_ = false;
+  bool rl_posture_transition_pending_ = false;
+  bool rl_entry_posture_latched_ = false;
+  ControlMode pending_rl_mode_ = ControlMode::WalkRl;
+  float rl_entry_stable_time_s_ = 0.0F;
 };
 
 #endif  // MYMIT_ROBOT_USER_ROBOT_RUNNER_HPP_

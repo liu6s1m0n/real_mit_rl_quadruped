@@ -4,7 +4,7 @@ joint_order: [FR_hip, FR_thigh, FR_calf, FL_hip, FL_thigh, FL_calf, RR_hip, RR_t
 leg_order: [FR, FL, RR, RL]
 joint_order_per_leg: [hip, thigh, calf]
 motor_zero_position_rad: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-kinematic_joint_offset_rad: [0, -0.203, -2.25]
+kinematic_joint_offset_rad: [0, -0.203, -2.22]
 stand_joint_position_front_rad: [0, -0.597, 1.432]
 stand_joint_position_rear_rad: [0, -0.597, 1.468]
 nominal_body_height_m: 0.39
@@ -29,19 +29,20 @@ control:
   policy_observation_size: 45
   policy_history_length: 6
   policy_action_scale: 0.25
-  policy_filter_time_constant_s: 0.08
-  policy_max_action_delta: 0.10
-  policy_max_target_velocity_rad_s: 2.0
+  # model_4210 的方向精修阶段训练闭环参数；部署端必须保持一致。
+  policy_filter_time_constant_s: 0.05
+  policy_max_action_delta: 0.15
+  policy_max_target_velocity_rad_s: 3.0
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, walk_rl, stairs_rl]
 rl:
   # 换模型要修改的地方：模型编号和 SHA256
-  flat_checkpoint: model_3960
-  flat_checkpoint_sha256: 5a05f95dd5e7ddef83a48a076415267ef22bee6dad55fcb43b92a5f2adf4ab08
+  flat_checkpoint: model_4210
+  flat_checkpoint_sha256: 3f4c65ec73d435b7fb16ad24bb240114c01b79502c6eb1037daa887740a0e06b
   stairs_checkpoint: model_4700
   stairs_checkpoint_sha256: cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d
   stairs_is_simulation_baseline_only: true
   inference_uses_vae_posterior_mean: true
 mjcf:
   file: src/dm1_description/dm1/dm1.xml
-  sha256: 5aa751a3c01860e9914594d0384f352a722b7fc0c83f1f90d6133eb10c43e6de
-  fixed_installation_rotations_baked_in: false
+  sha256: b1a94f53f7362251e2bc7277e62dbcd9bacac7f11d0cb8e3c90e2136eee1f41f
+  fixed_installation_rotations_baked_in: true

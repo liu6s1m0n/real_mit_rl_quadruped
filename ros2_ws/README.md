@@ -12,7 +12,7 @@ colcon build --packages-select mymit_robot
 source install/setup.bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
 # 换模型要修改的地方：当前模型编号
-# 默认是原有 MPC/WBC；也可启动时选择冻结的 model_3960 RL
+# 默认是原有 MPC/WBC；也可启动时选择冻结的 model_4210 RL
 ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 ```
 
@@ -20,13 +20,13 @@ ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 
 ```bash
 ros2 launch mymit_robot dm1_control.launch.py
-# 或直接让 launch 以 model_3960 RL 启动
+# 或直接让 launch 以 model_4210 RL 启动
 ros2 launch mymit_robot dm1_control.launch.py walk_mode:=rl
 ```
 
 窗口打开后机器人处于趴地零位；先点击 `Stand up`，站起完成后再点击方向按钮。
 默认方向按钮进入原有经典 MPC/WBC 行走链。也可以使用 `--walk-mode rl` 启动
-model_3960，或在窗口中先点击 `Use RL` / `Use MPC` 再点击方向按钮。切换策略前
+model_4210，或在窗口中先点击 `Use RL` / `Use MPC` 再点击方向按钮。切换策略前
 先点击 `Stand up` 回到 BalanceStand；行走过程中不会热切换。
 
 只查看 MuJoCo 模型：
@@ -39,12 +39,13 @@ ros2 launch mymit_robot dm1_display.launch.py
 
 契约文件为 `mit_robot/config/dm1_model_contract.yaml`；关节顺序严格为
 `FR, FL, RR, RL`，每腿 `hip, thigh, calf`。MuJoCo 和真实电机的 q=0
-都是机械趴姿，安装零偏由控制器统一按 `(0, -0.203, -2.25)` 处理；
-MJCF 关节参考角与手写运动学保持一致，不再把固定旋转重复叠加。
+都是机械趴姿，安装旋转与训练 MJCF 一样烘焙在 body quaternion 中，
+解析运动学零偏统一按 `(0, -0.203, -2.22)` 处理；不再把固定旋转重复叠加。
 
 站姿目标为前腿 `[0, -0.597, 1.432]`、后腿 `[0, -0.597, 1.468] rad`，
-标称机身高度 `0.39 m`。MuJoCo 执行器范围为 HAA `±52.4 Nm`、HFE/KFE
-`±55 Nm`；真实 MIT 接口仍单独执行 `30 Nm` 连续、`97 Nm` 峰值安全限幅。
+标称机身高度 `0.39 m`。MuJoCo 执行器峰值范围统一为 `±97 Nm`，桥接层
+按训练模型的 60 rpm 无载速度复现 torque-speed envelope；真实 MIT 接口仍
+单独执行 `30 Nm` 连续、`97 Nm` 峰值安全限幅。
 
 ## 控制模式
 
@@ -54,8 +55,8 @@ MPC/WBC 行走、平地 RL 行走和楼梯 RL 行走。平地 policy 的观测�
 需要冻结策略白名单后才能请求部署模式。控制器之间必须先回到 BalanceStand，
 不能在 Locomotion 内热切换。
 
-`model_3960.pt` 是构建时从
-`/home/simon/RL_Robot/frozen_models/dm1_trot_right_finish_refine_3910_model3960/`
+`model_4210.pt` 是构建时从
+`/home/simon/RL_Robot/logs/trot/dm1_trot_directional_hip_refine_4160/Sep04_17-39-42_directional_hip_from4160_50/`
 提取为 C++ 权重的，运行程序不依赖 Python 或 PyTorch；其 SHA256 由 RL 接口
 契约校验。上一版 `model_3610.pt` 仅保留为注释回退记录，不参与构建。
 

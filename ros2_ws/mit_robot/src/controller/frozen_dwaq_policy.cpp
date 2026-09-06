@@ -6,7 +6,7 @@
 #include <cstddef>
 
 /*换模型要修改的地方：生成头文件名*/
-#include "dm1_policy_3960.hpp"
+#include "dm1_policy_4210.hpp"
 
 namespace
 {
@@ -42,29 +42,29 @@ void applyElu(std::array<float, Size> & values) noexcept
 
 /*换模型要修改的地方：生成头文件 namespace*/
 const DenseLayer kEncoder0{
-  dm1_policy_3960::k_vae_encoder_encoder_0_weight.data(),
-  dm1_policy_3960::k_vae_encoder_encoder_0_bias.data(), 128, 270};
+  dm1_policy_4210::k_vae_encoder_encoder_0_weight.data(),
+  dm1_policy_4210::k_vae_encoder_encoder_0_bias.data(), 128, 270};
 const DenseLayer kEncoder2{
-  dm1_policy_3960::k_vae_encoder_encoder_2_weight.data(),
-  dm1_policy_3960::k_vae_encoder_encoder_2_bias.data(), 64, 128};
+  dm1_policy_4210::k_vae_encoder_encoder_2_weight.data(),
+  dm1_policy_4210::k_vae_encoder_encoder_2_bias.data(), 64, 128};
 const DenseLayer kLatentMu{
-  dm1_policy_3960::k_vae_latent_mu_weight.data(),
-  dm1_policy_3960::k_vae_latent_mu_bias.data(), 16, 64};
+  dm1_policy_4210::k_vae_latent_mu_weight.data(),
+  dm1_policy_4210::k_vae_latent_mu_bias.data(), 16, 64};
 const DenseLayer kVelocityMu{
-  dm1_policy_3960::k_vae_vel_mu_weight.data(),
-  dm1_policy_3960::k_vae_vel_mu_bias.data(), 3, 64};
+  dm1_policy_4210::k_vae_vel_mu_weight.data(),
+  dm1_policy_4210::k_vae_vel_mu_bias.data(), 3, 64};
 const DenseLayer kActor0{
-  dm1_policy_3960::k_actor_0_weight.data(),
-  dm1_policy_3960::k_actor_0_bias.data(), 512, 64};
+  dm1_policy_4210::k_actor_0_weight.data(),
+  dm1_policy_4210::k_actor_0_bias.data(), 512, 64};
 const DenseLayer kActor2{
-  dm1_policy_3960::k_actor_2_weight.data(),
-  dm1_policy_3960::k_actor_2_bias.data(), 256, 512};
+  dm1_policy_4210::k_actor_2_weight.data(),
+  dm1_policy_4210::k_actor_2_bias.data(), 256, 512};
 const DenseLayer kActor4{
-  dm1_policy_3960::k_actor_4_weight.data(),
-  dm1_policy_3960::k_actor_4_bias.data(), 128, 256};
+  dm1_policy_4210::k_actor_4_weight.data(),
+  dm1_policy_4210::k_actor_4_bias.data(), 128, 256};
 const DenseLayer kActor6{
-  dm1_policy_3960::k_actor_6_weight.data(),
-  dm1_policy_3960::k_actor_6_bias.data(), 12, 128};
+  dm1_policy_4210::k_actor_6_weight.data(),
+  dm1_policy_4210::k_actor_6_bias.data(), 12, 128};
 }  // namespace
 
 bool FrozenDwaqPolicy::infer(
@@ -79,9 +79,9 @@ bool FrozenDwaqPolicy::infer(
     if (!std::isfinite(value) || std::abs(value) > 100.0F) {return false;}
   }
   // DM1 training initializes obs_hist_buf by repeating the first observation
-  // across all six frames. The existing FSM deliberately starts its private
-  // history at zero, so repair only this deployment-boundary case here rather
-  // than changing the locomotion/controller code.
+  // across all six frames. Keep this defensive compatibility path for callers
+  // that have not initialized the deployment history yet; the FSM normally
+  // performs this initialization explicitly before the first RL inference.
   std::array<float, kRlObservationSize * kRlHistoryLength> deployment_history = history;
   bool history_prefix_is_zero = true;
   for (std::size_t index = 0; index < deployment_history.size() - kRlObservationSize;
@@ -115,11 +115,11 @@ bool FrozenDwaqPolicy::infer(
   std::array<float, 64> actor_input{};
   std::copy(latent_mu.begin(), latent_mu.end(), actor_input.begin());
   std::copy(velocity_mu.begin(), velocity_mu.end(), actor_input.begin() + 16);
-  // The deployment exporter uses the newest frame, not the complete history,
-  // as the actor observation after the VAE posterior has been computed.
-  std::copy(
-    deployment_history.end() - kRlObservationSize, deployment_history.end(),
-    actor_input.begin() + 19);
+  // Training uses the current single-frame observation for the actor. The
+  // history above is only the VAE input and ends at the previous policy step.
+  // Do not use the history's last frame here: doing so creates a one-frame
+  // temporal skew between the actor and the observation used by training.
+  std::copy(observation.begin(), observation.end(), actor_input.begin() + 19);
 
   std::array<float, 512> actor_hidden0{};
   std::array<float, 256> actor_hidden2{};
@@ -131,7 +131,7 @@ bool FrozenDwaqPolicy::infer(
   dense(kActor4, actor_hidden2.data(), actor_hidden4.data());
   applyElu(actor_hidden4);
   dense(kActor6, actor_hidden4.data(), action.data());
-  if (dm1_policy_3960::kSquashActionMean) {
+  if (dm1_policy_4210::kSquashActionMean) {
     for (float & value : action) {value = std::tanh(value);}
   }
   for (const float value : action) {
@@ -144,5 +144,5 @@ RlPolicyMetadata FrozenDwaqPolicy::metadata() const
 {
   /*换模型要修改的地方：模型兼容槽位名；若修改需同步 FSM 校验*/
   return RlPolicyMetadata{
-    "model_3960", kDm1FlatCheckpointSha256, false, true, true};
+    "model_4210", kDm1FlatCheckpointSha256, false, true, true};
 }

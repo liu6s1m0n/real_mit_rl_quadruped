@@ -87,8 +87,8 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     Vec3<T>(T(70), T(70), T(35)), Vec3<T>(T(12), T(12), T(6)),
     Vec3<T>(T(50), T(42), T(42)), Vec3<T>(T(8), T(5), T(5)),
     T(0.075), T(0.24),
-    T(0.02), std::size_t(45), std::size_t(6), T(0.25), T(0.08),
-    T(0.10), T(2.0), T(30.0), T(97.0)};
+    T(0.02), std::size_t(45), std::size_t(6), T(0.25), T(0.05),
+    T(0.15), T(3.0), T(30.0), T(97.0)};
 }
 
 #endif  // MYMIT_ROBOT_MODEL_ROBOT_CONTROL_PARAMETERS_HPP_

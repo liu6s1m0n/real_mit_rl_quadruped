@@ -13,6 +13,7 @@
 #include "hardware/dm1_mit_interface.hpp"
 #include "model/quadruped.hpp"
 #include "model/robot_control_parameters.hpp"
+#include "data/dm1_policy_4210_golden.hpp"
 
 namespace
 {
@@ -39,11 +40,19 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
   EXPECT_EQ(parameters.rl_observation_size, kRlObservationSize);
   EXPECT_EQ(parameters.rl_history_length, kRlHistoryLength);
   EXPECT_FLOAT_EQ(parameters.rl_policy_period, 0.02F);
+  EXPECT_FLOAT_EQ(parameters.rl_action_scale, 0.25F);
+  EXPECT_FLOAT_EQ(parameters.rl_action_filter_time_constant, 0.05F);
+  EXPECT_FLOAT_EQ(parameters.rl_max_action_delta, 0.15F);
+  EXPECT_FLOAT_EQ(parameters.rl_max_target_velocity, 3.0F);
+  EXPECT_FLOAT_EQ(parameters.rl_continuous_torque_limit, 30.0F);
+  EXPECT_FLOAT_EQ(parameters.rl_peak_torque_limit, 97.0F);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     EXPECT_EQ(static_cast<std::size_t>(model.leg(static_cast<LegId>(leg)).leg), leg);
     const bool is_rear = leg >= static_cast<std::size_t>(LegId::RR);
     EXPECT_TRUE(model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
       Vec3<float>(0.0F, -0.597F, is_rear ? 1.468F : 1.432F)));
+    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -0.03F);
+    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 2.72F);
   }
 }
 
@@ -75,7 +84,7 @@ TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)
       action.fill(0.0F);
       return true;
     }, RlPolicyMetadata{
-      "model_3960", kDm1FlatCheckpointSha256, false, true, true});
+      "model_4210", kDm1FlatCheckpointSha256, false, true, true});
   std::array<float, kRlObservationSize> observation{};
   std::array<float, kRlObservationSize * kRlHistoryLength> history{};
   std::array<float, kRlActionSize> action{};
@@ -96,11 +105,11 @@ TEST(Dm1Contract, RlReferenceMatchesIsaacTrainingContract)
 }
 
 // 换模型要修改的地方：测试名称和 metadata 期望值
-TEST(Dm1Contract, FrozenModel3960AdapterProducesFiniteActions)
+TEST(Dm1Contract, FrozenModel4210AdapterProducesFiniteActions)
 {
   FrozenDwaqPolicy policy;
   const RlPolicyMetadata metadata = policy.metadata();
-  EXPECT_EQ(metadata.name, "model_3960");
+  EXPECT_EQ(metadata.name, "model_4210");
   EXPECT_EQ(metadata.checkpoint_sha256, kDm1FlatCheckpointSha256);
   EXPECT_TRUE(metadata.frozen);
   EXPECT_TRUE(metadata.uses_vae_posterior_mean);
@@ -115,7 +124,7 @@ TEST(Dm1Contract, FrozenModel3960AdapterProducesFiniteActions)
   }));
 }
 
-TEST(Dm1Contract, FrozenModel3960AdapterMatchesRepeatedInitialHistory)
+TEST(Dm1Contract, FrozenModel4210AdapterMatchesRepeatedInitialHistory)
 {
   FrozenDwaqPolicy policy;
   std::array<float, kRlObservationSize> observation{};
@@ -137,6 +146,58 @@ TEST(Dm1Contract, FrozenModel3960AdapterMatchesRepeatedInitialHistory)
   ASSERT_TRUE(policy.infer(observation, repeated_history, repeated_action));
   for (std::size_t index = 0; index < kRlActionSize; ++index) {
     EXPECT_NEAR(startup_action[index], repeated_action[index], 1e-5F);
+  }
+}
+
+TEST(Dm1Contract, FrozenModel4210ActorUsesCurrentObservation)
+{
+  FrozenDwaqPolicy policy;
+  std::array<float, kRlObservationSize> observation_a{};
+  std::array<float, kRlObservationSize> observation_b{};
+  std::array<float, kRlObservationSize * kRlHistoryLength> history{};
+  for (std::size_t index = 0; index < history.size(); ++index) {
+    history[index] = 0.002F * static_cast<float>(index + 1);
+  }
+  for (std::size_t index = 0; index < observation_a.size(); ++index) {
+    observation_a[index] = 0.01F * static_cast<float>(index + 1);
+    observation_b[index] = observation_a[index];
+  }
+  observation_b[0] += 0.25F;
+
+  std::array<float, kRlActionSize> action_a{};
+  std::array<float, kRlActionSize> action_b{};
+  ASSERT_TRUE(policy.infer(observation_a, history, action_a));
+  ASSERT_TRUE(policy.infer(observation_b, history, action_b));
+  EXPECT_TRUE(std::any_of(action_a.begin(), action_a.end(),
+    [&action_b, index = std::size_t{0}](float value) mutable {
+      const bool differs = std::abs(value - action_b[index]) > 1.0e-6F;
+      ++index;
+      return differs;
+    }));
+}
+
+TEST(Dm1Contract, FrozenModel4210MatchesPythonGoldenVectors)
+{
+  FrozenDwaqPolicy policy;
+  for (std::size_t case_index = 0;
+    case_index < dm1_policy_4210_golden::kObservations.size(); ++case_index)
+  {
+    std::array<float, kRlObservationSize> observation{};
+    std::array<float, kRlObservationSize * kRlHistoryLength> history{};
+    std::copy(
+      dm1_policy_4210_golden::kObservations[case_index].begin(),
+      dm1_policy_4210_golden::kObservations[case_index].end(), observation.begin());
+    std::copy(
+      dm1_policy_4210_golden::kHistories[case_index].begin(),
+      dm1_policy_4210_golden::kHistories[case_index].end(), history.begin());
+    std::array<float, kRlActionSize> action{};
+    ASSERT_TRUE(policy.infer(observation, history, action)) << "case " << case_index;
+    for (std::size_t action_index = 0; action_index < kRlActionSize; ++action_index) {
+      EXPECT_NEAR(
+        action[action_index],
+        dm1_policy_4210_golden::kExpectedActions[case_index][action_index], 1.0e-5F)
+        << "case " << case_index << ", action " << action_index;
+    }
   }
 }
 

@@ -65,7 +65,13 @@ void FSM_State_Locomotion<T>::onEnter()
   mpc_->setGait(GaitType::TROT);
   active_mode_ = this->_data->desired_state->mode;
   rl_history_.fill(0.0F);
+  rl_history_initialized_ = false;
   rl_previous_action_.fill(0.0F);
+  rl_last_raw_action_.fill(0.0F);
+  rl_has_raw_action_ = false;
+  rl_last_frame_trace_ = RlPolicyFrameTrace{};
+  rl_has_frame_trace_ = false;
+  rl_frame_sequence_ = 0;
   rl_policy_counter_ = 0;
   /*同时通知步态调度器使用 TROT。这里必须同步两个系统：
     MPC 的接触预测；GaitScheduler 的实际接触逻辑。
@@ -430,7 +436,7 @@ void FSM_State_Locomotion<T>::RlControlStep()
     (active_mode_ == ControlMode::StairsRl && metadata.name == "model_4700" &&
     metadata.checkpoint_sha256 == kDm1StairsCheckpointSha256) ||
     /*换模型要修改的地方：RL 模型兼容槽位名；需与 metadata() 保持一致*/
-    (active_mode_ == ControlMode::WalkRl && metadata.name == "model_3960" &&
+    (active_mode_ == ControlMode::WalkRl && metadata.name == "model_4210" &&
     metadata.checkpoint_sha256 == kDm1FlatCheckpointSha256);
   if (!expected_checkpoint || !metadata.frozen ||
     !metadata.uses_vae_posterior_mean ||
@@ -450,11 +456,22 @@ void FSM_State_Locomotion<T>::RlControlStep()
       controller.setEnabled(false);
       return;
     }
-    std::copy(
-      rl_history_.begin() + kRlObservationSize, rl_history_.end(),
-      rl_history_.begin());
-    std::copy(observation.begin(), observation.end(),
-      rl_history_.end() - kRlObservationSize);
+    // The VAE receives the six observations available before this policy
+    // step. On first entry there is no prior window, so training-compatible
+    // startup repeats the current observation across all six frames.
+    if (!rl_history_initialized_) {
+      for (std::size_t frame = 0; frame < kRlHistoryLength; ++frame) {
+        std::copy(
+          observation.begin(), observation.end(),
+          rl_history_.begin() + frame * kRlObservationSize);
+      }
+      rl_history_initialized_ = true;
+    }
+    // Copy the exact pre-inference window.  Do not expose the post-inference
+    // appended history here: Python training gives the VAE the history ending
+    // at the previous observation, while the actor receives this observation.
+    rl_last_frame_trace_.observation = observation;
+    rl_last_frame_trace_.history = rl_history_;
     std::array<float, kRlActionSize> action{};
     if (!policy->infer(observation, rl_history_, action)) {
       controller.setEnabled(false);
@@ -466,15 +483,25 @@ void FSM_State_Locomotion<T>::RlControlStep()
         return;
       }
     }
+    rl_last_raw_action_ = action;
+    rl_has_raw_action_ = true;
+    rl_last_frame_trace_.raw_action = action;
+    // Append only after inference. This makes the next policy step's history
+    // end at the current frame, matching the training environment ordering.
+    std::copy(
+      rl_history_.begin() + kRlObservationSize, rl_history_.end(),
+      rl_history_.begin());
+    std::copy(observation.begin(), observation.end(),
+      rl_history_.end() - kRlObservationSize);
     const float policy_dt = static_cast<float>(
       this->_data->control_parameters->rl_policy_period);
     const float alpha = policy_dt / (
       this->_data->control_parameters->rl_action_filter_time_constant + policy_dt);
     const float max_delta = this->_data->control_parameters->rl_max_action_delta;
     for (std::size_t i = 0; i < kRlActionSize; ++i) {
-      // Isaac 在策略输出进入滤波器前执行 clip_actions=(-1, 1)；部署端
-      // 必须保持同一策略坐标语义，不能用更宽的数值保护范围替代它。
-      const float raw = std::clamp(action[i], -1.0F, 1.0F);
+      // Isaac 的 DM1 配置为 clip_actions=100；部署端也只执行同一数值
+      // 边界，随后由低通、目标变化限速和力矩包络负责物理安全。
+      const float raw = std::clamp(action[i], -100.0F, 100.0F);
       const float low_passed = rl_previous_action_[i] +
         alpha * (raw - rl_previous_action_[i]);
       rl_previous_action_[i] += std::clamp(
@@ -517,6 +544,14 @@ void FSM_State_Locomotion<T>::RlControlStep()
       command.position_desired(static_cast<Eigen::Index>(joint)) =
         static_cast<T>(rl_target_position_[index]);
     }
+  }
+  if (rl_policy_counter_ == interval - 1) {
+    // The policy frame is complete only after the ordinary target position
+    // update above.  This remains a copy-only diagnostic path.
+    rl_last_frame_trace_.filtered_action = rl_previous_action_;
+    rl_last_frame_trace_.target_position = rl_target_position_;
+    rl_last_frame_trace_.sequence = ++rl_frame_sequence_;
+    rl_has_frame_trace_ = true;
   }
 }
 

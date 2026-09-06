@@ -25,11 +25,12 @@ inline constexpr std::array<float, kRlActionSize> kDm1RlDefaultJointPosition{
   0.0F, -0.520F, 1.330F,
   0.0F, -0.520F, 1.330F,
   0.0F, -0.520F, 1.330F};
+inline constexpr float kDm1RlDefaultBodyHeight = 0.38F;
 // 换模型要修改的地方：当前模型路径、模型编号和 SHA256
-// Active deployment checkpoint: model_3960
-// /home/simon/RL_Robot/frozen_models/dm1_trot_right_finish_refine_3910_model3960/model_3960.pt
+// Active deployment checkpoint: model_4210
+// /home/simon/RL_Robot/frozen_models/dm1_trot_directional_hip_refine_model4210/model_4210.pt
 inline constexpr char kDm1FlatCheckpointSha256[] =
-  "5a05f95dd5e7ddef83a48a076415267ef22bee6dad55fcb43b92a5f2adf4ab08";
+  "3f4c65ec73d435b7fb16ad24bb240114c01b79502c6eb1037daa887740a0e06b";
 // Previous checkpoint (commented, not active): model_3610
 // SHA256 cf6f88a2c7be9365dbe3e62c9a4c022d37d88f7fd692373842c32280f7e88421
 inline constexpr char kDm1StairsCheckpointSha256[] =
@@ -44,6 +45,23 @@ struct RlPolicyMetadata
   bool supports_stairs = false;
   bool frozen = false;
   bool uses_vae_posterior_mean = false;
+};
+
+/**
+ * @brief One policy-period snapshot for Isaac/MuJoCo deployment comparison.
+ *
+ * This is diagnostic data only.  The history is copied before inference,
+ * while filtered_action and target_position are copied after the normal
+ * deployment shaping step.
+ */
+struct RlPolicyFrameTrace
+{
+  std::array<float, kRlObservationSize> observation{};
+  std::array<float, kRlObservationSize * kRlHistoryLength> history{};
+  std::array<float, kRlActionSize> raw_action{};
+  std::array<float, kRlActionSize> filtered_action{};
+  std::array<float, kRlActionSize> target_position{};
+  std::uint64_t sequence = 0;
 };
 
 class RlPolicy

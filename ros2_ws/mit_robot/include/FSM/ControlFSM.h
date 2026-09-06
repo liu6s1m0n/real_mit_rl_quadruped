@@ -77,6 +77,30 @@ public:
   /** 设置 Locomotion 的机身系前后、左右速度和偏航角速度。 */
   void setLocomotionVelocityCommand(
     T forward_velocity, T lateral_velocity, T yaw_rate);
+  /** 标记 RL 入场姿态过渡，让 BalanceStand 使用 RL 训练参考姿态。 */
+  void setRlEntryPostureActive(bool active) noexcept
+  {data.rl_entry_posture_active = active;}
+
+  /** 最近一次 RL 原始动作，供仿真诊断读取。 */
+  const std::array<float, kRlActionSize> & rlLastRawAction() const noexcept
+  {
+    return statesList.locomotion->rlLastRawAction();
+  }
+
+  bool hasRlRawAction() const noexcept
+  {
+    return statesList.locomotion->hasRlRawAction();
+  }
+
+  const RlPolicyFrameTrace & rlLastFrameTrace() const noexcept
+  {
+    return statesList.locomotion->rlLastFrameTrace();
+  }
+
+  bool hasRlFrameTrace() const noexcept
+  {
+    return statesList.locomotion->hasRlFrameTrace();
+  }
   
   //所有状态共享的数据。
   ControlFSMData < T > data;

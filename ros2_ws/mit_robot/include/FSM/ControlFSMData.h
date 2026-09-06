@@ -33,6 +33,9 @@ struct ControlFSMData
   //参数 控制周期
   T control_time_step = T(0.001);
   bool use_wbc = true;
+  // BalanceStand uses the RL joint reference while this posture transition is
+  // active; this flag is not itself a locomotion mode.
+  bool rl_entry_posture_active = false;
   RlPolicyPtr rl_policy;
 
   bool valid() const noexcept

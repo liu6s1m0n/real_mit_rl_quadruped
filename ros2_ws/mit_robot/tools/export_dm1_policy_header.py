@@ -35,7 +35,7 @@ EXPECTED = {
     "vae.vel_mu.bias": (3,),
 }
 # 换模型要修改的地方：新 checkpoint 的 SHA256
-EXPECTED_SHA256 = "5a05f95dd5e7ddef83a48a076415267ef22bee6dad55fcb43b92a5f2adf4ab08"
+EXPECTED_SHA256 = "3f4c65ec73d435b7fb16ad24bb240114c01b79502c6eb1037daa887740a0e06b"
 
 
 def format_array(values: list[float], indent: str = "  ") -> str:
@@ -55,7 +55,7 @@ def main() -> None:
     checkpoint_sha256 = hashlib.sha256(args.checkpoint.read_bytes()).hexdigest()
     if checkpoint_sha256 != EXPECTED_SHA256:
         raise ValueError(
-            f"unexpected model_3960 SHA256: {checkpoint_sha256} != {EXPECTED_SHA256}"
+            f"unexpected model_4210 SHA256: {checkpoint_sha256} != {EXPECTED_SHA256}"
         )
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -79,9 +79,9 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as output:
         # 换模型要修改的地方：模型编号和生成头文件 namespace
-        output.write("// Generated from model_3960.pt; do not edit.\n")
+        output.write("// Generated from model_4210.pt; do not edit.\n")
         output.write("#pragma once\n\n#include <array>\n\n")
-        output.write("namespace dm1_policy_3960 {\n\n")
+        output.write("namespace dm1_policy_4210 {\n\n")
         output.write("inline constexpr bool kSquashActionMean = false;\n\n")
         for name, shape in EXPECTED.items():
             identifier = "k_" + name.replace(".", "_")
@@ -91,7 +91,7 @@ def main() -> None:
             )
             output.write(format_array(values))
             output.write("\n}};\n\n")
-        output.write("}  // namespace dm1_policy_3960\n")
+        output.write("}  // namespace dm1_policy_4210\n")
 
 
 if __name__ == "__main__":

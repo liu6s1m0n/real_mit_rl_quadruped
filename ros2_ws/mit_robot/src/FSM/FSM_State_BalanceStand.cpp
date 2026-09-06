@@ -193,7 +193,18 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
     //也就是该腿的模型参数，包括：关节上下限；home姿态；扭矩上限；连杆长度。
     const auto & leg_model = this->_data->quadruped->leg(leg_id);
     // DM1 默认站姿来自唯一模型契约。
-    const Vec3<T> home = leg_model.joints.home_position;
+    Vec3<T> home = leg_model.joints.home_position;
+    if (desired.mode == ControlMode::WalkRl ||
+      this->_data->rl_entry_posture_active)
+    {
+      // RL 的第一帧历史必须建立在训练默认姿态上，而不是 BalanceStand/MIT
+      // 的另一套关节参考。这里仅改变 WalkRl 入场过渡，MPC 和楼梯 RL 不变。
+      for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+        home[static_cast<Eigen::Index>(joint)] =
+          static_cast<T>(kDm1RlDefaultJointPosition[
+            leg * kJointsPerLeg + joint]);
+      }
+    }
     command.position_desired = home;
     command.position_desired = command.position_desired.cwiseMax(
       leg_model.joints.lower_limit).cwiseMin(leg_model.joints.upper_limit);

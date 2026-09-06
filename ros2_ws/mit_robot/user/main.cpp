@@ -26,7 +26,7 @@ struct RobotSelection
   float lateral_speed;        ///< 该机型经过接触回归验证的默认横移速度，m/s。
   const char * render_gpu;    ///< OpenGL 渲染设备策略：auto 或 nvidia。
   // 换模型要修改的地方：模型编号仅用于参数说明
-  ControlMode walking_mode;   ///< MPC 或 frozen model_3960 RL。
+  ControlMode walking_mode;   ///< MPC 或 frozen model_4210 RL。
 };
 
 RobotSelection selectRobot(int argc, char ** argv)

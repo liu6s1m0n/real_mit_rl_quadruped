@@ -74,6 +74,29 @@ TEST(Dm1ModelLoad, ProvidesTheCommonControllerInterface)
   EXPECT_GE(mj_name2id(model.get(), mjOBJ_SENSOR, "imu_linear_acceleration"), 0);
 }
 
+TEST(Dm1ModelLoad, JointRangesMatchTheControllerContract)
+{
+  const auto model = loadDm1();
+  const auto controller_model = robots::dm1::makeModel<double>();
+  constexpr std::array<double, kJointsPerLeg> expected_lower{-1.57, -1.367, -0.03};
+  constexpr std::array<double, kJointsPerLeg> expected_upper{1.57, 2.603, 2.72};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & joints = controller_model.leg(static_cast<LegId>(leg)).joints;
+    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+      const int joint_id = namedId(
+        model.get(), mjOBJ_JOINT,
+        std::string(kLegNames[leg]) + "_" + kJointSuffixes[joint]);
+      ASSERT_NE(model->jnt_limited[joint_id], 0);
+      EXPECT_DOUBLE_EQ(model->jnt_range[2 * joint_id], expected_lower[joint]);
+      EXPECT_DOUBLE_EQ(model->jnt_range[2 * joint_id + 1], expected_upper[joint]);
+      EXPECT_DOUBLE_EQ(
+        joints.lower_limit[static_cast<Eigen::Index>(joint)], expected_lower[joint]);
+      EXPECT_DOUBLE_EQ(
+        joints.upper_limit[static_cast<Eigen::Index>(joint)], expected_upper[joint]);
+    }
+  }
+}
+
 TEST(Dm1ModelLoad, ControllerFactoryUsesDm1Parameters)
 {
   const auto model = makeQuadruped<float>(RobotType::DM1);

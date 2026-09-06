@@ -38,6 +38,20 @@ add_robot_unit_test(test_dm1_contract dm1_control_contract_test.cpp)
 add_robot_unit_test(
   test_dm1_mit_interface hardware/dm1_mit_interface_test.cpp)
 
+ament_add_gtest(
+  test_dm1_sim2sim_direction
+  sim2sim/dm1_direction_regression_test.cpp
+  ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
+  ${PROJECT_SOURCE_DIR}/user/SimulationActuatorWriter.cpp
+  ${PROJECT_SOURCE_DIR}/user/SimulationDiagnostics.cpp)
+target_compile_definitions(test_dm1_sim2sim_direction PRIVATE
+  MYMIT_ROBOT_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
+)
+target_include_directories(test_dm1_sim2sim_direction PRIVATE
+  ${PROJECT_SOURCE_DIR}/user
+)
+target_link_libraries(test_dm1_sim2sim_direction mymit_robot_model Eigen3::Eigen)
+
 ament_add_gtest(test_hardware_bridge
   hardware/hardware_bridge_test.cpp
   ${PROJECT_SOURCE_DIR}/user/HardwareBridge.cpp

@@ -7,6 +7,7 @@
  * 最后将关节力矩写回 MuJoCo 并推进仿真时间。
  */
 #include "SimulationBridge.hpp"
+#include "SimulationActuatorWriter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -268,74 +269,6 @@ private:
 constexpr std::array<LegId, kNumLegs> kLegOrder{
   LegId::FR, LegId::FL, LegId::RR, LegId::RL};
 
-// 控制器中的腿/关节顺序与 MJCF 中的对象名称通过下面两张表对应起来。
-// 运行时不会假设 XML 内部对象编号连续，而是先按名字查找编号。
-constexpr std::array<std::array<const char *, kJointsPerLeg>, kNumLegs>
-kJointNames{{
-  {{"FR_hip_joint", "FR_thigh_joint", "FR_calf_joint"}},
-  {{"FL_hip_joint", "FL_thigh_joint", "FL_calf_joint"}},
-  {{"RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"}},
-  {{"RL_hip_joint", "RL_thigh_joint", "RL_calf_joint"}}
-}};
-constexpr std::array<std::array<const char *, kJointsPerLeg>, kNumLegs>
-kActuatorNames{{
-  {{"FR_hip", "FR_thigh", "FR_calf"}},
-  {{"FL_hip", "FL_thigh", "FL_calf"}},
-  {{"RR_hip", "RR_thigh", "RR_calf"}},
-  {{"RL_hip", "RL_thigh", "RL_calf"}}
-}};
-
-struct JointAddress
-{
-  int qpos = -1;      ///< 关节在 mjData::qpos 中的位置地址。
-  int dof = -1;       ///< 关节在 mjData::qvel/qfrc_applied 中的自由度地址。
-  int actuator = -1;  ///< 关节对应的 MuJoCo actuator 编号。
-};
-
-using JointAddresses =
-  std::array<std::array<JointAddress, kJointsPerLeg>, kNumLegs>;
-
-/**
- * @brief 根据 MJCF 名称建立所有腿关节的地址表。
- *
- * MuJoCo 分别存储广义坐标、速度自由度和执行器编号；由于根部自由度等
- * 对象的存在，qpos 地址和 dof 地址不一定相同，所以必须分别保存。
- * @throws std::runtime_error 关节或执行器名称缺失时抛出。
- */
-JointAddresses findJointAddresses(const mjModel * model)
-{
-  // 不能假定 XML 中关节编号连续，因此按名字查询 qpos、qvel 和 actuator 地址。
-  JointAddresses result{};
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-      const int joint_id = mj_name2id(model, mjOBJ_JOINT, kJointNames[leg][joint]);
-      const int actuator_id =
-        mj_name2id(model, mjOBJ_ACTUATOR, kActuatorNames[leg][joint]);
-      if (joint_id < 0 || actuator_id < 0) {
-        throw std::runtime_error("MuJoCo joint or actuator mapping is incomplete");
-      }
-      result[leg][joint] = JointAddress{
-        model->jnt_qposadr[joint_id], model->jnt_dofadr[joint_id], actuator_id};
-    }
-  }
-  return result;
-}
-
-/**
- * @brief 根据 actuator 的力限制裁剪期望力矩。
- * @param model MuJoCo 模型，提供限幅开关及范围。
- * @param actuator 执行器编号。
- * @param force 未限幅的期望力矩。
- * @return 位于 actuator 允许范围内的力矩。
- */
-double clampActuatorForce(const mjModel * model, int actuator, double force)
-{
-  if (model->actuator_forcelimited[actuator] == 0) {return force;}
-  const double minimum = model->actuator_forcerange[2 * actuator];
-  const double maximum = model->actuator_forcerange[2 * actuator + 1];
-  return std::clamp(force, minimum, maximum);
-}
-
 /**
  * @brief 合并 UI 滑块和外部 IPC 的站立高度命令。
  *
@@ -364,37 +297,6 @@ float synchronizeStandingHeight(
 
   previous_slider_height = static_cast<float>(slider_height);
   return previous_slider_height;
-}
-
-/**
- * @brief 将 RobotRunner 的关节命令写入 MuJoCo 的 mjData。
- *
- * 对每个关节依次清除上一帧的外力矩、设置内置位置伺服器的保持位置，
- * 计算“前馈力矩 + 位置 PD + 速度 PD”，然后按执行器限制裁剪并写入。
- */
-void writeCommands(
-  const RobotRunner & runner, const JointAddresses & addresses,
-  const mjModel * model, mjData * data)
-{
-  // qfrc_applied 每帧都必须清零，否则上一帧力矩会继续叠加。
-  mju_zero(data->qfrc_applied, model->nv);
-  const auto & commands = runner.jointCommands();
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    const auto & command = commands[leg];
-    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-      const auto & address = addresses[leg][joint];
-      // MJCF 自带位置伺服器在这里被置为“保持当前位置”，避免它和 WBC 重复控制。
-      // 完整命令 = WBC 前馈力矩 + 关节位置 PD + 关节速度 PD。
-      data->ctrl[address.actuator] = data->qpos[address.qpos];
-      if (!command.enabled) {continue;}
-      const Eigen::Index index = static_cast<Eigen::Index>(joint);
-      const double torque = command.torque_feedforward[index] +
-        command.kp[index] * (command.position_desired[index] - data->qpos[address.qpos]) +
-        command.kd[index] * (command.velocity_desired[index] - data->qvel[address.dof]);
-      data->qfrc_applied[address.dof] =
-        clampActuatorForce(model, address.actuator, torque);
-    }
-  }
 }
 
 /**
@@ -436,8 +338,8 @@ void runPhysics(
     // DM1 的 home 是趴地零位，Reset 后仍从原地趴卧状态开始。
     mj_resetDataKeyframe(model, data, home_keyframe);
     mj_forward(model, data);
-    // 在正式进入循环前建立一次地址表，后续每帧直接按地址访问数组。
-    const JointAddresses addresses = findJointAddresses(model);
+    // GUI 与无界面回归测试共用同一个执行器写入实现，避免双重位置控制。
+    const SimulationActuatorWriter actuator_writer(model);
     // RobotRunner 负责状态估计、步态/WBC 等控制流程；本文件只负责仿真桥接。
     RobotRunner runner(model, data, robot_type);
     // 只有 RL 模式会使用这个策略；MPC 模式仍走原有 Locomotion 路径。
@@ -455,7 +357,7 @@ void runPhysics(
       model->opt.timestep, slow_walking_forward_speed, fast_walking_forward_speed,
       walking_backward_speed, walking_lateral_speed, turning_yaw_rate,
       // 换模型要修改的地方：启动日志模型编号
-      initial_walking_mode == ControlMode::WalkRl ? "RL model_3960" : "MPC");
+      initial_walking_mode == ControlMode::WalkRl ? "RL model_4210" : "MPC");
 
     bool controller_ready = false;
     std::size_t consecutive_failures = 0;
@@ -463,6 +365,7 @@ void runPhysics(
     float previous_slider_height = standing_height.load();
     int previous_direction = -1;
     ControlMode walking_mode = initial_walking_mode;
+    Vec3<float> command_body = Vec3<float>::Zero();
     // 物理仿真按模型 timestep 与墙钟同步。Release 构建通常会提前完成控制计算，
     // 剩余时间专门留给 GLFW 渲染线程，避免物理线程无限抢占共享锁。
     using PhysicsClock = std::chrono::steady_clock;
@@ -508,7 +411,7 @@ void runPhysics(
           std::printf(
             "Walking controller selected: %s (takes effect on the next direction command)\n",
             // 换模型要修改的地方：切换日志模型编号
-            walking_mode == ControlMode::WalkRl ? "RL model_3960" : "MPC");
+            walking_mode == ControlMode::WalkRl ? "RL model_4210" : "MPC");
         } else {
           std::printf(
             "Controller selection ignored while walking; press Stand up first\n");
@@ -528,33 +431,31 @@ void runPhysics(
           requested_direction = -1;
           std::printf("Motion ignored: press Stand up and wait for BalanceStand\n");
         }
-        float forward_velocity = 0.0F;
-        float lateral_velocity = 0.0F;
-        float yaw_rate = 0.0F;
+        command_body.setZero();
         const char * direction_name = "Stand";
         switch (requested_direction) {
           case kForwardSlow:
-            forward_velocity = slow_walking_forward_speed;
+            command_body.x() = slow_walking_forward_speed;
             direction_name = "Forward slow";
             break;
           case kForwardFast:
-            forward_velocity = fast_walking_forward_speed;
+            command_body.x() = fast_walking_forward_speed;
             direction_name = "Forward fast";
             break;
           case kBackward:
-            forward_velocity = -walking_backward_speed;
+            command_body.x() = -walking_backward_speed;
             direction_name = "Backward";
             break;
           case kLeft:
-            lateral_velocity = walking_lateral_speed;
+            command_body.y() = walking_lateral_speed;
             direction_name = "Left";
             break;
           case kRight:
-            lateral_velocity = -walking_lateral_speed;
+            command_body.y() = -walking_lateral_speed;
             direction_name = "Right";
             break;
           case kRotate:
-            yaw_rate = turning_yaw_rate;
+            command_body.z() = turning_yaw_rate;
             direction_name = "Rotate CCW";
             break;
           default:
@@ -562,7 +463,7 @@ void runPhysics(
         }
         // 将 UI 方向转换成控制器使用的机身速度命令。
         runner.setLocomotionVelocityCommand(
-          forward_velocity, lateral_velocity, yaw_rate);
+          command_body.x(), command_body.y(), command_body.z());
         runner.setControlMode(
           requested_direction < 0 ?
           ControlMode::BalanceStand : walking_mode);
@@ -584,7 +485,13 @@ void runPhysics(
           }
         }
         // 控制计算使用当前传感器状态，随后写力矩，最后推进一个物理时间步。
-        runner.setStandingHeight(commanded_height);
+        // BalanceStand/MPC follows the external height command. RL walking has
+        // one owner for its training posture: RobotRunner starts the 0.39 ->
+        // 0.38 m transition and keeps that target after entry, so the GUI
+        // height slider cannot overwrite the RL contract every frame.
+        if (!(walking_mode == ControlMode::WalkRl && requested_direction > kStand)) {
+          runner.setStandingHeight(commanded_height);
+        }
         const bool control_valid = runner.run();
         if (control_valid) {
           consecutive_failures = 0;
@@ -597,25 +504,62 @@ void runPhysics(
             stderr, "RobotRunner has rejected %zu consecutive control frames\n",
             consecutive_failures);
         }
-        diagnostics.observe(data, runner.stateEstimate(), control_valid);
+        const std::size_t target_joint_limit_hits =
+          countSimulationTargetJointLimitHits(runner);
+        const bool direction_active =
+          requested_direction > kStand && requested_direction < kSelectMpc &&
+          runner.currentStateName() == FSM_StateName::LOCOMOTION;
+        const std::array<float, kRlActionSize> * raw_action =
+          walking_mode == ControlMode::WalkRl && direction_active &&
+          runner.hasRlRawAction() ? &runner.rlLastRawAction() : nullptr;
+        std::array<std::size_t, kNumLegs> torque_speed_saturation_by_leg{};
+        actuator_writer.write(runner, data, torque_speed_saturation_by_leg);
+        diagnostics.observe(
+          data, runner.stateEstimate(), control_valid, direction_active, command_body,
+          raw_action,
+          target_joint_limit_hits, &torque_speed_saturation_by_leg);
         const auto & diagnostic_report = diagnostics.report();
         if (diagnostic_report.observed_frames != 0 &&
           diagnostic_report.observed_frames % 500 == 0)
         {
+          const auto mean_1_2 = diagnostic_report.direction_windows[1].meanActual();
+          const auto mean_2_5 = diagnostic_report.direction_windows[2].meanActual();
+          const auto mean_5_10 = diagnostic_report.direction_windows[3].meanActual();
           // 500 Hz下每秒输出一次正式运行诊断。这里只报告，不改变控制状态。
           std::printf(
             "Runtime diagnostics: pos_rms=%.4f m, vel_rms=%.4f m/s, "
             "pitch_max=%.3f rad, height_min=%.3f m, calf_contacts=%zu, "
-            "rejected=%zu\n",
+            "rejected=%zu, cmd=(%.3f,%.3f,%.3f), actual_body=(%.3f,%.3f,%.3f), "
+            "mean_body_1_2=(%.3f,%.3f,%.3f), mean_body_2_5=(%.3f,%.3f,%.3f), "
+            "mean_body_5_10=(%.3f,%.3f,%.3f), "
+            "raw_max=%.3f, raw_over1_ratio=%.3f, joint_limits=%zu, "
+            "torque_speed_sat=%zu, foot_slip_mean=%.3f, fall_time=%.3f, "
+            "net_body=(%.3f,%.3f), contact_transitions=(%zu,%zu,%zu,%zu)\n",
             diagnostic_report.rmsPositionError(),
             diagnostic_report.rmsVelocityError(),
             diagnostic_report.maximum_absolute_pitch,
             diagnostic_report.minimum_height,
             diagnostic_report.calf_collision_frames,
-            diagnostic_report.rejected_control_frames);
+            diagnostic_report.rejected_control_frames,
+            diagnostic_report.command_vx, diagnostic_report.command_vy,
+            diagnostic_report.command_wz, diagnostic_report.actual_vx,
+            diagnostic_report.actual_vy, diagnostic_report.actual_wz,
+            mean_1_2[0], mean_1_2[1], mean_1_2[2],
+            mean_2_5[0], mean_2_5[1], mean_2_5[2],
+            mean_5_10[0], mean_5_10[1], mean_5_10[2],
+            diagnostic_report.raw_action_max_abs,
+            diagnostic_report.rawActionOverOneRatio(),
+            diagnostic_report.target_joint_limit_hits,
+            diagnostic_report.torque_speed_saturation_count,
+            diagnostic_report.meanFootSlipSpeed(), diagnostic_report.fall_time_s,
+            diagnostic_report.net_displacement_body_x,
+            diagnostic_report.net_displacement_body_y,
+            diagnostic_report.foot_contact_by_leg[0].contact_transitions,
+            diagnostic_report.foot_contact_by_leg[1].contact_transitions,
+            diagnostic_report.foot_contact_by_leg[2].contact_transitions,
+            diagnostic_report.foot_contact_by_leg[3].contact_transitions);
         }
-        // 将当前命令写入启用的关节，随后推进一个 MuJoCo 动力学时间步。
-        writeCommands(runner, addresses, model, data);
+        // 当前命令已写入启用的关节，随后推进一个 MuJoCo 动力学时间步。
         mj_step(model, data);
       } else {
         // 暂停时只刷新运动学量，不推进时间，也不运行控制器。

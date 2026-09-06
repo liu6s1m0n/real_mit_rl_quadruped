@@ -24,14 +24,14 @@ JointModelParameters<T> makeJointParameters(bool is_rear)
   // 折叠；大腿角使小腿中心线平行地面，不再只有球形足端承担接触。
   // q 是电机/策略坐标；机械动力学模型通过 zero_offset 还原安装零位。
   // DM1 机械趴姿为 12 个电机角全零；控制器通过 zero_offset 还原机械角。
-  // 这些零偏和执行边界与 my_robot 的可行走 DM1 配置保持一致，尤其是
-  // HAA 的速度/力矩和 HFE/KFE 的摆动余量，避免横向步态被过早裁剪。
+  // 这些零偏和执行边界与 Isaac 训练 DM1 配置保持一致；固定安装旋转
+  // 由 MJCF body quaternion 表达，解析运动学只保留训练侧的关节偏置。
   const T thigh_zero_offset = T(-0.203);
-  result.zero_offset << T(0), thigh_zero_offset, T(-2.25);
-  result.lower_limit << T(-1.57), T(-1.57) - thigh_zero_offset, T(0);
-  result.upper_limit << T(1.57), T(2.4) - thigh_zero_offset, T(2.75);
-  result.velocity_limit << T(52.4), T(28.6), T(28.6);
-  result.torque_limit << T(52.4), T(55), T(55);
+  result.zero_offset << T(0), thigh_zero_offset, T(-2.22);
+  result.lower_limit << T(-1.57), T(-1.57) - thigh_zero_offset, T(-0.03);
+  result.upper_limit << T(1.57), T(2.4) - thigh_zero_offset, T(2.72);
+  result.velocity_limit << T(6.28318530718), T(6.28318530718), T(6.28318530718);
+  result.torque_limit << T(97), T(97), T(97);
   result.damping.setConstant(T(1));
   result.friction_loss.setConstant(T(0.1));
   result.armature.setConstant(T(0.01));

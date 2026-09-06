@@ -174,7 +174,7 @@ bool ImuDriver::start()
       serial_device_.c_str(), std::strerror(errno));
     return false;
   }
-
+  /* 配置串口参数 */
   termios configuration{};
   if (tcgetattr(serial_fd_, &configuration) != 0) {
     const int error = errno;
@@ -182,6 +182,7 @@ bool ImuDriver::start()
     stop();
     return false;
   }
+  /* 设置串口为原始模式，8N1，无流控，非阻塞读取 */
   cfmakeraw(&configuration);
   configuration.c_cflag |= CLOCAL | CREAD;
   configuration.c_cflag &= ~(CSTOPB | CRTSCTS | CSIZE);
@@ -196,7 +197,7 @@ bool ImuDriver::start()
     stop();
     return false;
   }
-  tcflush(serial_fd_, TCIFLUSH);
+  tcflush(serial_fd_, TCIFLUSH);/*清空输入缓冲区*/
   std::fprintf(
     stderr, "[DM IMU] receiver started: %s, %d baud\n",
     serial_device_.c_str(), baudrate_);
