@@ -97,6 +97,18 @@ TEST(Dm1ModelLoad, JointRangesMatchTheControllerContract)
   }
 }
 
+TEST(Dm1ModelLoad, MatchesIsaacDynamicsCollisionAndIntegrationContract)
+{
+  const auto model = loadDm1();
+  EXPECT_DOUBLE_EQ(model->opt.timestep, 0.002);
+  for (int geom = 0; geom < model->ngeom; ++geom) {
+    if (model->geom_bodyid[geom] != 0 && model->geom_contype[geom] != 0) {
+      EXPECT_EQ(model->geom_conaffinity[geom], 0)
+        << "robot self-collision filter missing for geom " << geom;
+    }
+  }
+}
+
 TEST(Dm1ModelLoad, ControllerFactoryUsesDm1Parameters)
 {
   const auto model = makeQuadruped<float>(RobotType::DM1);

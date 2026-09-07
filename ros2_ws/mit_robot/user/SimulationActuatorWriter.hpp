@@ -26,9 +26,8 @@ public:
   /**
    * @brief Write one controller frame to MuJoCo.
    *
-   * Position actuators are explicitly held at the measured position before the
-   * feedforward/PD torque is applied through qfrc_applied. This prevents the
-   * XML position servo and the controller torque from acting as two controllers.
+   * XML motor controls are held at zero while the complete feedforward/PD torque
+   * is applied through qfrc_applied. This leaves one actuator path only.
    */
   void write(
     const RobotRunner & runner, mjData * data,

@@ -514,9 +514,11 @@ void FSM_State_Locomotion<T>::RlControlStep()
   if (!rl_target_initialized_) {
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+        // Isaac resets joint_pos_target to the RL default posture. Starting
+        // from the measured BalanceStand angle would create a deployment-only
+        // target trajectory during the first policy frames.
         rl_target_position_[leg * kJointsPerLeg + joint] =
-          static_cast<float>(this->_data->leg_controller->datas[leg].q(
-            static_cast<Eigen::Index>(joint)));
+          kDm1RlDefaultJointPosition[leg * kJointsPerLeg + joint];
       }
     }
     rl_target_initialized_ = true;

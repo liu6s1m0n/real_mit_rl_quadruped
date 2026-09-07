@@ -525,7 +525,8 @@ void runPhysics(
           const auto mean_1_2 = diagnostic_report.direction_windows[1].meanActual();
           const auto mean_2_5 = diagnostic_report.direction_windows[2].meanActual();
           const auto mean_5_10 = diagnostic_report.direction_windows[3].meanActual();
-          // 500 Hz下每秒输出一次正式运行诊断。这里只报告，不改变控制状态。
+          // 按当前模型物理频率每秒输出一次正式运行诊断。这里只报告，
+          // 不改变控制状态。
           std::printf(
             "Runtime diagnostics: pos_rms=%.4f m, vel_rms=%.4f m/s, "
             "pitch_max=%.3f rad, height_min=%.3f m, calf_contacts=%zu, "

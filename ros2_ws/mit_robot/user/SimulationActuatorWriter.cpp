@@ -99,9 +99,10 @@ void SimulationActuatorWriter::write(
     const auto & command = commands[leg];
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const auto & address = addresses_[leg][joint];
-      // Disable the XML position servo for this frame by holding its target at
-      // the measured position. The controller's torque is the only active path.
-      data->ctrl[address.actuator] = data->qpos[address.qpos];
+      // The XML motor is intentionally driven with zero control input. The
+      // controller's complete MIT-PD torque is written through qfrc_applied;
+      // this keeps the simulation from adding a second position-servo path.
+      data->ctrl[address.actuator] = 0.0;
       if (!command.enabled) {continue;}
       const Eigen::Index index = static_cast<Eigen::Index>(joint);
       const double torque = command.torque_feedforward[index] +

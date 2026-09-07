@@ -23,12 +23,13 @@ using DataPointer = std::unique_ptr<mjData, decltype(&mj_deleteData)>;
 
 constexpr float kRlHeight = 0.38F;
 constexpr float kGenericStandHeight = 0.39F;
-constexpr std::size_t kStartupStepLimit = 6000;  // 12 s at the 2 ms model step.
+constexpr double kIsaacPhysicsTimestep = 0.002;
+constexpr std::size_t kStartupStepLimit = 6000;  // startup budget; entry exits earlier.
 // RL entry may spend several seconds moving from the generic 0.39 m stand
 // target to the 0.38 m training target at the shared height-rate limit. The
 // acceptance clock starts only once LOCOMOTION is active, so leave that
 // transition outside the ten-second measurement horizon.
-constexpr std::size_t kDirectionStepLimit = 12000;  // 24 s simulation budget.
+constexpr std::size_t kDirectionStepLimit = 12000;  // direction budget; 10 s normally exits.
 
 struct DirectionCase
 {
@@ -157,6 +158,12 @@ SimulationDiagnosticReport runDirection(const DirectionCase & direction)
 {
   auto model = loadModel();
   auto data = makeData(model.get());
+  if (std::abs(model->opt.timestep - kIsaacPhysicsTimestep) > 1.0e-9) {
+    throw std::runtime_error(
+            "DM1 Sim2Sim requires the Isaac 0.002 s MuJoCo integration timestep");
+  }
+  // Keep the validated MuJoCo integration step; callers can select a separate
+  // controller rate for timing experiments without changing the policy.
   double control_period = model->opt.timestep;
   if (const char * control_hz = std::getenv("DM1_SIM2SIM_CONTROL_HZ")) {
     const double requested_hz = std::atof(control_hz);
@@ -378,7 +385,11 @@ TEST(Dm1Sim2Sim, DirectionalTenSecondRegression)
       {"right", Vec3<float>(0.0F, -0.20F, 0.0F)},
       {"rotate_ccw", Vec3<float>(0.0F, 0.0F, 0.30F)},
       {"rotate_cw", Vec3<float>(0.0F, 0.0F, -0.30F)}}};
+  const char * only_direction = std::getenv("DM1_SIM2SIM_ONLY_DIRECTION");
   for (const auto & direction : cases) {
+    if (only_direction != nullptr && std::string(only_direction) != direction.name) {
+      continue;
+    }
     const auto report = runDirection(direction);
     if (direction.command.isZero(0.0F)) {
       std::cout << "sim2sim stand fall_time=" << report.fall_time_s
