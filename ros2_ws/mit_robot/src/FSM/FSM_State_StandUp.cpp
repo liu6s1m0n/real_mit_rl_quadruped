@@ -15,9 +15,17 @@ FSM_State_StandUp<T>::FSM_State_StandUp(ControlFSMData<T> * control_fsm_data)
   this->checkPDesFoot = false;
   /*换站立速度要修改的地方：展开阶段时长来自共享控制参数*/
   const T stand_up_duration = control_fsm_data->control_parameters->stand_up_duration;
+  const T thigh_speed_scale =
+    control_fsm_data->control_parameters->stand_up_thigh_speed_scale;
+  if (stand_up_duration <= T(0) || thigh_speed_scale <= T(0) || thigh_speed_scale > T(1)) {
+    throw std::invalid_argument("stand-up duration and thigh speed scale are invalid");
+  }
   ramp_iterations_ = std::max<std::size_t>(
     1, static_cast<std::size_t>(
       std::ceil(stand_up_duration / control_fsm_data->control_time_step)));
+  thigh_ramp_iterations_ = std::max<std::size_t>(
+    1, static_cast<std::size_t>(std::ceil(
+      stand_up_duration / thigh_speed_scale / control_fsm_data->control_time_step)));
 }
 
 template<typename T>
@@ -55,6 +63,10 @@ void FSM_State_StandUp<T>::run()
     static_cast<T>(iteration_) / static_cast<T>(ramp_iterations_), T(0), T(1));
   const T progress = linear_progress * linear_progress *
     (T(3) - T(2) * linear_progress);
+  const T thigh_linear_progress = std::clamp(
+    static_cast<T>(iteration_) / static_cast<T>(thigh_ramp_iterations_), T(0), T(1));
+  const T thigh_progress = thigh_linear_progress * thigh_linear_progress *
+    (T(3) - T(2) * thigh_linear_progress);
   const T target_height = -this->_data->quadruped->nominalBodyHeight();
 
   // DM1 的发卡形趴卧零位不能直接承担机身重量。先在机身仍贴地时把腿
@@ -65,6 +77,10 @@ void FSM_State_StandUp<T>::run()
       this->_data->control_time_step;
     const T progress_rate = duration > T(0) ?
       T(6) * linear_progress * (T(1) - linear_progress) / duration : T(0);
+    const T thigh_duration = static_cast<T>(thigh_ramp_iterations_) *
+      this->_data->control_time_step;
+    const T thigh_progress_rate = thigh_duration > T(0) ?
+      T(6) * thigh_linear_progress * (T(1) - thigh_linear_progress) / thigh_duration : T(0);
     auto & controller = *this->_data->leg_controller;
     controller.zeroCommand();
     controller.setEnabled(true);
@@ -79,10 +95,12 @@ void FSM_State_StandUp<T>::run()
       const Vec3<T> travel = target - initial_joint_positions_[leg];
       command.position_desired = initial_joint_positions_[leg] + progress * travel;
       command.velocity_desired = progress_rate * travel;
+      command.position_desired(1) = initial_joint_positions_[leg](1) + thigh_progress * travel(1);
+      command.velocity_desired(1) = thigh_progress_rate * travel(1);
       command.kp_joint = this->_data->control_parameters->stand_up_joint_kp;
       command.kd_joint = this->_data->control_parameters->stand_up_joint_kd;
     }
-    if (iteration_ >= ramp_iterations_) {
+    if (iteration_ >= std::max(ramp_iterations_, thigh_ramp_iterations_)) {
       // 收腿时足端与地面的摩擦会让趴卧机身产生少量水平位移。WBC 应从
       // 收腿结束后的实际位置原地抬升，不能追赶点击按钮前保存的旧坐标。
       auto & desired = *this->_data->desired_state;

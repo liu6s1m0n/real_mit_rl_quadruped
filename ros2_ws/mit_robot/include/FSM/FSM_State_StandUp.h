@@ -31,6 +31,7 @@ private:
   std::array < Vec3 < T >, kNumLegs > initial_joint_positions_ {};
   std::size_t iteration_ = 0;
   std::size_t ramp_iterations_ = 1;
+  std::size_t thigh_ramp_iterations_ = 1;
   bool stand_up_complete_ = false;
 };
 

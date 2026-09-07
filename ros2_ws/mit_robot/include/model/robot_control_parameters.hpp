@@ -37,6 +37,7 @@ struct RobotControlParameters
   T standing_supported_mass;
 
   T stand_up_duration;
+  T stand_up_thigh_speed_scale;
   Vec3<T> stand_up_prepare_position;
   Vec3<T> stand_up_joint_kp;
   Vec3<T> stand_up_joint_kd;
@@ -82,7 +83,7 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     Vec3<T>(T(100), T(100), T(40)), Vec3<T>(T(18), T(18), T(8)),
     T(300), T(1), T(150), T(14.705035),
     // 趴卧展开阶段：适当放慢大腿/小腿轨迹，仿真与实机共用。
-    T(3.2), Vec3<T>(T(0), T(0.1), T(-2.15)),
+    T(3.2), T(0.75), Vec3<T>(T(0), T(0.1), T(-2.15)),
     Vec3<T>(T(35), T(70), T(80)), Vec3<T>(T(5), T(8), T(10)),
     Vec3<T>(T(220), T(220), T(300)), Vec3<T>(T(12), T(12), T(16)),
     Vec3<T>(T(70), T(70), T(35)), Vec3<T>(T(12), T(12), T(6)),

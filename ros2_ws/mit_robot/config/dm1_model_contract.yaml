@@ -24,6 +24,8 @@ control:
   standing_height_rate_mps: 0.04
   # 换站立速度要修改的地方：趴地展开阶段持续时间（s），对应 C++ stand_up_duration。
   stand_up_duration_s: 3.2
+  # 仅放慢大腿（HFE）展开速度；髋关节和小腿保持 stand_up_duration_s 的速度。
+  stand_up_thigh_speed_scale: 0.75
   physics_timestep_s: 0.002
   policy_period_s: 0.02
   policy_observation_size: 45
