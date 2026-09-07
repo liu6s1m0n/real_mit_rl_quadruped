@@ -23,7 +23,7 @@ control:
   # 换站立速度要修改的地方：抬升速率（m/s）。
   standing_height_rate_mps: 0.04
   # 换站立速度要修改的地方：趴地展开阶段持续时间（s），对应 C++ stand_up_duration。
-  stand_up_duration_s: 1.8
+  stand_up_duration_s: 2.4
   physics_timestep_s: 0.002
   policy_period_s: 0.02
   policy_observation_size: 45
