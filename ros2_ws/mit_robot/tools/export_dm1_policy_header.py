@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Export frozen DM1 DreamWaQ actor to a dependency-free C++ header.
+"""
+Export frozen DM1 DreamWaQ actor to a dependency-free C++ header.
 
 The checkpoint is a regular PyTorch training checkpoint rather than a
 TorchScript module.  The running MuJoCo binary deliberately does not depend

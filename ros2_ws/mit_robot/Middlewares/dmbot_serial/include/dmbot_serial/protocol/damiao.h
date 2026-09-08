@@ -11,6 +11,10 @@
 #include <cmath>
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <cstring>
+#include <memory>
+#include <string>
 
 #include <mutex>
 #include "dmbot_serial/protocol/socketcan.h"
@@ -211,6 +215,11 @@ class Motor_Control
     Motor_Control(std::string bus_name,std::vector<DmActData> *data_ptr,Can_control_Mode can_mode);
     ~Motor_Control();
 
+    // Construction only records motor configuration.  Device lifetime is
+    // explicit so a failed startup can never enable a motor as a side effect.
+    bool open(int thread_priority = 0);
+    void close() noexcept;
+
     void canframeCallback(const canfd_frame& frame); 
     void refresh_motor_status(Motor& motor);//刷新电机状态
 
@@ -271,7 +280,10 @@ class Motor_Control
     std::unordered_map<uint16_t, std::shared_ptr<Motor>> motors;
 
     std::vector<DmActData>* data_ptr_;
+    std::string bus_name_;
     SocketCAN socket_can_;
+    std::vector<std::shared_ptr<Motor>> physical_motors_;
+    bool opened_ = false;
 
     std::atomic<bool> read_write_save{false} ;
     std::vector<CanFrameStamp> read_buffer_;

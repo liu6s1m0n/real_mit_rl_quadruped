@@ -27,7 +27,10 @@ dm1_hardware::Dm1MitInterface::CalibrationArray calibration()
 {
   dm1_hardware::Dm1MitInterface::CalibrationArray result{};
   for (std::size_t index = 0; index < result.size(); ++index) {
-    result[index].id = static_cast<std::uint8_t>(index + 1);
+    const auto can_id = static_cast<std::uint16_t>(index % 6 + 1);
+    result[index].address = dm1_hardware::MotorAddress{
+      static_cast<std::uint8_t>(index / 6), can_id,
+      static_cast<std::uint16_t>(can_id + 0x10)};
     result[index].direction = index == 0 ? -1 : 1;
   }
   return result;
@@ -37,9 +40,12 @@ dm1_hardware::Dm1MitInterface::FeedbackArray feedback(double timestamp)
 {
   dm1_hardware::Dm1MitInterface::FeedbackArray result{};
   for (std::size_t index = 0; index < result.size(); ++index) {
-    result[index].id = static_cast<std::uint8_t>(index + 1);
+    result[index].bus = static_cast<std::uint8_t>(index / 6);
+    result[index].can_id = static_cast<std::uint16_t>(index % 6 + 1);
     result[index].temperature_c = 25.0F;
-    result[index].voltage_v = 24.0F;
+    result[index].rotor_temperature_c = 25.0F;
+    result[index].sequence = index + 1;
+    result[index].health_valid = true;
     result[index].timestamp = timestamp;
   }
   return result;
@@ -67,7 +73,7 @@ TEST(Dm1MitInterfaceTest, ConvertsFeedbackAndSendsTwelveCalibratedFrames)
   commands[0].position_desired.x() = 0.1F;
   ASSERT_TRUE(interface.send(commands, 1.0));
   ASSERT_EQ(transport.frames.size(), kNumJoints);
-  EXPECT_EQ(transport.frames.front().id, 1);
+  EXPECT_EQ(transport.frames.front().can_id, 1);
   EXPECT_FLOAT_EQ(transport.frames.front().position, -0.1F);
 }
 
@@ -77,4 +83,53 @@ TEST(Dm1MitInterfaceTest, RejectsStaleFeedbackAndDisablesAllMotors)
   dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.05);
   EXPECT_FALSE(interface.updateFeedback(feedback(1.0), 1.1));
   EXPECT_GT(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, AllowsARepeatedSequenceWhileFeedbackIsFresh)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+  EXPECT_TRUE(interface.updateFeedback(feedback(1.01), 1.01));
+  EXPECT_EQ(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsFeedbackAfterItsTimeout)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.05);
+  const auto first = feedback(1.0);
+  ASSERT_TRUE(interface.updateFeedback(first, 1.0));
+  EXPECT_FALSE(interface.updateFeedback(first, 1.06));
+  EXPECT_GT(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsFeedbackWithoutAReceiverSequence)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  auto invalid = feedback(1.0);
+  invalid[5].sequence = 0;
+  EXPECT_FALSE(interface.updateFeedback(invalid, 1.0));
+  EXPECT_FALSE(interface.feedbackValid());
+  EXPECT_GT(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsUnsupportedCanBus)
+{
+  MockTransport transport;
+  auto invalid = calibration();
+  invalid[0] = dm1_hardware::MotorCalibration{
+    dm1_hardware::MotorAddress{2, 1, 0x11}, -1, 0.0F};
+  EXPECT_THROW(
+    dm1_hardware::Dm1MitInterface(transport, invalid), std::invalid_argument);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsPhysicalIdThatCannotFitInFeedbackNibble)
+{
+  MockTransport transport;
+  auto invalid = calibration();
+  invalid[0].address.can_id = 0x10;
+  EXPECT_THROW(
+    dm1_hardware::Dm1MitInterface(transport, invalid), std::invalid_argument);
 }

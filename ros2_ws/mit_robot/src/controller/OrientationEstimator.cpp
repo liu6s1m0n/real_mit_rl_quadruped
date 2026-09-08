@@ -164,6 +164,9 @@ bool OrientationEstimator<T>::run()
   }
   estimate.acceleration_valid = raw_imu.acceleration_valid;
   estimate.angular_acceleration_valid = raw_imu.angular_acceleration_valid;
+  estimate.gravity_magnitude = raw_imu.gravity_magnitude;
+  estimate.gravity_valid = raw_imu.gravity_valid &&
+    std::isfinite(raw_imu.gravity_magnitude) && raw_imu.gravity_magnitude > T(0);
 
   // robot_types.hpp 明确规定 rotation_world_from_body 将机身向量旋转到世界系，
   // 因此这里直接左乘 R，而不是沿用旧 Cheetah rBody 语义下的 R.transpose()。
@@ -231,7 +234,10 @@ bool OrientationEstimator<T>::computeImuFusionOrientation(
       integrated_orientation_ = imu_orientation;
     } else {
       // 只有陀螺仪/加速度计时，静止重力可确定 roll/pitch，但 yaw 不可观测。
-      constexpr T kGravity = T(9.81);
+      const T kGravity = imu.gravity_valid &&
+        std::isfinite(static_cast<double>(imu.gravity_magnitude)) &&
+        imu.gravity_magnitude > T(0) ?
+        static_cast<T>(imu.gravity_magnitude) : T(9.81);
       const T acceleration_norm = acceleration_body.norm();
       const bool acceleration_is_gravity =
         acceleration_norm >= T(0.5) * kGravity &&
@@ -271,7 +277,10 @@ bool OrientationEstimator<T>::computeImuFusionOrientation(
   }
 
   // 保留原有加速度重力方向修正，只在模长接近重力时使用。
-  constexpr T kGravity = T(9.81);
+  const T kGravity = imu.gravity_valid &&
+    std::isfinite(static_cast<double>(imu.gravity_magnitude)) &&
+    imu.gravity_magnitude > T(0) ?
+    static_cast<T>(imu.gravity_magnitude) : T(9.81);
   const T acceleration_norm = acceleration_body.norm();
   const bool acceleration_is_gravity =
     acceleration_norm >= T(0.5) * kGravity &&
@@ -374,7 +383,7 @@ bool OrientationEstimator<T>::readLegs(T imu_timestamp)
 /*  cr​=cos(roll),sr​=sin(roll)
     cp=cos⁡(pitch),sp=sin⁡(pitch)
     cy=cos⁡(yaw),sy=sin⁡(yaw)cy​=cos(yaw),sy​=sin(yaw)
-    
+
          cy​*cp​   cy*​sp*​sr​−sy*​cr​   cy*​​sp​*​cr​+sy*​​sr​
     R =  sy*cp​   sy*sp*​sr​+cy*​cr​   sy*​​sp​*​cr​−cy*​​sr​
          −sp​      cp*​sr​            cp*​​cr​

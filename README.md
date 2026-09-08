@@ -77,9 +77,9 @@ MY_ROBOT/
 ls -l /dev/ttyACM* /dev/ttyUSB*
 ```
 
-工程默认使用 `/dev/ttyACM0`，串口参数为 921600 波特率、8 数据位、无校验、1
-停止位（8N1）。如果实际显示的是 `/dev/ttyACM1` 或 `/dev/ttyUSB0`，启动命令中
-必须替换为实际设备名。
+工程默认从 `/dev/serial/by-id` 自动选择名称包含 `DM-IMU` 的设备，串口参数为
+921600 波特率、8 数据位、无校验、1 停止位（8N1）。也可以通过 `--imu DEVICE`
+显式指定 `/dev/ttyACM*`、`/dev/ttyUSB*` 或其他稳定设备路径。
 
 当前用户需要属于 `dialout` 组。该配置只需执行一次：
 
@@ -108,18 +108,58 @@ colcon build --packages-select mymit_robot --symlink-install
 source install/setup.bash
 
 ros2 run mymit_robot hardware_main \
-  --imu-only \
-  --imu /dev/ttyACM0
+  --imu-only
+```
+
+也可以使用等价的 ROS 2 launch 命令；`port` 参数会传递给同一个
+`hardware_main --imu-only` 程序，不会启动独立的 IMU 节点：
+
+```bash
+ros2 launch mymit_robot dm1_imu.launch.py
 ```
 
 看到以下日志，说明串口已经打开并启动接收线程：
 
 ```text
-[DM IMU] receiver started: /dev/ttyACM0, 921600 baud
+[DM IMU] receiver started: /dev/serial/by-id/...DM-IMU..., 921600 baud
 ```
 
-之后应周期性看到 `frame #... received` 和加速度、角速度、欧拉角数据。按
-`Ctrl+C` 退出。
+启动时程序会先等待一段静止的有效 IMU 数据，计算启动基准：平均 RPY（度）、
+机体系重力加速度向量和重力模长。成功时会看到类似：
+
+```text
+[DM IMU] startup baseline accepted: gravity_body=(...) |g|=... m/s^2 rpy0_deg=(...)
+```
+
+程序默认从 `/dev/serial/by-id` 自动选择名称包含 `DM-IMU` 的设备，因此重启或
+USB 枚举顺序变化后不依赖 `/dev/ttyACM0`。随后应周期性看到
+`status=UPDATING`、持续增长的 `seq` 和加速度、角速度、欧拉角数据。按
+`Ctrl+C` 退出。启动期间请保持 IMU 静止；若 3 秒内收不到足够稳定的帧，程序会拒绝启动。
+
+### 持续触发一个电机反馈（诊断用）
+
+部分达妙电机不会主动周期性上报状态，而是在收到 MIT 控制帧后返回一帧反馈。
+可以在只读电机模式下，明确指定一个总线和电机 CAN ID，定时发送零增益 MIT 帧。
+你当前接入的电机为 `can0` 总线、CAN ID `0x01`：
+
+规划中的电机参数为 MIT 模式、物理 CAN ID `0x01`～`0x06`，对应 Master ID
+`0x11`～`0x16`。控制、使能、失能和写零帧使用物理 CAN ID 作为 CAN 仲裁 ID；反馈帧
+使用 Master ID，并在 D0 低 4 位携带物理电机 ID。
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --motor-only \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --poll-feedback can0 0x01
+```
+
+该选项按电机模式的周期持续发送 `kp=0, kd=0, tau=0` 的 MIT 帧，不发送使能或位置归零命令，
+也不会主动给标定文件中的其他电机发送 MIT 帧。程序退出时仍会执行驱动已有的失能流程，
+因此会向标定地址发送失能帧。使用前应确认 `can0 0x01` 是实际电机地址；如果电机已使能或
+机械负载不安全，不要在未固定机械结构时进行测试。
+
+终端会每约 100 ms 输出一次状态：`UPDATING` 表示 `seq` 在增长，`NO_UPDATE` 表示暂时没有
+新反馈，`NO_FEEDBACK` 表示尚未收到该电机的有效反馈帧。
 
 ### 完整硬件程序
 
@@ -132,13 +172,16 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 
 ros2 run mymit_robot hardware_main \
-  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
-  --imu /dev/ttyACM0
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt
 ```
 
-当前 `hardware_main` 只接入了 IMU；CAN/12 路电机反馈仍保持安全拒绝，
-因此不会用伪造的腿部数据启动真机控制。不要使用 `--enable-output`，除非已经
-确认电机 ID、方向、机械零位和急停措施。
+完整模式现在会等待真实的 12 路健康反馈，并检查静止、水平和机械零位。默认策略是：
+偏差 `<0.02 rad` 时直接启动；偏差在 `[0.02, 0.05) rad` 时，只有显式使用
+`--enable-output` 才会先失能、写入全部 12 个电机零位、重新轮询验证后使能；偏差
+`>=0.05 rad` 直接报“机器人初始位置错误”并拒绝使能。普通启动和只读模式绝不会写入
+电机参数。`--zero-tolerance` 可调整自动写零上限，但不能低于直接启动阈值 0.02 rad。
+需要无论当前偏差大小都执行明确零位维护时，使用 `--set-zero`；该模式仍不会使能输出，
+也不能与 `--enable-output` 或 `--stand-up` 同时使用。
 
 ### 常见报错排查
 
@@ -158,8 +201,10 @@ ros2 run mymit_robot hardware_main \
 | `unable to open IMU serial port` | 这是上面串口错误的汇总信息，不能单独判断原因，查看它前面的 `[DM IMU]` 日志。 |
 | `cannot open calibration file` | 完整模式的标定文件路径错误或文件不存在。使用标定文件的绝对路径；首次可先使用 `--imu-only` 验证 IMU。 |
 | `motor ID must be in [1,255]` | 标定文件中的电机 ID 仍为 0 或超出范围。检查 `config/dm1_hardware_calibration.txt`，每个 ID 必须是 1 到 255。 |
-| `Startup zero rejected` | 完整模式启动零位检查失败。机器人必须保持静止、水平、趴下，并且收到 12 路健康电机反馈；仅测试 IMU 时使用 `--imu-only`。 |
-| `DM1 hardware bridge is read-only` | 当前程序默认只读，为安全设计。不要在未确认电机映射和机械零位前添加 `--enable-output`。 |
+| `Startup check rejected` | 普通完整模式启动检查失败。机器人必须保持静止、水平、机械零位正确，并收到 12 路健康电机反馈。 |
+| `Startup rejected: robot initial position error` | 至少一个电机偏差达到自动写零上限（默认 `0.05 rad`）；程序不会自动写零，需先把机器人摆回正确初始位置。 |
+| `Startup zero rejected` | `--set-zero` 维护模式要求机器人静止、水平并收到 12 路健康电机反馈。 |
+| `DM1 hardware bridge is read-only at startup` | 普通启动不会写零；确认机械状态后如需维护操作，显式使用 `--set-zero`。 |
 
 ### 重新构建和环境刷新
 
@@ -316,3 +361,43 @@ colcon test-result --verbose
 ## License
 
 本项目包含采用 Apache-2.0 与 BSD-3-Clause 许可证发布的代码及资源，具体授权信息请参阅工程中的 [LICENSE](ros2_ws/mit_robot/LICENSE) 文件及相关模型目录中的许可说明。
+
+## FDCAN 接口配置
+
+双路 USB2CANFD 刷入 `gs_usb` 固件后直接提供 `can0`/`can1` SocketCAN 接口，
+不再生成 `/dev/ttyACM*`，也不应使用 `slcand`。按设备配置界面的 FDCAN 参数设置：
+
+- 工作模式：FDCAN
+- 仲裁域波特率：1 Mbps
+- 数据域波特率：1 Mbps（Linux 要求不低于仲裁域；DM 电机帧仍使用经典 CAN）
+- 采样点：75%
+
+```bash
+sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh
+```
+
+脚本等价于以下手工配置，并会同时检查、启动 `can0` 和 `can1`：
+
+```bash
+sudo ip link set can0 down
+sudo ip link set can0 type can \
+  bitrate 1000000 sample-point 0.75 \
+  dbitrate 1000000 dsample-point 0.75 \
+  fd on loopback off
+sudo ip link set can0 up
+
+sudo ip link set can1 down
+sudo ip link set can1 type can \
+  bitrate 1000000 sample-point 0.75 \
+  dbitrate 1000000 dsample-point 0.75 \
+  fd on loopback off
+sudo ip link set can1 up
+```
+
+该 `gs_usb` 设备不支持 `restart-ms`；发送队列异常时通过 `ip link set canX down/up`
+手动恢复。使用以下命令确认实际参数：
+
+```bash
+ip -details -statistics link show can0
+ip -details -statistics link show can1
+```

@@ -1,7 +1,7 @@
 #include "dmbot_serial/protocol/damiao.h"
+#include "dmbot_serial/protocol/terminal_colors.h"
 #include <signal.h>
 #include <iostream>
-#include <boost/bind/bind.hpp>
 #include <iomanip>
 namespace damiao
 {    
@@ -26,7 +26,8 @@ Limit_param limit_param[Num_Of_Motor]=
 };
             
 Motor::Motor(DM_Motor_Type motor_type, Control_Mode ctrl_mode,uint16_t can_id, uint16_t master_id)
-        :  Motor_Type(motor_type),mode(ctrl_mode),Master_id(master_id), Can_id(can_id){
+        :  Can_id(can_id), Master_id(master_id), Motor_Type(motor_type), mode(ctrl_mode),
+           last_time_{}, delta_time_(0.0){
     this->limit_param = damiao::limit_param[motor_type];
 }
 
@@ -106,32 +107,37 @@ bool Motor::is_have_param(int key) const
 
 /******一个can，一个Motor_Control**********************/
 Motor_Control::Motor_Control(std::string bus_name,std::vector<DmActData> *data_ptr,Can_control_Mode can_mode)
-    :  data_ptr_(data_ptr) ,current_can_mode_(can_mode)
+    :  current_can_mode_(can_mode), data_ptr_(data_ptr), bus_name_(std::move(bus_name))
 {
-    uint16_t motor_mode;
     for (auto it = data_ptr_->begin(); it != data_ptr_->end(); ++it) 
     {
-     //std::cout << "当前电机模式: " << static_cast<int>(it->mode) << std::endl;
-     motor_mode = static_cast<int>(it->mode);
-     //遍历该bus下的所有电机
      std::shared_ptr<Motor> motor = std::make_shared<Motor>(it->motorType,it->mode,it->can_id, it->mst_id);
      addMotor(motor);
     }
-    int thread_priority=95;
-    while (!socket_can_.open(bus_name, boost::bind(&Motor_Control::canframeCallback, this, boost::placeholders::_1), thread_priority))
-  
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-   
-    enable_all(motor_mode);//使能该接口下的所有电机
-    //usleep(1000000);//1s
-    std::cout<<"Motor_Control init success!"<<std::endl;
 }
 
 Motor_Control::~Motor_Control()
 {
-    std::cout<<"enter ~Motor_Control"<<std::endl;
-    disable_all();//失能该接口下的所有电机
-    std::exit(EXIT_FAILURE);
+    close();
+}
+
+bool Motor_Control::open(int thread_priority)
+{
+    if (opened_) {return true;}
+    const int priority = thread_priority > 0 ? thread_priority : 0;
+    opened_ = socket_can_.open(
+        bus_name_,
+        [this](const canfd_frame & frame) {canframeCallback(frame);},
+        priority);
+    return opened_;
+}
+
+void Motor_Control::close() noexcept
+{
+    if (!opened_) {return;}
+    disable_all();
+    socket_can_.close();
+    opened_ = false;
 }
 
 /**
@@ -140,43 +146,47 @@ Motor_Control::~Motor_Control()
  */
 void Motor_Control::addMotor(std::shared_ptr<Motor> DM_Motor)
 {
+    if (!DM_Motor) {return;}
+    physical_motors_.push_back(DM_Motor);
     motors.insert({DM_Motor->GetCanId(), DM_Motor});
+    // The master ID is a lookup alias only; it is never traversed for
+    // enable/disable and therefore cannot duplicate a physical motor action.
     motors.insert({DM_Motor->GetMasterId(), DM_Motor});
 }
 
 void Motor_Control::enable_all(uint16_t mode_)
 {
-    for(auto& it : motors)
+    for(const auto& motor : physical_motors_)
     {
+        auto & it = *motor;
         switch (mode_)
         {
-            case 0:switchControlMode(*(it.second),MIT);
+            case 0:switchControlMode(it,MIT);
                 break;
-            case 256:switchControlMode(*(it.second),POS_VEL);
+            case 256:switchControlMode(it,POS_VEL);
                 break;
-            case 512:switchControlMode(*(it.second),VEL);
+            case 512:switchControlMode(it,VEL);
                 break;
-            case 768:switchControlMode(*(it.second),POS_FORCE);
+            case 768:switchControlMode(it,POS_FORCE);
                 break;
             default:
                 break;
         }
     }
-     for(auto& it : motors)
+     for(const auto& motor : physical_motors_)
     {
-        
-        read_motor_param(*(it.second),0x0A);
+        read_motor_param(*motor,0x0A);
         usleep(2000);
-        
-        uint32_t parm=it.second->get_param_as_uint32(0x0A);
-         std::cerr<<"id: "<<it.first<<" mode is: "<<parm<<std::endl;
+        uint32_t parm=motor->get_param_as_uint32(0x0A);
+         std::cerr << terminalColor(TerminalColor::White, stderr) << "id: " << motor->GetCanId()
+           << " mode is: " << parm << terminalColorReset(stderr) << std::endl;
     } 
 
-    for(auto& it : motors)
+    for(const auto& motor : physical_motors_)
     {
         for(int j=0;j<5;j++)
        {
-        control_cmd(it.second->GetCanId()+it.second->GetMotorMode(),0xFC);
+        control_cmd(motor->GetCanId()+motor->GetMotorMode(),0xFC);
         usleep(2000);
        }
     }
@@ -185,11 +195,11 @@ void Motor_Control::enable_all(uint16_t mode_)
 
 void Motor_Control::disable_all()
 {
-    for(auto& it : motors)
+    for(const auto& motor : physical_motors_)
     {   
         for(int j=0;j<5;j++)
         {
-         control_cmd(it.second->GetCanId()+it.second->GetMotorMode(),0xFD);
+         control_cmd(motor->GetCanId()+motor->GetMotorMode(),0xFD);
          usleep(2000);
         }
     }  
@@ -400,8 +410,10 @@ void Motor_Control::control_mit(Motor &DM_Motor, float kp, float kd, float q, fl
     uint16_t id = DM_Motor.GetCanId();
     if(motors.find(id) == motors.end())
     {
-        std::cerr << "[Error] In control_mit,no motor with id222 " << DM_Motor.GetCanId() << " is registered." << std::endl;
-        std::exit(-1);  // 终止程序，返回非 0 表示错误
+        std::cerr << terminalColor(TerminalColor::Red, stderr) <<
+          "[Error] In control_mit,no motor with id222 " << DM_Motor.GetCanId() <<
+          " is registered." << terminalColorReset(stderr) << std::endl;
+        return;  // Invalid motor references are reported by the caller via no frame sent.
     }
     auto& m = motors[id];
     uint16_t kp_uint = float_to_uint(kp, 0, 500, 12);
@@ -448,8 +460,10 @@ void Motor_Control::control_pos_vel(Motor &DM_Motor,float pos,float vel)
     uint16_t id = DM_Motor.GetCanId();
     if(motors.find(id) == motors.end())
     {
-        std::cerr << "[Error] In control_pos_vel,no motor with id333 " << DM_Motor.GetCanId() << " is registered." << std::endl;
-        std::exit(-1);  // 终止程序，返回非 0 表示错误
+        std::cerr << terminalColor(TerminalColor::Red, stderr) <<
+          "[Error] In control_pos_vel,no motor with id333 " << DM_Motor.GetCanId() <<
+          " is registered." << terminalColorReset(stderr) << std::endl;
+        return;
     }
     uint8_t *pbuf,*vbuf;
     pbuf=(uint8_t*)&pos;
@@ -491,8 +505,10 @@ void Motor_Control::control_vel(Motor &DM_Motor,float vel)
     uint16_t id =DM_Motor.GetCanId();
     if(motors.find(id) == motors.end())
     {
-        std::cerr << "[Error] In control_vel,no motor with id444 " << DM_Motor.GetCanId() << " is registered." << std::endl;
-        std::exit(-1);  // 终止程序，返回非 0 表示错误
+        std::cerr << terminalColor(TerminalColor::Red, stderr) <<
+          "[Error] In control_vel,no motor with id444 " << DM_Motor.GetCanId() <<
+          " is registered." << terminalColorReset(stderr) << std::endl;
+        return;
     }
     uint8_t *vbuf;
     vbuf=(uint8_t*)&vel;
@@ -528,7 +544,6 @@ void Motor_Control::receive_param(uint8_t* data)
     if (motors.find(canID) == motors.end())
     {
         // std::cerr << "[Error] In receive_param,no motor with id " << canID << " is registered." << std::endl;
-        // std::exit(-1);  // 终止程序，返回非 0 表示错误
         return;
     }
     if(is_in_ranges(RID))
@@ -575,8 +590,9 @@ bool Motor_Control::switchControlMode(Motor &DM_Motor,Control_Mode_Code mode)
     write_motor_param(DM_Motor,RID,write_data);
     if (motors.find(DM_Motor.GetCanId()) == motors.end())
     {
-        std::cerr << "[Error] In switchControlMode,no motor with id " << DM_Motor.GetCanId() << " is registered." << std::endl;
-        std::exit(-1);  // 终止程序
+        std::cerr << terminalColor(TerminalColor::Red, stderr) <<
+          "[Error] In switchControlMode,no motor with id " << DM_Motor.GetCanId() <<
+          " is registered." << terminalColorReset(stderr) << std::endl;
         return false;
     }
     return true;
@@ -607,8 +623,9 @@ bool Motor_Control::change_motor_param(Motor &DM_Motor,uint8_t RID,float data)
     }
     if (motors.find(DM_Motor.GetCanId()) == motors.end())
     {
-        std::cerr << "[Error] In change_motor_param,no motor with id666 " << DM_Motor.GetCanId() << " is registered." << std::endl;
-        std::exit(-1);  // 终止程序，返回非 0 表示错误
+        std::cerr << terminalColor(TerminalColor::Red, stderr) <<
+          "[Error] In change_motor_param,no motor with id666 " << DM_Motor.GetCanId() <<
+          " is registered." << terminalColorReset(stderr) << std::endl;
         return false;
     }
     return true;
@@ -633,7 +650,8 @@ void Motor_Control::canframeCallback(const canfd_frame& frame)
     //std::cerr<<"666"<<std::endl;
   std::lock_guard<std::mutex> guard(mutex_);
   //CanFrameStamp can_frame_stamp{ .frame = frame, .stamp = std::chrono::system_clock::now() };
-  CanFrameStamp can_frame_stamp{ .frame = frame };
+  CanFrameStamp can_frame_stamp{};
+  can_frame_stamp.frame = frame;
   read_buffer_.push_back(can_frame_stamp);
    // 注意：由于std::lock_guard的作用域是函数体内部，当frameCallback函数返回时，  
     // guard对象会被销毁，自动解锁mutex_，因此不需要手动解锁  
@@ -686,7 +704,6 @@ void Motor_Control::canframeCallback(const canfd_frame& frame)
             }
             read_write_save=false;
         }
-        
     }
     else
     {//这是正常返回的位置速度力矩数据
@@ -706,12 +723,9 @@ void Motor_Control::canframeCallback(const canfd_frame& frame)
         float receive_tau = uint_to_float(tau_uint, -limit_param_receive.TAU_MAX, limit_param_receive.TAU_MAX, 12);
         m->receive_data(receive_q, receive_dq, receive_tau);  
        // m->frequency = 1. / (frame_stamp.stamp -  m->stamp).toSec();
-        
         //m->stamp = frame_stamp.stamp;
         m->updateTimeInterval();
        
-       double interval=m->getTimeInterval() ;
-       //std::cerr<<"motor id is: "<<canID<<": "<<interval<<std::endl;
     }
                
   }
@@ -719,4 +733,3 @@ void Motor_Control::canframeCallback(const canfd_frame& frame)
 
 }
 }
-        

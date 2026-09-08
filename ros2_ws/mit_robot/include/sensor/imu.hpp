@@ -6,6 +6,7 @@
 #ifndef MYMIT_ROBOT_SENSOR_IMU_HPP_
 #define MYMIT_ROBOT_SENSOR_IMU_HPP_
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -152,6 +153,15 @@ public:
    */
   bool readAt(ImuData<float> & sample, float timestamp);
 
+  /** @brief 返回启动静止阶段采集的重力基准机体向量。 */
+  Vec3<float> startupGravityBody() const noexcept {return startup_gravity_body_;}
+
+  /** @brief 返回启动静止阶段采集的 RPY 基准，单位为度。 */
+  Vec3<float> startupRpyDegrees() const noexcept {return startup_rpy_degrees_;}
+
+  /** @brief 返回启动阶段测得的重力加速度模长，单位 m/s^2。 */
+  float startupGravityMagnitude() const noexcept {return startup_gravity_magnitude_;}
+
   /**
    * @brief 注入硬件驱动读取的一帧 IMU 数据。
    * @return 数值有效并已保存时返回 true；无效帧会清空缓存并返回 false。
@@ -166,9 +176,17 @@ public:
   ImuData<float> read() override;
 
 private:
+  /** @brief 在串口接收线程已有有效帧后采集稳定的启动基准。 */
+  bool calibrateStartupBaseline();
+
   std::string serial_device_;
   int baudrate_ = 921600;
   std::unique_ptr<ImuDriver> driver_;
+  Vec3<float> startup_gravity_body_ = Vec3<float>::Zero();
+  Vec3<float> startup_rpy_degrees_ = Vec3<float>::Zero();
+  float startup_gravity_magnitude_ = 9.81F;
+  Eigen::Quaternionf startup_orientation_ = Eigen::Quaternionf::Identity();
+  bool startup_baseline_valid_ = false;
 };
 
 /**

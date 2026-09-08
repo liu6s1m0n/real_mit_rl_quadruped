@@ -133,6 +133,9 @@ install(DIRECTORY src/dm1_description/launch/
 install(DIRECTORY config/
   DESTINATION share/${PROJECT_NAME}/config
 )
+install(PROGRAMS scripts/setup_dm1_can.sh
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 # Use one MuJoCo ABI for the model library, sensors, tests, and GUI. The local
 # 3.11 installation also provides the Simulate UI used by mymit_robot_user.
@@ -208,6 +211,23 @@ install(TARGETS mymit_robot_model
   RUNTIME DESTINATION bin
 )
 
+# The DM protocol is compiled as a small internal, ROS-independent library.
+# The legacy ROS 1 legged_damiao_hw package is intentionally not part of this
+# target or its dependency graph.
+add_library(mymit_dmbot_serial
+  Middlewares/dmbot_serial/src/protocol/socketcan.cpp
+)
+target_compile_features(mymit_dmbot_serial PUBLIC cxx_std_17)
+target_include_directories(mymit_dmbot_serial PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dmbot_serial/include
+)
+target_link_libraries(mymit_dmbot_serial PUBLIC pthread)
+install(TARGETS mymit_dmbot_serial
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
 ament_export_targets(mymit_robot_model_targets HAS_LIBRARY_TARGET)
 ament_export_libraries(mymit_robot_model)
 
@@ -270,6 +290,7 @@ add_executable(hardware_main
   user/hardware_main.cpp
   user/HardwareBridge.cpp
   user/Dm1HardwareDriver.cpp
+  src/hardware/dm_motor_driver.cpp
   user/RobotRunner.cpp
 )
 target_compile_features(hardware_main PRIVATE cxx_std_17)
@@ -282,6 +303,7 @@ target_include_directories(hardware_main BEFORE PRIVATE
 )
 target_link_libraries(hardware_main
   mymit_robot_model
+  mymit_dmbot_serial
   Eigen3::Eigen
   pthread
 )
@@ -302,7 +324,45 @@ if(BUILD_TESTING)
   # comment the line when this package is in a git repo and when
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
+
+  # The repository also carries archived ROS 1/vendor sources which are not
+  # part of this package's targets. Keep lint focused on the active ROS 2
+  # hardware path instead of rewriting those external snapshots.
+  set(AMENT_LINT_AUTO_EXCLUDE
+    ament_cmake_lint_cmake
+    ament_cmake_uncrustify
+    ament_cmake_xmllint
+  )
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_lint_cmake REQUIRED)
+  find_package(ament_cmake_uncrustify REQUIRED)
+  find_package(ament_cmake_xmllint REQUIRED)
+  ament_lint_cmake(CMakeLists.txt test/CMakeLists.txt)
+  ament_uncrustify(
+    Middlewares/dm_imu/include
+    Middlewares/dm_imu/src/bsp_crc.cpp
+    Middlewares/dmbot_serial/include/dmbot_serial/protocol/socketcan.h
+    Middlewares/dmbot_serial/include/dmbot_serial/protocol/terminal_colors.h
+    Middlewares/dmbot_serial/src/protocol/socketcan.cpp
+    include/hardware
+    include/model/robot_types.hpp
+    include/sensor
+    src/controller/OrientationEstimator.cpp
+    src/controller/PositionVelocityEstimator.cpp
+    src/hardware
+    src/sensor
+    test/hardware
+    user/Dm1HardwareDriver.cpp
+    user/Dm1HardwareDriver.hpp
+    user/HardwareBridge.cpp
+    user/HardwareBridge.hpp
+    user/hardware_main.cpp
+  )
+  ament_xmllint(
+    src/dm1_description/dm1/dm1.xml
+    src/dm1_description/dm1/scene.xml
+  )
 endif()
 
 ament_package()

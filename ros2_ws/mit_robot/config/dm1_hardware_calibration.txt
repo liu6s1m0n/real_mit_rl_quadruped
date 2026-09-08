@@ -1,16 +1,16 @@
 # COPY THIS FILE, MEASURE EVERY VALUE, THEN PASS THE COPY TO --calibration.
 # DO NOT USE THESE PLACEHOLDER MOTOR IDs ON A POWERED ROBOT.
-# Format: JOINT_NAME MOTOR_ID DIRECTION(+1|-1) MOTOR_ZERO_RAD
+# Format: JOINT_NAME BUS CAN_ID MASTER_ID DIRECTION(+1|-1) MOTOR_ZERO_RAD
 # Startup auto-zero requires MOTOR_ZERO_RAD=0. Mechanical prone is the firmware zero.
-FR_hip    1   1  0.0
-FR_thigh  2   1  0.0
-FR_calf   3   1  0.0
-FL_hip    4   1  0.0
-FL_thigh  5   1  0.0
-FL_calf   6   1  0.0
-RR_hip    7   1  0.0
-RR_thigh  8   1  0.0
-RR_calf   9   1  0.0
-RL_hip   10   1  0.0
-RL_thigh 11   1  0.0
-RL_calf  12   1  0.0
+FR_hip    can0 4 0x14  1 0.0
+FR_thigh  can0 5 0x15 -1 0.0
+FR_calf   can0 6 0x16 -1 0.0
+FL_hip    can0 1 0x11  1 0.0
+FL_thigh  can0 2 0x12  1 0.0
+FL_calf   can0 3 0x13  1 0.0
+RR_hip    can1 4 0x14 -1 0.0
+RR_thigh  can1 5 0x15 -1 0.0
+RR_calf   can1 6 0x16 -1 0.0
+RL_hip    can1 1 0x11 -1 0.0
+RL_thigh  can1 2 0x12  1 0.0
+RL_calf   can1 3 0x13  1 0.0

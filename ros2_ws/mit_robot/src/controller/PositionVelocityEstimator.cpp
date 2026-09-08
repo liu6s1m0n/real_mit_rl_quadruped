@@ -295,7 +295,11 @@ bool PositionVelocityEstimator<T>::run()
   input.template block<3, 3>(3, 0) = time_step * Mat3<T>::Identity();
 
   // IMU 加速度计输出比力，转到世界系后还要加上世界重力才能得到线加速度。
-  const Vec3<T> gravity_world(T(0), T(0), -parameters_.gravity);
+  const T gravity_magnitude = orientation.gravity_valid &&
+    std::isfinite(static_cast<double>(orientation.gravity_magnitude)) &&
+    orientation.gravity_magnitude > T(0) ?
+    orientation.gravity_magnitude : parameters_.gravity;
+  const Vec3<T> gravity_world(T(0), T(0), -gravity_magnitude);
   // 没有线加速度的硬件不能用角加速度替代；退化为常速度预测，随后仍由
   // 支撑足相对位置、零速度和高度观测修正状态。
   Vec3<T> linear_acceleration_world = Vec3<T>::Zero();

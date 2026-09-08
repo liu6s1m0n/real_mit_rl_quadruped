@@ -101,13 +101,17 @@ struct ImuData
   Vec3<T> angular_velocity_body = Vec3<T>::Zero();  ///< rad/s
   Vec3<T> acceleration_body = Vec3<T>::Zero();      ///< 线加速度/比力，m/s^2
   Vec3<T> angular_acceleration_body = Vec3<T>::Zero();  ///< 角加速度，rad/s^2
+  T gravity_magnitude = T(9.81);                    ///< 启动基准重力模长，m/s^2。
   T timestamp = 0.0;  ///< 单调时钟时间，单位 s。
+  std::uint64_t sequence = 0;  ///< 硬件采样序号；用于检测数据是否持续更新。
   /** false 表示设备只提供陀螺仪/加速度计，融合器需从重力方向初始化姿态。 */
   bool orientation_valid = false;
   /** false 表示没有线加速度；位置速度估计器退化为常速度预测。 */
   bool acceleration_valid = true;
   /** true 表示 angular_acceleration_body 来自硬件有效测量。 */
   bool angular_acceleration_valid = false;
+  /** true 表示 gravity_magnitude 来自有效的启动静止基准。 */
+  bool gravity_valid = false;
   /** false 时整帧 IMU 数据无效；它与 orientation_valid 分开判断。 */
   bool valid = false;
 };
@@ -196,8 +200,10 @@ struct StateEstimate
   Vec3<T> acceleration_body = Vec3<T>::Zero();   ///< m/s^2
   Vec3<T> acceleration_world = Vec3<T>::Zero();  ///< m/s^2
   Vec3<T> angular_acceleration_body = Vec3<T>::Zero();  ///< rad/s^2
+  T gravity_magnitude = T(9.81);                 ///< 当前 IMU 重力基准，m/s^2。
   bool acceleration_valid = true;
   bool angular_acceleration_valid = false;
+  bool gravity_valid = false;
   T timestamp = 0.0;
   bool valid = false;
 };

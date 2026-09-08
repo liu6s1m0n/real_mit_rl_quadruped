@@ -20,6 +20,7 @@ struct DmImuRawSample
   std::array<float, 3> angular_velocity{};
   std::array<float, 3> rpy_degrees{};
   std::chrono::steady_clock::time_point received_at{};
+  std::uint64_t sequence = 0;
 };
 
 /**
@@ -31,6 +32,9 @@ struct DmImuRawSample
 class ImuDriver final
 {
 public:
+  static constexpr std::size_t kFrameSize = 57;
+  using Frame = std::array<std::uint8_t, kFrameSize>;
+
   ImuDriver(std::string serial_device, int baudrate);
   ~ImuDriver();
 
@@ -51,6 +55,9 @@ public:
   bool latest(
     DmImuRawSample & sample,
     std::chrono::milliseconds maximum_age = std::chrono::milliseconds(50)) const;
+
+  /** @brief 校验并解码一个完整的 57 字节 DM IMU 帧。 */
+  static bool decodeFrame(const Frame & frame, DmImuRawSample & sample) noexcept;
 
 private:
   void receiveLoop() noexcept;

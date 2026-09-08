@@ -41,68 +41,62 @@
 #include <net/if.h>
 // Multi-threading
 #include <pthread.h>
-#include <boost/function.hpp>
-#include <iostream>
-#include <chrono>
+#include <atomic>
+#include <cstdint>
+#include <functional>
 #include <string>
 
 namespace damiao
 {
-  
-class SocketCAN
-{
-private:
-  ifreq interface_request_{};
-  sockaddr_can address_{};
-  pthread_t receiver_thread_id_{};
 
+  class SocketCAN
+  {
 public:
-  /**
-   * CAN socket file descriptor
-   */
-  int sock_fd_ = -1;
-  /**
-   * Request for the child thread to terminate
-   */
-  bool terminate_receiver_thread_ = false;
-  bool receiver_thread_running_ = false;
+    SocketCAN() = default;
+    ~SocketCAN();
+    SocketCAN(const SocketCAN &) = delete;
+    SocketCAN & operator = (const SocketCAN &) = delete;
 
-  SocketCAN() = default;
-  ~SocketCAN();
+    /** \brief Open and bind socket.
+     *
+     * \param interface bus's name(example: can0).
+     * \param handler Pointer to a function which shall be called when frames are being received from the CAN bus.
+     *
+     * \returns \c true if it successfully open and bind socket.
+     */
+    bool open(
+      const std::string & interface,
+      std::function < void(const canfd_frame & frame) > handler,
+      int thread_priority);
+    /** \brief Close and unbind socket.
+     *
+     */
+    void close();
+    /** \brief Returns whether the socket is open or closed.
+     *
+     * \returns \c True if socket has opened.
+     */
+    bool isOpen() const;
+    /** \brief Sends the referenced frame to the bus.
+     *
+     * \param frame referenced frame which you want to send.
+     */
+    bool write(const can_frame * frame) const;
+    bool write2(const canfd_frame * frame) const;
 
-  void log_throttled_error(const std::string& interface_name) const;
-  /** \brief Open and bind socket.
-   *
-   * \param interface bus's name(example: can0).
-   * \param handler Pointer to a function which shall be called when frames are being received from the CAN bus.
-   *
-   * \returns \c true if it successfully open and bind socket.
-   */
-  bool open(const std::string& interface, boost::function<void(const canfd_frame& frame)> handler, int thread_priority);
-  /** \brief Close and unbind socket.
-   *
-   */
-  void close();
-  /** \brief Returns whether the socket is open or closed.
-   *
-   * \returns \c True if socket has opened.
-   */
-  bool isOpen() const;
-  /** \brief Sends the referenced frame to the bus.
-   *
-   * \param frame referenced frame which you want to send.
-   */
-  void write(can_frame* frame) const;
-  void write2(canfd_frame* frame) const;
-  /** \brief Starts a new thread, that will wait for socket events.
-   *
-   */
-  bool startReceiverThread(int thread_priority);
-  /**
-   * Pointer to a function which shall be called
-   * when frames are being received from the CAN bus
-   */
-  boost::function<void(const canfd_frame& frame)> reception_handler;
-};
+private:
+    static void * receiverThread(void * instance) noexcept;
+    bool startReceiverThread(int thread_priority);
+    void logThrottledError() const;
 
-}  // namespace can
+    ifreq interface_request_ {};
+    sockaddr_can address_ {};
+    pthread_t receiver_thread_id_ {};
+    int sock_fd_ = -1;
+    std::atomic_bool terminate_receiver_thread_ {false};
+    bool receiver_thread_started_ = false;
+    std::function < void(const canfd_frame & frame) > reception_handler_;
+    mutable std::atomic < std::int64_t > last_error_log_s_ {0};
+  };
+
+}  // namespace damiao

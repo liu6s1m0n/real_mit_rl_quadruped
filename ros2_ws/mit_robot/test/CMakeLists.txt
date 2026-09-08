@@ -39,6 +39,28 @@ add_robot_unit_test(
   test_dm1_mit_interface hardware/dm1_mit_interface_test.cpp)
 
 ament_add_gtest(
+  test_dm_motor_driver
+  hardware/dm_motor_driver_test.cpp
+  ${PROJECT_SOURCE_DIR}/src/hardware/dm_motor_driver.cpp)
+target_include_directories(test_dm_motor_driver PRIVATE
+  ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/Middlewares/dmbot_serial/include
+)
+target_link_libraries(test_dm_motor_driver
+  mymit_dmbot_serial Eigen3::Eigen pthread)
+
+ament_add_gtest(
+  test_imu_driver
+  hardware/imu_driver_test.cpp
+  ${PROJECT_SOURCE_DIR}/src/sensor/imu_driver.cpp
+  ${PROJECT_SOURCE_DIR}/Middlewares/dm_imu/src/bsp_crc.cpp)
+target_include_directories(test_imu_driver PRIVATE
+  ${PROJECT_SOURCE_DIR}/include
+  ${PROJECT_SOURCE_DIR}/Middlewares/dm_imu/include
+)
+target_link_libraries(test_imu_driver pthread util)
+
+ament_add_gtest(
   test_dm1_sim2sim_direction
   sim2sim/dm1_direction_regression_test.cpp
   ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp

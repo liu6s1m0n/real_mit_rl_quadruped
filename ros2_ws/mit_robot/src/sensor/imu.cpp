@@ -6,13 +6,18 @@
 
 #include "sensor/imu.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include "sensor/imu_driver.hpp"
+#include "sensor/imu_log.hpp"
 
 // ---------- 内部辅助函数（匿名命名空间） ----------
 namespace
@@ -24,6 +29,20 @@ bool sensorRangeIsValid(const mjModel * model, int address, int dimension)
 {
   return address >= 0 && dimension > 0 &&
          address <= model->nsensordata - dimension;
+}
+
+Eigen::Quaternionf rpyDegreesToQuaternion(const Vec3<float> & rpy_degrees)
+{
+  constexpr float kDegreesToRadians = 0.01745329251994329577F;
+  const float roll = rpy_degrees.x() * kDegreesToRadians;
+  const float pitch = rpy_degrees.y() * kDegreesToRadians;
+  const float yaw = rpy_degrees.z() * kDegreesToRadians;
+  Eigen::Quaternionf result =
+    Eigen::AngleAxisf(yaw, Vec3<float>::UnitZ()) *
+    Eigen::AngleAxisf(pitch, Vec3<float>::UnitY()) *
+    Eigen::AngleAxisf(roll, Vec3<float>::UnitX());
+  result.normalize();
+  return result;
 }
 
 }  // namespace
@@ -84,6 +103,7 @@ ImuData<float> SimImu::read()
   // 加速度：机体坐标系下的 (x, y, z) 分量
   result.acceleration_body <<
     acceleration[0], acceleration[1], acceleration[2];
+  result.gravity_magnitude = 9.81F;
   // 时间戳：当前仿真时间
   result.timestamp = static_cast<float>(data_->time);
 
@@ -104,6 +124,7 @@ ImuData<float> SimImu::read()
   result.orientation_valid = true;
   result.acceleration_valid = true;
   result.angular_acceleration_valid = false;
+  result.gravity_valid = true;
   result.valid = true;
 
   // 将本次读取的数据保存到成员 imu，供外部直接访问
@@ -232,12 +253,131 @@ bool HardwareImu::open()
   if (driver_ == nullptr) {
     driver_ = std::make_unique<ImuDriver>(serial_device_, baudrate_);
   }
-  return driver_->start();
+  if (!driver_->start()) {return false;}
+  if (startup_baseline_valid_) {return true;}
+  if (calibrateStartupBaseline()) {return true;}
+  driver_->stop();
+  return false;
 }
 
 void HardwareImu::close() noexcept
 {
   if (driver_ != nullptr) {driver_->stop();}
+  startup_baseline_valid_ = false;
+  startup_gravity_body_.setZero();
+  startup_rpy_degrees_.setZero();
+  startup_gravity_magnitude_ = 9.81F;
+  startup_orientation_ = Eigen::Quaternionf::Identity();
+}
+
+bool HardwareImu::calibrateStartupBaseline()
+{
+  if (driver_ == nullptr) {return false;}
+
+  constexpr std::size_t kMinimumSamples = 100;
+  constexpr std::size_t kTargetSamples = 200;
+  constexpr auto kCalibrationTimeout = std::chrono::seconds(3);
+  constexpr float kMaximumStartupGyro = 0.15F;
+  constexpr float kMinimumGravity = 1.0F;
+  constexpr float kMaximumGravity = 20.0F;
+  constexpr float kMaximumAccelerationStdDev = 0.5F;
+  constexpr float kRadiansToDegrees = 57.29577951308232F;
+
+  imu_log::print(
+    imu_log::Level::Warning,
+    "[DM IMU] collecting startup baseline; keep robot motionless...\n");
+  const auto deadline = std::chrono::steady_clock::now() + kCalibrationTimeout;
+  Vec3<float> acceleration_sum = Vec3<float>::Zero();
+  Vec3<float> acceleration_square_sum = Vec3<float>::Zero();
+  std::array<float, 3> rpy_sine_sum{};
+  std::array<float, 3> rpy_cosine_sum{};
+  std::chrono::steady_clock::time_point previous_received_at{};
+  std::size_t sample_count = 0;
+
+  while (std::chrono::steady_clock::now() < deadline &&
+    sample_count < kTargetSamples)
+  {
+    DmImuRawSample raw_sample;
+    if (driver_->latest(raw_sample, std::chrono::milliseconds(100)) &&
+      raw_sample.received_at != previous_received_at)
+    {
+      previous_received_at = raw_sample.received_at;
+      const Vec3<float> acceleration(
+        raw_sample.acceleration[0], raw_sample.acceleration[1],
+        raw_sample.acceleration[2]);
+      const Vec3<float> angular_velocity(
+        raw_sample.angular_velocity[0], raw_sample.angular_velocity[1],
+        raw_sample.angular_velocity[2]);
+      const bool finite = acceleration.allFinite() && angular_velocity.allFinite();
+      const float acceleration_norm = acceleration.norm();
+      const bool stationary = finite &&
+        angular_velocity.norm() <= kMaximumStartupGyro &&
+        acceleration_norm >= kMinimumGravity && acceleration_norm <= kMaximumGravity;
+      if (stationary) {
+        acceleration_sum += acceleration;
+        acceleration_square_sum += acceleration.cwiseProduct(acceleration);
+        for (int axis = 0; axis < 3; ++axis) {
+          const float angle = raw_sample.rpy_degrees[axis] *
+            0.01745329251994329577F;
+          rpy_sine_sum[axis] += std::sin(angle);
+          rpy_cosine_sum[axis] += std::cos(angle);
+        }
+        ++sample_count;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  if (sample_count < kMinimumSamples) {
+    imu_log::print(
+      imu_log::Level::Error,
+      "[DM IMU] startup baseline rejected: only %zu stable samples; "
+      "keep the robot still while IMU data is streaming.\n",
+      sample_count);
+    return false;
+  }
+
+  const float count = static_cast<float>(sample_count);
+  const Vec3<float> average_acceleration = acceleration_sum / count;
+  const Vec3<float> acceleration_variance = (
+    acceleration_square_sum / count).cwiseProduct(Vec3<float>::Ones()) -
+    average_acceleration.cwiseProduct(average_acceleration);
+  const float maximum_std_dev = std::sqrt(std::max(0.0F, acceleration_variance.maxCoeff()));
+  if (!std::isfinite(maximum_std_dev) || maximum_std_dev > kMaximumAccelerationStdDev) {
+    imu_log::print(
+      imu_log::Level::Error,
+      "[DM IMU] startup baseline rejected: robot moved or acceleration is "
+      "unstable (max std=%.3f m/s^2).\n",
+      maximum_std_dev);
+    return false;
+  }
+
+  Vec3<float> average_rpy_degrees = Vec3<float>::Zero();
+  for (int axis = 0; axis < 3; ++axis) {
+    average_rpy_degrees[axis] = std::atan2(
+      rpy_sine_sum[axis], rpy_cosine_sum[axis]) * kRadiansToDegrees;
+  }
+  const float gravity_magnitude = average_acceleration.norm();
+  if (!std::isfinite(gravity_magnitude) || gravity_magnitude < kMinimumGravity) {
+    imu_log::print(
+      imu_log::Level::Error,
+      "[DM IMU] startup baseline rejected: invalid gravity reference.\n");
+    return false;
+  }
+
+  startup_gravity_body_ = average_acceleration;
+  startup_gravity_magnitude_ = gravity_magnitude;
+  startup_rpy_degrees_ = average_rpy_degrees;
+  startup_orientation_ = rpyDegreesToQuaternion(startup_rpy_degrees_);
+  startup_baseline_valid_ = true;
+  imu_log::print(
+    imu_log::Level::Info,
+    "[DM IMU] startup baseline accepted: gravity_body=(%.3f, %.3f, %.3f) "
+    "|g|=%.3f m/s^2 rpy0_deg=(%.3f, %.3f, %.3f) from %zu samples\n",
+    startup_gravity_body_.x(), startup_gravity_body_.y(), startup_gravity_body_.z(),
+    startup_gravity_magnitude_, startup_rpy_degrees_.x(), startup_rpy_degrees_.y(),
+    startup_rpy_degrees_.z(), sample_count);
+  return true;
 }
 
 bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
@@ -247,26 +387,19 @@ bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
     imu = sample;
     return false;
   }
-  if (!open()) {
-    imu = sample;
-    return false;
-  }
-
   DmImuRawSample raw_sample;
-  if (driver_ == nullptr || !driver_->latest(raw_sample)) {
+  if (!startup_baseline_valid_ || driver_ == nullptr || !driver_->latest(raw_sample)) {
     imu = ImuData<float>{};
     sample = imu;
     return false;
   }
-  constexpr float kDegreesToRadians = 0.01745329251994329577F;
-  const float roll = raw_sample.rpy_degrees[0] * kDegreesToRadians;
-  const float pitch = raw_sample.rpy_degrees[1] * kDegreesToRadians;
-  const float yaw = raw_sample.rpy_degrees[2] * kDegreesToRadians;
+  const Vec3<float> current_rpy_degrees(
+    raw_sample.rpy_degrees[0], raw_sample.rpy_degrees[1], raw_sample.rpy_degrees[2]);
+  const Eigen::Quaternionf current_orientation =
+    rpyDegreesToQuaternion(current_rpy_degrees);
   sample = ImuData<float>{};
-  sample.orientation_world_from_body =
-    Eigen::AngleAxisf(yaw, Vec3<float>::UnitZ()) *
-    Eigen::AngleAxisf(pitch, Vec3<float>::UnitY()) *
-    Eigen::AngleAxisf(roll, Vec3<float>::UnitX());
+  // 把启动时的 IMU 姿态作为局部世界系原点：R_relative = R0^-1 * R_current。
+  sample.orientation_world_from_body = startup_orientation_.conjugate() * current_orientation;
   sample.angular_velocity_body <<
     raw_sample.angular_velocity[0], raw_sample.angular_velocity[1],
     raw_sample.angular_velocity[2];
@@ -274,9 +407,12 @@ bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
     raw_sample.acceleration[0], raw_sample.acceleration[1],
     raw_sample.acceleration[2];
   sample.timestamp = timestamp;
+  sample.sequence = raw_sample.sequence;
   sample.orientation_valid = true;
   sample.acceleration_valid = true;
   sample.angular_acceleration_valid = false;
+  sample.gravity_magnitude = startup_gravity_magnitude_;
+  sample.gravity_valid = true;
   sample.valid = true;
   imu = sample;
   return true;

@@ -26,7 +26,11 @@ public:
   /** 一次读取同步的 IMU 与 12 路电机反馈。 */
   virtual bool read(HardwareSample & sample, double now_s) = 0;
   /** 将指定电机的当前位置写为输出轴零位。 */
-  virtual bool setMotorZero(std::uint8_t motor_id) = 0;
+  virtual bool setMotorZero(const MotorAddress & address) = 0;
+  /** Poll all motor feedback without enabling output. */
+  virtual bool pollMotors() = 0;
+  /** Enable output explicitly. */
+  virtual bool enableAll() = 0;
   /** 关闭设备；实现必须先失能全部电机。 */
   virtual void close() noexcept = 0;
 };

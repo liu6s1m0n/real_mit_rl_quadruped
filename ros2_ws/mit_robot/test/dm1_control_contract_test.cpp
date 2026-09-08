@@ -49,8 +49,9 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     EXPECT_EQ(static_cast<std::size_t>(model.leg(static_cast<LegId>(leg)).leg), leg);
     const bool is_rear = leg >= static_cast<std::size_t>(LegId::RR);
-    EXPECT_TRUE(model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
-      Vec3<float>(0.0F, -0.597F, is_rear ? 1.468F : 1.432F)));
+    EXPECT_TRUE(
+      model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
+        Vec3<float>(0.0F, -0.597F, is_rear ? 1.468F : 1.432F)));
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -0.03F);
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 2.72F);
   }
@@ -77,22 +78,24 @@ TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)
   // 换模型要修改的地方：测试用 metadata 模型槽位名
   auto policy = std::make_shared<CallbackRlPolicy>(
     [&called](const std::array<float, kRlObservationSize> & observation,
-      const std::array<float, kRlObservationSize * kRlHistoryLength> & history,
-      std::array<float, kRlActionSize> & action) {
+    const std::array<float, kRlObservationSize * kRlHistoryLength> & history,
+    std::array<float, kRlActionSize> & action) {
       called = true;
       EXPECT_FLOAT_EQ(observation[0], history[kRlObservationSize]);
       action.fill(0.0F);
       return true;
     }, RlPolicyMetadata{
-      "model_4210", kDm1FlatCheckpointSha256, false, true, true});
+    "model_4210", kDm1FlatCheckpointSha256, false, true, true});
   std::array<float, kRlObservationSize> observation{};
   std::array<float, kRlObservationSize * kRlHistoryLength> history{};
   std::array<float, kRlActionSize> action{};
   EXPECT_TRUE(policy->infer(observation, history, action));
   EXPECT_TRUE(called);
-  EXPECT_TRUE(std::all_of(action.begin(), action.end(), [](float value) {
-    return std::isfinite(value);
-  }));
+  EXPECT_TRUE(
+    std::all_of(
+      action.begin(), action.end(), [](float value) {
+        return std::isfinite(value);
+      }));
   EXPECT_FALSE(policy->metadata().supports_stairs);
 }
 
@@ -119,9 +122,11 @@ TEST(Dm1Contract, FrozenModel4210AdapterProducesFiniteActions)
   std::array<float, kRlObservationSize * kRlHistoryLength> history{};
   std::array<float, kRlActionSize> action{};
   EXPECT_TRUE(policy.infer(observation, history, action));
-  EXPECT_TRUE(std::all_of(action.begin(), action.end(), [](float value) {
-    return std::isfinite(value);
-  }));
+  EXPECT_TRUE(
+    std::all_of(
+      action.begin(), action.end(), [](float value) {
+        return std::isfinite(value);
+      }));
 }
 
 TEST(Dm1Contract, FrozenModel4210AdapterMatchesRepeatedInitialHistory)
@@ -168,12 +173,14 @@ TEST(Dm1Contract, FrozenModel4210ActorUsesCurrentObservation)
   std::array<float, kRlActionSize> action_b{};
   ASSERT_TRUE(policy.infer(observation_a, history, action_a));
   ASSERT_TRUE(policy.infer(observation_b, history, action_b));
-  EXPECT_TRUE(std::any_of(action_a.begin(), action_a.end(),
-    [&action_b, index = std::size_t{0}](float value) mutable {
-      const bool differs = std::abs(value - action_b[index]) > 1.0e-6F;
-      ++index;
-      return differs;
-    }));
+  EXPECT_TRUE(
+    std::any_of(
+      action_a.begin(), action_a.end(),
+      [&action_b, index = std::size_t{0}](float value) mutable {
+        const bool differs = std::abs(value - action_b[index]) > 1.0e-6F;
+        ++index;
+        return differs;
+      }));
 }
 
 TEST(Dm1Contract, FrozenModel4210MatchesPythonGoldenVectors)
@@ -206,15 +213,27 @@ TEST(Dm1Contract, HardwareRequiresCalibratedFeedbackAndClampsMitOutput)
   RecordingMitTransport transport;
   dm1_hardware::Dm1MitInterface::CalibrationArray calibration{};
   for (std::size_t index = 0; index < calibration.size(); ++index) {
+    const auto bus = static_cast<std::uint8_t>(index / 6);
+    const auto can_id = static_cast<std::uint16_t>(index % 6 + 1);
     calibration[index] = dm1_hardware::MotorCalibration{
-      static_cast<std::uint8_t>(index + 1), 1, 0.0F};
+      dm1_hardware::MotorAddress{
+        bus, can_id, static_cast<std::uint16_t>(can_id + 0x10)},
+      1, 0.0F};
   }
   dm1_hardware::Dm1MitInterface hardware(transport, calibration);
   dm1_hardware::Dm1MitInterface::FeedbackArray feedback{};
   for (std::size_t index = 0; index < feedback.size(); ++index) {
-    feedback[index] = dm1_hardware::MotorFeedback{
-      static_cast<std::uint8_t>(index + 1), 0.0F, 0.0F, 0.0F,
-      35.0F, 48.0F, 0, 1.0};
+    const auto bus = static_cast<std::uint8_t>(index / 6);
+    const auto can_id = static_cast<std::uint16_t>(index % 6 + 1);
+    feedback[index].bus = bus;
+    feedback[index].can_id = can_id;
+    feedback[index].temperature_c = 35.0F;
+    feedback[index].voltage_v = 48.0F;
+    feedback[index].timestamp = 1.0;
+    feedback[index].rotor_temperature_c = 35.0F;
+    feedback[index].sequence = index + 1;
+    feedback[index].health_valid = true;
+    feedback[index].voltage_valid = true;
   }
   EXPECT_TRUE(hardware.updateFeedback(feedback, 1.0));
 
@@ -228,6 +247,12 @@ TEST(Dm1Contract, HardwareRequiresCalibratedFeedbackAndClampsMitOutput)
   }
   EXPECT_TRUE(hardware.send(commands, 1.0));
   EXPECT_EQ(transport.frames.size(), kNumJoints);
+  for (std::size_t index = 0; index < transport.frames.size(); ++index) {
+    const auto can_id = static_cast<std::uint16_t>(index % 6 + 1);
+    EXPECT_EQ(transport.frames[index].bus, index / 6);
+    EXPECT_EQ(transport.frames[index].can_id, can_id);
+    EXPECT_EQ(transport.frames[index].master_id, can_id + 0x10);
+  }
 
   commands[0].torque_feedforward[0] = 31.0F;
   EXPECT_FALSE(hardware.send(commands, 1.0));

@@ -3,11 +3,11 @@
 
 #include "sensor/imu_driver.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cstring>
-#include <cstdio>
 /*Linux/POSIX 串口相关接口*/
 #include <fcntl.h>
 #include <poll.h>
@@ -16,11 +16,12 @@
 #include <unistd.h>
 
 #include "dm_imu/bsp_crc.h"
+#include "sensor/imu_log.hpp"
 
 namespace
 {
 constexpr std::size_t kRecordSize = 19; /*每个数据记录固定 19 字节*/
-constexpr std::size_t kPacketSize = 3 * kRecordSize; /*一整帧由三个记录组成*/
+constexpr std::size_t kPacketSize = ImuDriver::kFrameSize; /*一整帧由三个记录组成*/
 constexpr std::uint8_t kFrameHeader = 0x55; /*帧头*/
 constexpr std::uint8_t kFrameFlag = 0xAA;   /*帧标志*/
 constexpr std::uint8_t kSlaveId = 0x01;     /*从机ID*/
@@ -126,22 +127,40 @@ bool readUntil(
 
 bool readPacket(int fd, DmImuRawSample & sample, std::size_t & bytes_seen)
 {
-  std::array<std::uint8_t, kPacketSize> packet{};
+  ImuDriver::Frame packet{};
   const auto deadline = std::chrono::steady_clock::now() +
     std::chrono::milliseconds(kReadTimeoutMs);
-  for (;;) {
-    if (!readUntil(fd, packet.data(), 1, deadline, bytes_seen)) {return false;}
-    if (packet[0] != kFrameHeader) {continue;}
-    if (!readUntil(
-        fd, packet.data() + 1, packet.size() - 1, deadline, bytes_seen))
-    {
+  std::size_t candidate_size = 0;
+  for (;; ) {
+    if (!readUntil(fd, packet.data() + candidate_size, 1, deadline, bytes_seen)) {
       return false;
     }
+    if (candidate_size == 0 && packet[0] != kFrameHeader) {continue;}
+    ++candidate_size;
+    if (candidate_size < packet.size()) {continue;}
     if (decodePacket(packet, sample)) {return true;}
+
+    // Preserve a possible frame header inside a corrupted candidate. Without
+    // this one-byte resynchronization, a valid frame immediately following a
+    // bad frame would be discarded together with the bad candidate.
+    const auto header = std::find(
+      packet.begin() + 1, packet.end(), kFrameHeader);
+    if (header == packet.end()) {
+      candidate_size = 0;
+    } else {
+      const auto shift = static_cast<std::size_t>(header - packet.begin());
+      std::memmove(packet.data(), packet.data() + shift, packet.size() - shift);
+      candidate_size = packet.size() - shift;
+    }
   }
 }
 
 }  // namespace
+
+bool ImuDriver::decodeFrame(const Frame & frame, DmImuRawSample & sample) noexcept
+{
+  return decodePacket(frame, sample);
+}
 
 ImuDriver::ImuDriver(std::string serial_device, int baudrate)
 : serial_device_(std::move(serial_device)), baudrate_(baudrate)
@@ -158,27 +177,33 @@ bool ImuDriver::start()
   if (running_.load()) {return true;}
   const int speed = baudConstant(baudrate_);
   if (serial_device_.empty()) {
-    std::fprintf(stderr, "[DM IMU] serial device path is empty\n");
+    imu_log::print(imu_log::Level::Error, "[DM IMU] serial device path is empty\n");
     return false;
   }
   if (speed == 0) {
-    std::fprintf(stderr, "[DM IMU] unsupported baudrate: %d\n", baudrate_);
+    imu_log::print(
+      imu_log::Level::Error, "[DM IMU] unsupported baudrate: %d\n", baudrate_);
     return false;
   }
 
   serial_fd_ = ::open(
     serial_device_.c_str(), O_RDONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
   if (serial_fd_ < 0) {
-    std::fprintf(
-      stderr, "[DM IMU] open(%s) failed: %s\n",
-      serial_device_.c_str(), std::strerror(errno));
+    const int error = errno;
+    const auto level =
+      error == ENOENT || error == ENODEV || error == EIO ?
+      imu_log::Level::Warning : imu_log::Level::Error;
+    imu_log::print(
+      level, "[DM IMU] open(%s) failed: %s\n",
+      serial_device_.c_str(), std::strerror(error));
     return false;
   }
   /* 配置串口参数 */
   termios configuration{};
   if (tcgetattr(serial_fd_, &configuration) != 0) {
     const int error = errno;
-    std::fprintf(stderr, "[DM IMU] tcgetattr failed: %s\n", std::strerror(error));
+    imu_log::print(
+      imu_log::Level::Error, "[DM IMU] tcgetattr failed: %s\n", std::strerror(error));
     stop();
     return false;
   }
@@ -193,15 +218,16 @@ bool ImuDriver::start()
   configuration.c_cc[VTIME] = 0;
   if (tcsetattr(serial_fd_, TCSANOW, &configuration) != 0) {
     const int error = errno;
-    std::fprintf(stderr, "[DM IMU] tcsetattr failed: %s\n", std::strerror(error));
+    imu_log::print(
+      imu_log::Level::Error, "[DM IMU] tcsetattr failed: %s\n", std::strerror(error));
     stop();
     return false;
   }
   tcflush(serial_fd_, TCIFLUSH);/*清空输入缓冲区*/
-  std::fprintf(
-    stderr, "[DM IMU] receiver started: %s, %d baud\n",
+  imu_log::print(
+    imu_log::Level::Info, "[DM IMU] receiver started: %s, %d baud\n",
     serial_device_.c_str(), baudrate_);
-  
+
   {
     std::lock_guard<std::mutex> lock(mutex_);
     has_sample_ = false;
@@ -243,7 +269,8 @@ void ImuDriver::receiveLoop() noexcept
 {
   std::uint64_t frame_count = 0;
   const auto start_time = std::chrono::steady_clock::now();
-  auto last_data_log = start_time - std::chrono::seconds(1);
+  auto last_data_log = start_time;
+  std::uint64_t last_logged_sequence = 0;
   auto last_wait_log = start_time;
   std::size_t invalid_window_bytes = 0;
   while (running_.load()) {
@@ -252,19 +279,23 @@ void ImuDriver::receiveLoop() noexcept
     if (readPacket(serial_fd_, sample, bytes_seen)) {
       const auto received_at = std::chrono::steady_clock::now();
       sample.received_at = received_at;
-      ++frame_count;
+      sample.sequence = ++frame_count;
       if (frame_count == 1 || received_at - last_data_log >= std::chrono::milliseconds(100)) {
-        std::fprintf(
-          stderr,
-          "[DM IMU] frame #%llu received | acc=(%.3f, %.3f, %.3f) "
+        const double report_seconds = std::max(
+          0.0, std::chrono::duration<double>(received_at - last_data_log).count());
+        const std::uint64_t sequence_delta = frame_count - last_logged_sequence;
+        imu_log::print(
+          imu_log::Level::Info,
+          "[DM IMU] status=UPDATING seq=%llu (+%llu/%.2fs) | acc=(%.3f, %.3f, %.3f) "
           "gyro=(%.3f, %.3f, %.3f) rpy_deg=(%.3f, %.3f, %.3f)\n",
           static_cast<unsigned long long>(frame_count),
+          static_cast<unsigned long long>(sequence_delta), report_seconds,
           sample.acceleration[0], sample.acceleration[1], sample.acceleration[2],
           sample.angular_velocity[0], sample.angular_velocity[1],
           sample.angular_velocity[2], sample.rpy_degrees[0], sample.rpy_degrees[1],
           sample.rpy_degrees[2]);
-        std::fflush(stderr);
         last_data_log = received_at;
+        last_logged_sequence = frame_count;
       }
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -276,18 +307,18 @@ void ImuDriver::receiveLoop() noexcept
       const auto now = std::chrono::steady_clock::now();
       if (now - last_wait_log >= std::chrono::seconds(1)) {
         if (invalid_window_bytes == 0) {
-          std::fprintf(
-            stderr,
-            "[DM IMU] no serial bytes received; check IMU output mode, "
-            "baudrate and device path.\n");
+          imu_log::print(
+            imu_log::Level::Warning,
+            "[DM IMU] status=NO_DATA seq=%llu; no serial bytes received; "
+            "check IMU output mode, baudrate and device path.\n",
+            static_cast<unsigned long long>(frame_count));
         } else {
-          std::fprintf(
-            stderr,
-            "[DM IMU] received %zu raw bytes, but no valid 57-byte frame; "
-            "check baudrate or frame format.\n",
-            invalid_window_bytes);
+          imu_log::print(
+            imu_log::Level::Warning,
+            "[DM IMU] status=INVALID_FRAME seq=%llu; received %zu raw bytes, "
+            "but no valid 57-byte frame; check baudrate or frame format.\n",
+            static_cast<unsigned long long>(frame_count), invalid_window_bytes);
         }
-        std::fflush(stderr);
         last_wait_log = now;
         invalid_window_bytes = 0;
       }
