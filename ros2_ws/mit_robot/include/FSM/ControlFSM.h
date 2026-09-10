@@ -89,27 +89,6 @@ public:
   void setRlEntryPostureActive(bool active) noexcept
   {data.rl_entry_posture_active = active;}
 
-  /** 最近一次 RL 原始动作，供仿真诊断读取。 */
-  const std::array<float, kRlActionSize> & rlLastRawAction() const noexcept
-  {
-    return statesList.locomotion->rlLastRawAction();
-  }
-
-  bool hasRlRawAction() const noexcept
-  {
-    return statesList.locomotion->hasRlRawAction();
-  }
-
-  const RlPolicyFrameTrace & rlLastFrameTrace() const noexcept
-  {
-    return statesList.locomotion->rlLastFrameTrace();
-  }
-
-  bool hasRlFrameTrace() const noexcept
-  {
-    return statesList.locomotion->hasRlFrameTrace();
-  }
-  
   //所有状态共享的数据。
   ControlFSMData < T > data;
   //所有状态对象。

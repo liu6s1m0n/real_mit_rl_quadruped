@@ -47,23 +47,6 @@ struct RlPolicyMetadata
   bool uses_vae_posterior_mean = false;
 };
 
-/**
- * @brief One policy-period snapshot for Isaac/MuJoCo deployment comparison.
- *
- * This is diagnostic data only.  The history is copied before inference,
- * while filtered_action and target_position are copied after the normal
- * deployment shaping step.
- */
-struct RlPolicyFrameTrace
-{
-  std::array<float, kRlObservationSize> observation{};
-  std::array<float, kRlObservationSize * kRlHistoryLength> history{};
-  std::array<float, kRlActionSize> raw_action{};
-  std::array<float, kRlActionSize> filtered_action{};
-  std::array<float, kRlActionSize> target_position{};
-  std::uint64_t sequence = 0;
-};
-
 class RlPolicy
 {
 public:

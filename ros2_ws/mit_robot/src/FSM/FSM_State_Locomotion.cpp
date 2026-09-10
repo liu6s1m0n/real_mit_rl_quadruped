@@ -67,11 +67,6 @@ void FSM_State_Locomotion<T>::onEnter()
   rl_history_.fill(0.0F);
   rl_history_initialized_ = false;
   rl_previous_action_.fill(0.0F);
-  rl_last_raw_action_.fill(0.0F);
-  rl_has_raw_action_ = false;
-  rl_last_frame_trace_ = RlPolicyFrameTrace{};
-  rl_has_frame_trace_ = false;
-  rl_frame_sequence_ = 0;
   rl_policy_counter_ = 0;
   /*同时通知步态调度器使用 TROT。这里必须同步两个系统：
     MPC 的接触预测；GaitScheduler 的实际接触逻辑。
@@ -474,8 +469,6 @@ void FSM_State_Locomotion<T>::RlControlStep()
     // Copy the exact pre-inference window.  Do not expose the post-inference
     // appended history here: Python training gives the VAE the history ending
     // at the previous observation, while the actor receives this observation.
-    rl_last_frame_trace_.observation = observation;
-    rl_last_frame_trace_.history = rl_history_;
     std::array<float, kRlActionSize> action{};
     if (!policy->infer(observation, rl_history_, action)) {
       controller.setEnabled(false);
@@ -487,9 +480,6 @@ void FSM_State_Locomotion<T>::RlControlStep()
         return;
       }
     }
-    rl_last_raw_action_ = action;
-    rl_has_raw_action_ = true;
-    rl_last_frame_trace_.raw_action = action;
     // Append only after inference. This makes the next policy step's history
     // end at the current frame, matching the training environment ordering.
     std::copy(
@@ -552,12 +542,6 @@ void FSM_State_Locomotion<T>::RlControlStep()
     }
   }
   if (rl_policy_counter_ == interval - 1) {
-    // The policy frame is complete only after the ordinary target position
-    // update above.  This remains a copy-only diagnostic path.
-    rl_last_frame_trace_.filtered_action = rl_previous_action_;
-    rl_last_frame_trace_.target_position = rl_target_position_;
-    rl_last_frame_trace_.sequence = ++rl_frame_sequence_;
-    rl_has_frame_trace_ = true;
   }
 }
 

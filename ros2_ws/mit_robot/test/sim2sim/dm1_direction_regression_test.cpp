@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -144,15 +143,12 @@ bool step(
 {
   runner.setStandingHeight(standing_height);
   const bool control_valid = run_control ? runner.run() : true;
-  std::array<std::size_t, kNumLegs> saturation_by_leg{};
-  actuator_writer.write(runner, data, saturation_by_leg);
+  actuator_writer.write(runner, data);
   const std::size_t target_joint_limit_hits =
     countSimulationTargetJointLimitHits(runner);
   diagnostics.observe(
     data, runner.stateEstimate(), control_valid, direction_active, command,
-    runner.hasRlRawAction() ? &runner.rlLastRawAction() : nullptr,
-    target_joint_limit_hits,
-    &saturation_by_leg);
+    target_joint_limit_hits);
   mj_step(model, data);
   return control_valid;
 }
@@ -181,28 +177,6 @@ SimulationDiagnosticReport runDirection(const DirectionCase & direction)
   runner.setRlPolicy(std::make_shared<FrozenDwaqPolicy>());
   SimulationActuatorWriter actuator_writer(model.get());
   SimulationDiagnostics diagnostics(model.get());
-  std::ofstream trace;
-  std::uint64_t last_trace_sequence = 0;
-  if (std::string(direction.name) == "left") {
-    const char * trace_path = std::getenv("DM1_SIM2SIM_TRACE_PATH");
-    trace.open(trace_path != nullptr ? trace_path :
-      "/tmp/dm1_sim2sim_left_policy_trace.csv");
-    if (trace) {
-      trace << "sequence,time_s";
-      for (std::size_t i = 0; i < kRlObservationSize; ++i) {trace << ",obs_" << i;}
-      for (std::size_t i = 0; i < kRlObservationSize * kRlHistoryLength; ++i) {
-        trace << ",history_" << i;
-      }
-      for (std::size_t i = 0; i < kRlActionSize; ++i) {trace << ",raw_" << i;}
-      for (std::size_t i = 0; i < kRlActionSize; ++i) {trace << ",filtered_" << i;}
-      for (std::size_t i = 0; i < kRlActionSize; ++i) {trace << ",target_" << i;}
-      for (std::size_t i = 0; i < kNumLegs; ++i) {trace << ",contact_force_" << i;}
-      for (std::size_t i = 0; i < kNumLegs; ++i) {trace << ",foot_slip_" << i;}
-      for (std::size_t i = 0; i < kNumLegs; ++i) {trace << ",contact_" << i;}
-      trace << '\n';
-    }
-  }
-
   // Reproduce the real entry path: initialization -> StandUp -> BalanceStand.
   bool requested_stand_up = false;
   bool reached_balance_stand = false;
@@ -255,25 +229,6 @@ SimulationDiagnosticReport runDirection(const DirectionCase & direction)
     step(
       model.get(), data.get(), runner, actuator_writer, diagnostics,
       kRlHeight, direction.command, active, run_control);
-    if (trace && runner.hasRlFrameTrace() &&
-      runner.rlLastFrameTrace().sequence != last_trace_sequence &&
-      runner.rlLastFrameTrace().sequence <= 100)
-    {
-      const auto & frame = runner.rlLastFrameTrace();
-      trace << frame.sequence << ',' <<
-        (active_start_time >= 0.0 ? data->time - active_start_time : data->time);
-      for (const float value : frame.observation) {trace << ',' << value;}
-      for (const float value : frame.history) {trace << ',' << value;}
-      for (const float value : frame.raw_action) {trace << ',' << value;}
-      for (const float value : frame.filtered_action) {trace << ',' << value;}
-      for (const float value : frame.target_position) {trace << ',' << value;}
-      const auto foot_trace = readFootTrace(model.get(), data.get());
-      for (const float value : foot_trace.force) {trace << ',' << value;}
-      for (const float value : foot_trace.slip) {trace << ',' << value;}
-      for (const int value : foot_trace.contact) {trace << ',' << value;}
-      trace << '\n';
-      last_trace_sequence = frame.sequence;
-    }
     active_steps += active ? 1U : 0U;
     if (!direction.command.isZero(0.0F) && measurement_started &&
       data->time - active_start_time >= 10.0)
@@ -303,14 +258,7 @@ void expectDirectionMetrics(
             << report.fall_time_s << " calf_frames=" << report.calf_collision_frames
             << " observed=" << report.observed_frames
             << " calf_ratio=" << report.calfContactRatio()
-            << " raw_max=" << report.raw_action_max_abs
-            << " raw_over1=" << report.rawActionOverOneRatio()
             << " joint_limits=" << report.target_joint_limit_hits
-            << " torque_speed_sat=" << report.torque_speed_saturation_count
-            << " torque_speed_sat_by_leg=(" << report.torque_speed_saturation_by_leg[0]
-            << "," << report.torque_speed_saturation_by_leg[1]
-            << "," << report.torque_speed_saturation_by_leg[2]
-            << "," << report.torque_speed_saturation_by_leg[3] << ")"
             << " foot_slip_mean=" << report.meanFootSlipSpeed()
             << " net_body=(" << report.net_displacement_body_x << ","
             << report.net_displacement_body_y << ")"
@@ -332,7 +280,6 @@ void expectDirectionMetrics(
   EXPECT_LT(report.fall_time_s, 0.25) << direction.name;
   EXPECT_EQ(report.calf_collision_frames, 0U) << direction.name;
   EXPECT_EQ(report.target_joint_limit_hits, 0U) << direction.name;
-  EXPECT_EQ(report.torque_speed_saturation_count, 0U) << direction.name;
   EXPECT_GT(report.minimum_height, 0.30F) << direction.name;
   EXPECT_LT(report.maximum_absolute_pitch, 0.35F) << direction.name;
   EXPECT_LT(report.meanFootSlipSpeed(), 0.15F) << direction.name;
@@ -407,7 +354,6 @@ TEST(Dm1Sim2Sim, DirectionalTenSecondRegression)
       EXPECT_LT(report.fall_time_s, 0.25) << direction.name;
       EXPECT_EQ(report.calf_collision_frames, 0U) << direction.name;
       EXPECT_EQ(report.target_joint_limit_hits, 0U) << direction.name;
-      EXPECT_EQ(report.torque_speed_saturation_count, 0U) << direction.name;
       EXPECT_GT(report.minimum_height, 0.30F) << direction.name;
       EXPECT_LT(report.maximum_absolute_pitch, 0.35F) << direction.name;
       EXPECT_LT(report.meanFootSlipSpeed(), 0.15F) << direction.name;
@@ -702,8 +648,7 @@ TEST(Dm1Sim2Sim, OperatorArbiterEndToEndKeepsMotionAndFourFootSupport)
     const bool control_valid = !control_active || runner.run();
     ASSERT_TRUE(control_valid);
     if (stand_up_pending && runner.requestStandUp()) {stand_up_pending = false;}
-    std::array<std::size_t, kNumLegs> saturation_by_leg{};
-    actuator_writer.write(runner, data.get(), saturation_by_leg, control_active);
+    actuator_writer.write(runner, data.get(), control_active);
     mj_step(model.get(), data.get());
     if (control_active && !stand_up_pending &&
       runner.currentStateName() == FSM_StateName::BALANCE_STAND &&
@@ -719,8 +664,7 @@ TEST(Dm1Sim2Sim, OperatorArbiterEndToEndKeepsMotionAndFourFootSupport)
   std::array<float, kNumLegs> stand_normal_force{};
   for (int index = 0; index < 100; ++index) {
     ASSERT_TRUE(runner.run());
-    std::array<std::size_t, kNumLegs> saturation_by_leg{};
-    actuator_writer.write(runner, data.get(), saturation_by_leg, true);
+    actuator_writer.write(runner, data.get(), true);
     const auto trace = readFootTrace(model.get(), data.get());
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       stand_contact_samples[leg] += trace.contact[leg];
@@ -746,8 +690,7 @@ TEST(Dm1Sim2Sim, OperatorArbiterEndToEndKeepsMotionAndFourFootSupport)
     runner.setLocomotionVelocityCommand(velocity.forward, velocity.lateral, velocity.yaw);
     runner.setControlMode(ControlMode::Locomotion);
     ASSERT_TRUE(runner.run());
-    std::array<std::size_t, kNumLegs> saturation_by_leg{};
-    actuator_writer.write(runner, data.get(), saturation_by_leg, true);
+    actuator_writer.write(runner, data.get(), true);
     const auto trace = readFootTrace(model.get(), data.get());
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       motion_contact_samples[leg] += trace.contact[leg];
@@ -773,9 +716,7 @@ TEST(Dm1Sim2Sim, LockedActuatorWriterClearsAllMuJoCoOutputs)
   SimulationActuatorWriter actuator_writer(model.get());
   std::fill_n(data->ctrl, model->nu, 1.0);
   std::fill_n(data->qfrc_applied, model->nv, 1.0);
-  std::array<std::size_t, kNumLegs> saturation_by_leg{};
-
-  actuator_writer.write(runner, data.get(), saturation_by_leg, false);
+  actuator_writer.write(runner, data.get(), false);
 
   for (int actuator = 0; actuator < model->nu; ++actuator) {
     EXPECT_EQ(data->ctrl[actuator], 0.0);
@@ -791,8 +732,6 @@ TEST(Dm1Sim2Sim, MotionControlStartsFromMeasuredJointPositionWithoutTorqueStep)
   auto data = makeData(model.get());
   RobotRunner runner(model.get(), data.get(), RobotType::DM1);
   SimulationActuatorWriter actuator_writer(model.get());
-  std::array<std::size_t, kNumLegs> saturation_by_leg{};
-
   // Establish an output-gated initialization reference at the original q.
   ASSERT_TRUE(runner.run());
 
@@ -824,7 +763,7 @@ TEST(Dm1Sim2Sim, MotionControlStartsFromMeasuredJointPositionWithoutTorqueStep)
   // The existing output-gated trajectory still refers to the old q and would
   // inject a position step if the motor gate opened now.
   ASSERT_TRUE(runner.run());
-  actuator_writer.write(runner, data.get(), saturation_by_leg, true);
+  actuator_writer.write(runner, data.get(), true);
   double stale_peak_torque = 0.0;
   for (const char * name : joint_names) {
     const int joint = mj_name2id(model.get(), mjOBJ_JOINT, name);
@@ -838,14 +777,14 @@ TEST(Dm1Sim2Sim, MotionControlStartsFromMeasuredJointPositionWithoutTorqueStep)
   // unlock. It makes the first motion-control frame position-continuous.
   runner.prepareForMotionControl();
   ASSERT_TRUE(runner.run());
-  actuator_writer.write(runner, data.get(), saturation_by_leg, true);
+  actuator_writer.write(runner, data.get(), true);
   for (const char * name : joint_names) {
     const int joint = mj_name2id(model.get(), mjOBJ_JOINT, name);
     EXPECT_NEAR(data->qfrc_applied[model->jnt_dofadr[joint]], 0.0, 1.0e-5);
   }
 
   for (int step_index = 0; step_index < 700; ++step_index) {
-    actuator_writer.write(runner, data.get(), saturation_by_leg, true);
+    actuator_writer.write(runner, data.get(), true);
     mj_step(model.get(), data.get());
     ASSERT_TRUE(runner.run());
   }
@@ -857,8 +796,8 @@ TEST(Dm1Sim2Sim, MotionControlStartsFromMeasuredJointPositionWithoutTorqueStep)
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & command = runner.jointCommands()[leg];
     EXPECT_TRUE(command.position_desired.isApprox(measured_joint_positions[leg], 1.0e-5F));
-    EXPECT_TRUE(command.kp.isApprox(Vec3<float>(1000.0F, 280.0F, 280.0F)));
-    EXPECT_TRUE(command.kd.isApprox(Vec3<float>(25.0F, 12.0F, 12.0F)));
+    EXPECT_TRUE(command.kp.isApprox(Vec3<float>(100.0F, 100.0F, 100.0F)));
+    EXPECT_TRUE(command.kd.isApprox(Vec3<float>(2.0F, 2.0F, 2.0F)));
   }
 
   ASSERT_EQ(runner.currentStateName(), FSM_StateName::JOINT_PD);

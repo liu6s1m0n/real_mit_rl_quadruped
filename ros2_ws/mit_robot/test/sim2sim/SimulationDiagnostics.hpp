@@ -1,9 +1,9 @@
 /**
  * @file SimulationDiagnostics.hpp
- * @brief 正式仿真运行时诊断：比较控制器估计和MuJoCo真值并监测小腿碰地。
+ * @brief sim2sim 回归诊断：比较控制器估计和 MuJoCo 真值并监测接触状态。
  *
- * 这些能力最初只用于端到端测试，现在同时供正式SimulationBridge和测试复用。
- * 诊断只读取仿真状态，不修改控制命令或物理状态。
+ * 该模块只属于回归测试，不进入正式 MuJoCo 可执行程序；诊断只读取仿真
+ * 状态，不修改控制命令或物理状态。
  */
 #ifndef MYMIT_ROBOT_USER_SIMULATION_DIAGNOSTICS_HPP_
 #define MYMIT_ROBOT_USER_SIMULATION_DIAGNOSTICS_HPP_
@@ -60,13 +60,7 @@ struct SimulationDiagnosticReport
   float actual_wz = 0.0F;                   ///< 当前 MuJoCo 机身系偏航速度，rad/s。
   // [0,1) s 为预热窗口；有效结论窗口为 [1,2)、[2,5)、[5,10) s。
   std::array<SimulationDirectionWindow, 4> direction_windows{};
-  float raw_action_max_abs = 0.0F;          ///< 策略原始动作的历史最大绝对值。
-  std::size_t raw_action_samples = 0;       ///< 已记录原始动作的策略帧数。
-  std::size_t raw_action_over_one = 0;      ///< 原始动作分量超过 +/-1 的次数。
-  std::size_t raw_action_components = 0;    ///< 原始动作分量总数。
   std::size_t target_joint_limit_hits = 0;  ///< 目标关节触及模型限位的次数。
-  std::size_t torque_speed_saturation_count = 0;  ///< 力矩-转速包络饱和次数。
-  std::array<std::size_t, kNumLegs> torque_speed_saturation_by_leg{};
   float maximum_foot_slip_speed = 0.0F;     ///< 接触地面时足端最大水平滑移速度。
   double foot_slip_speed_sum = 0.0;         ///< 接触地面时足端水平滑移速度累计值。
   std::size_t foot_contact_samples = 0;     ///< 足端接触样本数。
@@ -79,7 +73,6 @@ struct SimulationDiagnosticReport
   float rmsVelocityError() const noexcept;
   float calfContactRatio() const noexcept;
   float meanFootSlipSpeed() const noexcept;
-  float rawActionOverOneRatio() const noexcept;
   float netHorizontalDisplacement() const noexcept;
 };
 
@@ -92,9 +85,7 @@ public:
   void observe(
     const mjData * data, const StateEstimate<float> & estimate,
     bool control_valid, bool direction_active, const Vec3<float> & command_body,
-    const std::array<float, kRlActionSize> * raw_action = nullptr,
-    std::size_t target_joint_limit_hits = 0,
-    const std::array<std::size_t, kNumLegs> * torque_speed_saturation_by_leg = nullptr);
+    std::size_t target_joint_limit_hits = 0);
 
   Vec3<float> bodyPosition(const mjData * data) const;
   Vec3<float> bodyLinearVelocityWorld(const mjData * data) const;
@@ -124,5 +115,10 @@ private:
   bool active_start_initialized_ = false;
   SimulationDiagnosticReport report_{};       ///< 从 reset() 后累计到当前帧的诊断结果。
 };
+
+class RobotRunner;
+
+/** Counts test-observed target positions that are at a configured joint limit. */
+std::size_t countSimulationTargetJointLimitHits(const RobotRunner & runner);
 
 #endif  // MYMIT_ROBOT_USER_SIMULATION_DIAGNOSTICS_HPP_

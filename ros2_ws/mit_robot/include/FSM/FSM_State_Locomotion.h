@@ -46,22 +46,6 @@ public:
     return swing_active_[static_cast < std::size_t > (leg)];
   }
 
-  /** 最近一次 RL 策略原始输出，供仿真诊断读取，不参与控制。 */
-  const std::array<float, kRlActionSize> & rlLastRawAction() const noexcept
-  {
-    return rl_last_raw_action_;
-  }
-
-  bool hasRlRawAction() const noexcept {return rl_has_raw_action_;}
-
-  /** 最近一次策略周期的完整输入/输出快照，仅供 Sim2Sim 诊断。 */
-  const RlPolicyFrameTrace & rlLastFrameTrace() const noexcept
-  {
-    return rl_last_frame_trace_;
-  }
-
-  bool hasRlFrameTrace() const noexcept {return rl_has_frame_trace_;}
-
 private:
   //核心函数
   void LocomotionControlStep();
@@ -96,12 +80,7 @@ private:
   std::array<float, kRlObservationSize * kRlHistoryLength> rl_history_{};
   bool rl_history_initialized_ = false;
   std::array<float, kRlActionSize> rl_previous_action_{};
-  std::array<float, kRlActionSize> rl_last_raw_action_{};
-  bool rl_has_raw_action_ = false;
   std::array<float, kRlActionSize> rl_target_position_{};
-  RlPolicyFrameTrace rl_last_frame_trace_{};
-  bool rl_has_frame_trace_ = false;
-  std::uint64_t rl_frame_sequence_ = 0;
   bool rl_target_initialized_ = false;
   Vec3<T> rl_velocity_command_ = Vec3<T>::Zero();
   std::size_t rl_policy_counter_ = 0;

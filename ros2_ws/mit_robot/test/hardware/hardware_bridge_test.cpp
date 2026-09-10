@@ -20,22 +20,28 @@ public:
     ++read_count;
     sample.imu.orientation_world_from_body = Eigen::Quaternionf::Identity();
     sample.imu.angular_velocity_body.setZero();
-    sample.imu.acceleration_body << (tilted ? 3.0F : 0.0F), 0.0F, 9.34F;
+    sample.imu.acceleration_body <<
+      (tilted || read_count == transient_tilt_sample ? 3.0F : 0.0F), 0.0F, 9.34F;
     sample.imu.orientation_valid = true;
     sample.imu.acceleration_valid = true;
     sample.imu.valid = true;
+    sample.imu.sequence =
+      (repeat_sequence || (zeroed && repeat_after_zero)) ? 1U :
+      static_cast<std::uint64_t>(read_count);
     for (std::size_t index = 0; index < sample.motors.size(); ++index) {
       auto & motor = sample.motors[index];
       motor.bus = static_cast<std::uint8_t>(index / 6);
       motor.can_id = static_cast<std::uint16_t>(index % 6 + 1);
       motor.position = zeroed ? 0.0F : startup_offset;
-      motor.sequence = static_cast<std::uint64_t>(read_count);
+      motor.velocity = read_count == transient_sample ? transient_velocity : 0.0F;
+      motor.sequence =
+        (repeat_sequence || (zeroed && repeat_after_zero)) ? 1U :
+        static_cast<std::uint64_t>(read_count);
       motor.temperature_c = 25.0F;
       motor.rotor_temperature_c = 25.0F;
       motor.health_valid = true;
       motor.timestamp = now_s;
     }
-    if (read_count >= 3) {stop_requested_.store(true);}
     return true;
   }
 
@@ -80,6 +86,11 @@ public:
   bool zeroed = false;
   bool tilted = false;
   bool stop_after_enable = false;
+  int transient_sample = 0;
+  float transient_velocity = 0.0F;
+  int transient_tilt_sample = 0;
+  bool repeat_sequence = false;
+  bool repeat_after_zero = false;
   float startup_offset = 0.1F;
 
 private:
@@ -133,8 +144,8 @@ TEST(HardwareBridgeTest, SetZeroExplicitlyResetsAllMotorZeros)
   EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
   EXPECT_GE(hardware.disable_count, 2);
   EXPECT_EQ(hardware.close_count, 1);
-  EXPECT_EQ(hardware.read_count, 2);
-  EXPECT_EQ(hardware.poll_count, 2);
+  EXPECT_EQ(hardware.read_count, 4);
+  EXPECT_EQ(hardware.poll_count, 4);
 }
 
 TEST(HardwareBridgeTest, SmallOffsetEnablesWithoutWritingMotorZeros)
@@ -196,6 +207,71 @@ TEST(HardwareBridgeTest, SetZeroWritesEvenWhenOffsetIsSmall)
 
   EXPECT_EQ(bridge.run(stop_requested), 0);
   EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
+}
+
+TEST(HardwareBridgeTest, StartupRejectsMotionInMiddleOfStableWindow)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.transient_sample = 2;
+  hardware.transient_velocity = 0.2F;
+  HardwareBridge::Options options;
+  options.enable_output = true;
+  options.startup_stable_samples = 3;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 7);
+  EXPECT_EQ(hardware.read_count, 2);
+  EXPECT_EQ(hardware.enable_count, 0);
+  EXPECT_EQ(hardware.zero_count, 0);
+}
+
+TEST(HardwareBridgeTest, StartupRejectsTiltInMiddleOfStableWindow)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.transient_tilt_sample = 2;
+  HardwareBridge::Options options;
+  options.enable_output = true;
+  options.startup_stable_samples = 3;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 7);
+  EXPECT_EQ(hardware.read_count, 2);
+  EXPECT_EQ(hardware.enable_count, 0);
+}
+
+TEST(HardwareBridgeTest, StartupRejectsRepeatedFeedbackSnapshot)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.repeat_sequence = true;
+  HardwareBridge::Options options;
+  options.enable_output = true;
+  options.startup_stable_samples = 2;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 7);
+  EXPECT_GT(hardware.read_count, 1);
+  EXPECT_EQ(hardware.enable_count, 0);
+}
+
+TEST(HardwareBridgeTest, SetZeroRejectsStalePostWriteFeedback)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.01F;
+  hardware.repeat_after_zero = true;
+  HardwareBridge::Options options;
+  options.set_zero = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 7);
+  EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
+  EXPECT_GT(hardware.read_count, 3);
 }
 
 TEST(HardwareBridgeTest, LargeOffsetRejectsOutputStartup)

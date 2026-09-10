@@ -57,29 +57,29 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
   }
 }
 
-TEST(Dm1Contract, DirectJointPdProfilesRemainStageSpecific)
+TEST(Dm1Contract, DirectJointPdProfilesMatchRlTrainingGains)
 {
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
   EXPECT_TRUE(parameters.initialization_kp.isApprox(
-      Vec3<float>(28.0F, 36.0F, 36.0F)));
+      Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.initialization_kd.isApprox(
-      Vec3<float>(4.0F, 5.0F, 5.0F)));
+      Vec3<float>(2.0F, 2.0F, 2.0F)));
   EXPECT_TRUE(parameters.prone_home_joint_kp.isApprox(
-      Vec3<float>(1000.0F, 280.0F, 280.0F)));
+      Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.prone_home_joint_kd.isApprox(
-      Vec3<float>(25.0F, 12.0F, 12.0F)));
+      Vec3<float>(2.0F, 2.0F, 2.0F)));
   EXPECT_TRUE(parameters.balance_joint_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 40.0F)));
+      Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.balance_joint_kd.isApprox(
-      Vec3<float>(18.0F, 18.0F, 8.0F)));
+      Vec3<float>(2.0F, 2.0F, 2.0F)));
   EXPECT_TRUE(parameters.stand_up_joint_kp.isApprox(
-      Vec3<float>(35.0F, 70.0F, 80.0F)));
+      Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.stand_up_joint_kd.isApprox(
-      Vec3<float>(5.0F, 8.0F, 10.0F)));
+      Vec3<float>(2.0F, 2.0F, 2.0F)));
   EXPECT_TRUE(parameters.locomotion_joint_kp.isApprox(
-      Vec3<float>(50.0F, 42.0F, 42.0F)));
+      Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.locomotion_joint_kd.isApprox(
-      Vec3<float>(8.0F, 5.0F, 5.0F)));
+      Vec3<float>(2.0F, 2.0F, 2.0F)));
 }
 
 TEST(Dm1Contract, AnalyticKinematicsIsFiniteAtHome)

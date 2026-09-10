@@ -107,27 +107,6 @@ public:
   bool standingReady() const noexcept;
   /** RL 入场姿态是否已经连续满足高度、关节和姿态条件。 */
   bool rlEntryReady() const noexcept;
-  /** 最近一次 RL 原始动作，供仿真诊断读取，不参与控制。 */
-  const std::array<float, kRlActionSize> & rlLastRawAction() const noexcept
-  {
-    return control_fsm_->rlLastRawAction();
-  }
-  bool hasRlRawAction() const noexcept
-  {
-    return control_fsm_->hasRlRawAction();
-  }
-
-  /** 最近一次 RL 策略帧快照，仅供 Sim2Sim 对拍，不参与控制。 */
-  const RlPolicyFrameTrace & rlLastFrameTrace() const noexcept
-  {
-    return control_fsm_->rlLastFrameTrace();
-  }
-
-  bool hasRlFrameTrace() const noexcept
-  {
-    return control_fsm_->hasRlFrameTrace();
-  }
-
 private:
   /*保存四条腿传感器对象的所有权。*/
   using LegSensorOwners = std::array<std::unique_ptr<LegSensor>, kNumLegs>;

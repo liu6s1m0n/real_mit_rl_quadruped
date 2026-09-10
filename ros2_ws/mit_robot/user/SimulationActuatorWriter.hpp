@@ -1,6 +1,6 @@
 /**
  * @file SimulationActuatorWriter.hpp
- * @brief The single MuJoCo actuator write path used by the GUI and regression tests.
+ * @brief The MuJoCo actuator write path used by the GUI and sim2sim runner.
  */
 #ifndef MYMIT_ROBOT_USER_SIMULATION_ACTUATOR_WRITER_HPP_
 #define MYMIT_ROBOT_USER_SIMULATION_ACTUATOR_WRITER_HPP_
@@ -13,9 +13,6 @@
 #include "model/robot_types.hpp"
 
 class RobotRunner;
-
-/** Counts target positions that are at a configured DM1 joint limit. */
-std::size_t countSimulationTargetJointLimitHits(const RobotRunner & runner);
 
 /** Writes RobotRunner joint commands with the same actuator semantics everywhere. */
 class SimulationActuatorWriter
@@ -31,7 +28,6 @@ public:
    */
   void write(
     const RobotRunner & runner, mjData * data,
-    std::array<std::size_t, kNumLegs> & torque_speed_saturation_by_leg,
     bool motors_enabled = true) const;
 
 private:

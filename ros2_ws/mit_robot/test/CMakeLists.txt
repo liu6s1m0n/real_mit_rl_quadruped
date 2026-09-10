@@ -69,23 +69,22 @@ ament_add_gtest(
   sim2sim/dm1_direction_regression_test.cpp
   ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
   ${PROJECT_SOURCE_DIR}/user/SimulationActuatorWriter.cpp
-  ${PROJECT_SOURCE_DIR}/user/SimulationDiagnostics.cpp)
+  ${PROJECT_SOURCE_DIR}/test/sim2sim/SimulationDiagnostics.cpp)
 target_compile_definitions(test_dm1_sim2sim_direction PRIVATE
   MYMIT_ROBOT_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
 )
 target_include_directories(test_dm1_sim2sim_direction PRIVATE
   ${PROJECT_SOURCE_DIR}/user
+  ${PROJECT_SOURCE_DIR}/test/sim2sim
 )
 target_link_libraries(test_dm1_sim2sim_direction mymit_robot_model Eigen3::Eigen)
 target_link_libraries(test_dm1_sim2sim_direction mymit_robot_teleop)
 
 ament_add_gtest(test_hardware_bridge
   hardware/hardware_bridge_test.cpp
-  ${PROJECT_SOURCE_DIR}/src/hardware/hardware_bridge.cpp
-  ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
 )
 target_include_directories(test_hardware_bridge PRIVATE
   ${PROJECT_SOURCE_DIR}/include
   ${PROJECT_SOURCE_DIR}/user
 )
-target_link_libraries(test_hardware_bridge mymit_robot_model mymit_robot_teleop Eigen3::Eigen)
+target_link_libraries(test_hardware_bridge mymit_robot_hardware)

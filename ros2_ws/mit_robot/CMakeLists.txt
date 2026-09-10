@@ -119,7 +119,6 @@ install(DIRECTORY include/
   PATTERN "WBC/WBC_Ctrl/BodyPosTask.hpp" EXCLUDE
   PATTERN "WBC/WBC_Ctrl/BodyPostureTask.hpp" EXCLUDE
   PATTERN "WBC/WBC_Ctrl/BodyRyRzTask.hpp" EXCLUDE
-  PATTERN "WBC/WBC_Ctrl/FixedBodyContact.hpp" EXCLUDE
   PATTERN "WBC/WBC_Ctrl/SingleContact.hpp" EXCLUDE
 )
 
@@ -170,7 +169,6 @@ add_library(mymit_robot_model
   src/WBC/LocomotionCtrl/LocomotionCtrl.cpp
   src/WBC/WBC_Ctrl/BodyOriTask.cpp
   src/WBC/WBC_Ctrl/BodyPosTask.cpp
-  src/WBC/ContactSet/FixedBodyContact.cpp
   src/WBC/WBC_Ctrl/LinkPosTask.cpp
   src/WBC/ContactSet/SingleContact.cpp
   src/WBC/WBC_Ctrl/WBC_Ctrl.cpp
@@ -240,10 +238,12 @@ add_library(mymit_dmbot_serial
 )
 target_compile_features(mymit_dmbot_serial PUBLIC cxx_std_17)
 target_include_directories(mymit_dmbot_serial PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dmbot_serial/include
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dmbot_serial/include>
+  $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(mymit_dmbot_serial PUBLIC pthread)
 install(TARGETS mymit_dmbot_serial
+  EXPORT mymit_robot_model_targets
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
@@ -252,13 +252,42 @@ install(TARGETS mymit_dmbot_serial
 ament_export_targets(mymit_robot_model_targets HAS_LIBRARY_TARGET)
 ament_export_libraries(mymit_robot_model)
 
+# Formal DM1 hardware layer.  The concrete Dm1HardwareIo implementation and
+# the control bridge live in this target; tests inject only a small mock for
+# failure-path coverage instead of becoming the owner of the interface.
+add_library(mymit_robot_hardware
+  src/hardware/hardware_bridge.cpp
+  src/hardware/dm1_hardware_driver.cpp
+  src/hardware/dm_motor_driver.cpp
+  user/RobotRunner.cpp
+)
+target_compile_features(mymit_robot_hardware PUBLIC cxx_std_17)
+target_include_directories(mymit_robot_hardware PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/user>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dmbot_serial/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(mymit_robot_hardware PUBLIC
+  mymit_robot_model
+  mymit_robot_teleop
+  mymit_dmbot_serial
+  Eigen3::Eigen
+  pthread
+)
+install(TARGETS mymit_robot_hardware
+  EXPORT mymit_robot_model_targets
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
 # MuJoCo GUI application. main only starts SimulationBridge; RobotRunner owns
 # the complete estimator -> FSM -> MPC/WBC -> LegController control pipeline.
 add_executable(mymit_robot_user
   user/main.cpp
   user/RobotRunner.cpp
   user/SimulationActuatorWriter.cpp
-  user/SimulationDiagnostics.cpp
   user/SimulationBridge.cpp
 )
 target_compile_definitions(mymit_robot_user PRIVATE
@@ -310,10 +339,6 @@ target_link_libraries(mymit_robot_height_service
 # isolated in src/hardware and default to fail-closed until connected.
 add_executable(hardware_main
   src/hardware/hardware_main.cpp
-  src/hardware/hardware_bridge.cpp
-  src/hardware/dm1_hardware_driver.cpp
-  src/hardware/dm_motor_driver.cpp
-  user/RobotRunner.cpp
 )
 target_compile_features(hardware_main PRIVATE cxx_std_17)
 target_include_directories(hardware_main PRIVATE
@@ -324,11 +349,7 @@ target_include_directories(hardware_main BEFORE PRIVATE
   "${MYMIT_LOCAL_MUJOCO_INCLUDE}"
 )
 target_link_libraries(hardware_main
-  mymit_robot_model
-  mymit_robot_teleop
-  mymit_dmbot_serial
-  Eigen3::Eigen
-  pthread
+  mymit_robot_hardware
 )
 
 install(TARGETS mymit_robot_user mymit_robot_height_service hardware_main

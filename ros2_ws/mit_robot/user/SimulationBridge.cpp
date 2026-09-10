@@ -34,7 +34,6 @@
 #include <unistd.h>
 
 #include "RobotRunner.hpp"
-#include "SimulationDiagnostics.hpp"
 #include "StandingHeightIpc.hpp"
 #include "controller/frozen_dwaq_policy.hpp"
 #include "model/robot_control_parameters.hpp"
@@ -409,7 +408,6 @@ void runPhysics(
     RobotRunner runner(model, data, robot_type);
     // 只有 RL 模式会使用这个策略；MPC 模式仍走原有 Locomotion 路径。
     runner.setRlPolicy(rl_policy);
-    SimulationDiagnostics diagnostics(model);
     StandingHeightReceiver height_receiver;
     teleop::OperatorCommandArbiter arbiter;
 
@@ -433,7 +431,6 @@ void runPhysics(
     double previous_simulation_time = data->time;
     float previous_slider_height = standing_height.load();
     ControlMode walking_mode = initial_walking_mode;
-    Vec3<float> command_body = Vec3<float>::Zero();
     bool keyboard_fault_reported = false;
     const teleop::VelocityProfile velocity_profile{
       slow_walking_forward_speed, fast_walking_forward_speed,
@@ -455,7 +452,6 @@ void runPhysics(
         mj_resetDataKeyframe(model, data, home_keyframe);
         mj_forward(model, data);
         runner.reset();
-        diagnostics.reset();
         controller_ready = false;
         control_active = false;
         stand_up_pending = false;
@@ -566,12 +562,10 @@ void runPhysics(
         consecutive_failures = 0;
       }
       if (arbiter.takeStopRequest()) {
-        command_body.setZero();
         if (control_active) {
           runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
           if (runner.standingReady()) {runner.setControlMode(ControlMode::BalanceStand);}
         }
-        diagnostics.reset();
       }
       if (arbiter.takeStandUpRequest()) {
         if (!control_active) {
@@ -581,8 +575,6 @@ void runPhysics(
           consecutive_failures = 0;
         }
         stand_up_pending = true;
-        command_body.setZero();
-        diagnostics.reset();
       }
       if (arbiter.takeProneDownRequest()) {
         if (!control_active || !runner.requestProneDown()) {
@@ -592,13 +584,10 @@ void runPhysics(
           runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
           stand_up_pending = false;
           prone_down_reported = false;
-          command_body.setZero();
-          diagnostics.reset();
           std::printf(
             "Prone-down request accepted: MPC/WBC descent active (RL policy bypassed)\n");
         }
       }
-      command_body.setZero();
       if (arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive()) {
         if (!control_active || !runner.standingReady()) {
           std::printf("Motion ignored: press Stand up and wait for BalanceStand\n");
@@ -608,7 +597,6 @@ void runPhysics(
           }
         } else {
           const auto velocity = teleop::velocityForMotion(arbiter.motion(), velocity_profile);
-          command_body << velocity.forward, velocity.lateral, velocity.yaw;
           runner.setLocomotionVelocityCommand(
             velocity.forward, velocity.lateral, velocity.yaw);
           runner.setControlMode(walking_mode);
@@ -647,70 +635,14 @@ void runPhysics(
             stderr, "RobotRunner has rejected %zu consecutive control frames\n",
             consecutive_failures);
         }
-        const std::size_t target_joint_limit_hits = control_active ?
-          countSimulationTargetJointLimitHits(runner) : 0;
-        const bool direction_active =
-          arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive() &&
-          runner.currentStateName() == FSM_StateName::LOCOMOTION;
-        const std::array<float, kRlActionSize> * raw_action =
-          walking_mode == ControlMode::WalkRl && direction_active &&
-          runner.hasRlRawAction() ? &runner.rlLastRawAction() : nullptr;
-        std::array<std::size_t, kNumLegs> torque_speed_saturation_by_leg{};
         actuator_writer.write(
-          runner, data, torque_speed_saturation_by_leg,
+          runner, data,
           arbiter.state() == teleop::MotorOutputState::Enabled && control_active);
-        diagnostics.observe(
-          data, runner.stateEstimate(), control_valid, direction_active, command_body,
-          raw_action,
-          target_joint_limit_hits, &torque_speed_saturation_by_leg);
-        const auto & diagnostic_report = diagnostics.report();
-        if (diagnostic_report.observed_frames != 0 &&
-          diagnostic_report.observed_frames % 500 == 0)
-        {
-          const auto mean_1_2 = diagnostic_report.direction_windows[1].meanActual();
-          const auto mean_2_5 = diagnostic_report.direction_windows[2].meanActual();
-          const auto mean_5_10 = diagnostic_report.direction_windows[3].meanActual();
-          // 按当前模型物理频率每秒输出一次正式运行诊断。这里只报告，
-          // 不改变控制状态。
-          std::printf(
-            "Runtime diagnostics: pos_rms=%.4f m, vel_rms=%.4f m/s, "
-            "pitch_max=%.3f rad, height_min=%.3f m, calf_contacts=%zu, "
-            "rejected=%zu, cmd=(%.3f,%.3f,%.3f), actual_body=(%.3f,%.3f,%.3f), "
-            "mean_body_1_2=(%.3f,%.3f,%.3f), mean_body_2_5=(%.3f,%.3f,%.3f), "
-            "mean_body_5_10=(%.3f,%.3f,%.3f), "
-            "raw_max=%.3f, raw_over1_ratio=%.3f, joint_limits=%zu, "
-            "torque_speed_sat=%zu, foot_slip_mean=%.3f, fall_time=%.3f, "
-            "net_body=(%.3f,%.3f), contact_transitions=(%zu,%zu,%zu,%zu)\n",
-            diagnostic_report.rmsPositionError(),
-            diagnostic_report.rmsVelocityError(),
-            diagnostic_report.maximum_absolute_pitch,
-            diagnostic_report.minimum_height,
-            diagnostic_report.calf_collision_frames,
-            diagnostic_report.rejected_control_frames,
-            diagnostic_report.command_vx, diagnostic_report.command_vy,
-            diagnostic_report.command_wz, diagnostic_report.actual_vx,
-            diagnostic_report.actual_vy, diagnostic_report.actual_wz,
-            mean_1_2[0], mean_1_2[1], mean_1_2[2],
-            mean_2_5[0], mean_2_5[1], mean_2_5[2],
-            mean_5_10[0], mean_5_10[1], mean_5_10[2],
-            diagnostic_report.raw_action_max_abs,
-            diagnostic_report.rawActionOverOneRatio(),
-            diagnostic_report.target_joint_limit_hits,
-            diagnostic_report.torque_speed_saturation_count,
-            diagnostic_report.meanFootSlipSpeed(), diagnostic_report.fall_time_s,
-            diagnostic_report.net_displacement_body_x,
-            diagnostic_report.net_displacement_body_y,
-            diagnostic_report.foot_contact_by_leg[0].contact_transitions,
-            diagnostic_report.foot_contact_by_leg[1].contact_transitions,
-            diagnostic_report.foot_contact_by_leg[2].contact_transitions,
-            diagnostic_report.foot_contact_by_leg[3].contact_transitions);
-        }
         // 当前命令已写入启用的关节，随后推进一个 MuJoCo 动力学时间步。
         mj_step(model, data);
       } else {
         // 暂停时只刷新运动学量，不推进时间，也不运行控制器。
-        std::array<std::size_t, kNumLegs> ignored_saturation{};
-        actuator_writer.write(runner, data, ignored_saturation, false);
+        actuator_writer.write(runner, data, false);
         mj_forward(model, data);
       }
       // 必须先释放共享锁再等待，否则 RenderLoop 会被物理线程一起阻塞。

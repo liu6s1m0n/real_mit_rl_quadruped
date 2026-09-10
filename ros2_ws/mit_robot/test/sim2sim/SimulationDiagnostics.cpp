@@ -7,6 +7,8 @@
 
 #include <Eigen/Geometry>
 
+#include "RobotRunner.hpp"
+
 namespace
 {
 constexpr std::array<const char *, kNumLegs> kLegNames{"FR", "FL", "RR", "RL"};
@@ -27,6 +29,28 @@ float vectorNorm3(const mjtNum (&value)[6]) noexcept
   return static_cast<float>(std::sqrt(
     value[0] * value[0] + value[1] * value[1] + value[2] * value[2]));
 }
+}
+
+std::size_t countSimulationTargetJointLimitHits(const RobotRunner & runner)
+{
+  constexpr float kLimitTolerance = 1.0e-4F;
+  std::size_t count = 0;
+  const auto & commands = runner.jointCommands();
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & joints = runner.quadruped().leg(static_cast<LegId>(leg)).joints;
+    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+      const auto index = static_cast<Eigen::Index>(joint);
+      const float target = commands[leg].position_desired(index);
+      if (std::abs(target - static_cast<float>(joints.lower_limit(index))) <=
+        kLimitTolerance ||
+        std::abs(target - static_cast<float>(joints.upper_limit(index))) <=
+        kLimitTolerance)
+      {
+        ++count;
+      }
+    }
+  }
+  return count;
 }
 
 std::array<float, 3> SimulationDirectionWindow::meanCommand() const noexcept
@@ -74,13 +98,6 @@ float SimulationDiagnosticReport::meanFootSlipSpeed() const noexcept
 {
   return foot_contact_samples == 0 ? 0.0F : static_cast<float>(
     foot_slip_speed_sum / static_cast<double>(foot_contact_samples));
-}
-
-float SimulationDiagnosticReport::rawActionOverOneRatio() const noexcept
-{
-  return raw_action_components == 0 ? 0.0F : static_cast<float>(
-    static_cast<double>(raw_action_over_one) /
-    static_cast<double>(raw_action_components));
 }
 
 float SimulationDiagnosticReport::netHorizontalDisplacement() const noexcept
@@ -206,9 +223,7 @@ bool SimulationDiagnostics::hasCalfCollision(const mjData * data) const
 void SimulationDiagnostics::observe(
   const mjData * data, const StateEstimate<float> & estimate,
   bool control_valid, bool direction_active, const Vec3<float> & command_body,
-  const std::array<float, kRlActionSize> * raw_action,
-  std::size_t target_joint_limit_hits,
-  const std::array<std::size_t, kNumLegs> * torque_speed_saturation_by_leg)
+  std::size_t target_joint_limit_hits)
 {
   if (!estimate.valid) {
     ++report_.rejected_control_frames;
@@ -275,23 +290,7 @@ void SimulationDiagnostics::observe(
     direction.actual_sum[2] += actual_body_angular_velocity.z();
     ++direction.samples;
   }
-  if (raw_action != nullptr) {
-    ++report_.raw_action_samples;
-    for (const float value : *raw_action) {
-      report_.raw_action_max_abs = std::max(report_.raw_action_max_abs, std::abs(value));
-      ++report_.raw_action_components;
-      report_.raw_action_over_one += std::abs(value) > 1.0F ? 1U : 0U;
-    }
-  }
   report_.target_joint_limit_hits += target_joint_limit_hits;
-  if (torque_speed_saturation_by_leg != nullptr) {
-    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-      report_.torque_speed_saturation_by_leg[leg] +=
-        (*torque_speed_saturation_by_leg)[leg];
-      report_.torque_speed_saturation_count +=
-        (*torque_speed_saturation_by_leg)[leg];
-    }
-  }
 
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     bool foot_contact = false;

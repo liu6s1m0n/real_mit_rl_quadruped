@@ -24,12 +24,8 @@ kActuatorNames{{
 }};
 
 double clampActuatorForce(
-  const mjModel * model, const mjData * data, int actuator, int dof, double force,
-  bool * saturated)
+  const mjModel * model, int actuator, double force)
 {
-  (void)data;
-  (void)dof;
-  if (saturated != nullptr) {*saturated = false;}
   if (model->actuator_forcelimited[actuator] == 0) {return force;}
   const double minimum = model->actuator_forcerange[2 * actuator];
   const double maximum = model->actuator_forcerange[2 * actuator + 1];
@@ -38,34 +34,9 @@ double clampActuatorForce(
   // second linear speed derating here could drive the available torque to zero
   // during a normal swing, which presents as one step followed by a pause and
   // is not part of the controller/training contract.
-  if (saturated != nullptr && std::abs(force) > symmetric_limit + 1.0e-6) {
-    *saturated = true;
-  }
   return std::clamp(force, -symmetric_limit, symmetric_limit);
 }
 }  // namespace
-
-std::size_t countSimulationTargetJointLimitHits(const RobotRunner & runner)
-{
-  constexpr float kLimitTolerance = 1.0e-4F;
-  std::size_t count = 0;
-  const auto & commands = runner.jointCommands();
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    const auto & joints = runner.quadruped().leg(static_cast<LegId>(leg)).joints;
-    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-      const auto index = static_cast<Eigen::Index>(joint);
-      const float target = commands[leg].position_desired(index);
-      if (std::abs(target - static_cast<float>(joints.lower_limit(index))) <=
-        kLimitTolerance ||
-        std::abs(target - static_cast<float>(joints.upper_limit(index))) <=
-        kLimitTolerance)
-      {
-        ++count;
-      }
-    }
-  }
-  return count;
-}
 
 SimulationActuatorWriter::SimulationActuatorWriter(const mjModel * model)
 : model_(model)
@@ -89,12 +60,10 @@ SimulationActuatorWriter::SimulationActuatorWriter(const mjModel * model)
 
 void SimulationActuatorWriter::write(
   const RobotRunner & runner, mjData * data,
-  std::array<std::size_t, kNumLegs> & torque_speed_saturation_by_leg,
   bool motors_enabled) const
 {
   if (data == nullptr) {throw std::invalid_argument("MuJoCo data is null");}
   mju_zero(data->qfrc_applied, model_->nv);
-  torque_speed_saturation_by_leg.fill(0);
   const auto & commands = runner.jointCommands();
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & command = commands[leg];
@@ -109,10 +78,8 @@ void SimulationActuatorWriter::write(
       const double torque = command.torque_feedforward[index] +
         command.kp[index] * (command.position_desired[index] - data->qpos[address.qpos]) +
         command.kd[index] * (command.velocity_desired[index] - data->qvel[address.dof]);
-      bool saturated = false;
       data->qfrc_applied[address.dof] = clampActuatorForce(
-        model_, data, address.actuator, address.dof, torque, &saturated);
-      if (saturated) {++torque_speed_saturation_by_leg[leg];}
+        model_, address.actuator, torque);
     }
   }
 }
