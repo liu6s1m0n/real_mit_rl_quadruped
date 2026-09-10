@@ -92,6 +92,7 @@ private:
   RobotType robot_type_;    ///< 与场景匹配的控制器参数型号。
   std::atomic<float> standing_height_{0.39F};  ///< GUI/ROS 传给物理线程的目标机身高度，m。
   std::atomic<int> pending_motion_command_{-1};  ///< GUI 发出的待消费的一次性运动按钮命令。
+  std::atomic_bool pending_disable_command_{false};  ///< 不可被其他 GUI 命令覆盖的失能锁存。
   float slow_walking_forward_speed_ = 0.18F;  ///< 低速前进档速度，m/s。
   float fast_walking_forward_speed_ = 0.36F;  ///< 快速前进档速度，m/s。
   float walking_backward_speed_ = 0.30F;      ///< 后退档速度绝对值，m/s。

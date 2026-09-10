@@ -126,8 +126,8 @@ private:
   DVec<T> gravity_;              ///< 广义重力项。
   DVec<T> coriolis_;             ///< 广义科氏/离心项。
   Result result_;                ///< 最近一次 run() 的结果。
-  Vec3<T> kp_joint_ = Vec3<T>::Constant(T(5));   ///< 输出关节位置 PD 比例增益。
-  Vec3<T> kd_joint_ = Vec3<T>::Constant(T(1.5)); ///< 输出关节速度 PD 微分增益。
+  Vec3<T> kp_joint_ = Vec3<T>::Constant(T(100)); ///< RL/MIT 关节位置 PD 比例增益。
+  Vec3<T> kd_joint_ = Vec3<T>::Constant(T(2));   ///< RL/MIT 关节速度 PD 微分增益。
   T floating_base_weight_ = T(0.1);   ///< 浮动基修正项在 WBIC 代价中的权重。
   T reaction_force_weight_ = T(1);     ///< 接触反力修正项在 WBIC 代价中的权重。
   std::size_t iteration_ = 0;          ///< 已执行的 WBC 周期数。

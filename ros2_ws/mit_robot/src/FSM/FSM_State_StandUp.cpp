@@ -162,6 +162,9 @@ FSM_StateName FSM_State_StandUp<T>::checkTransition()
       case ControlMode::StairsRl:
         this->nextStateName = FSM_StateName::LOCOMOTION;
         break;
+      case ControlMode::ProneDown:
+        this->nextStateName = FSM_StateName::LIE_DOWN;
+        break;
       case ControlMode::RecoveryStand:
         this->nextStateName = FSM_StateName::RECOVERY_STAND;
         break;
@@ -177,8 +180,6 @@ TransitionData<T> FSM_State_StandUp<T>::transition()
   if (this->nextStateName == FSM_StateName::PASSIVE) {
     this->_data->leg_controller->zeroCommand();
     this->_data->leg_controller->setEnabled(false);
-  } else {
-    run();
   }
   this->transitionData.done = this->nextStateName != FSM_StateName::STAND_UP;
   return this->transitionData;

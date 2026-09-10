@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include "HardwareBridge.hpp"
+#include "hardware/hardware_bridge.hpp"
 
 namespace
 {
@@ -47,15 +47,26 @@ public:
   }
 
   bool sendMit(const dm1_hardware::MitFrame &) override {return true;}
-  bool pollMotors() override {++poll_count; return true;}
+  bool pollMotors() override
+  {
+    ++poll_count;
+    ++action_sequence;
+    if (first_poll_sequence == 0) {first_poll_sequence = action_sequence;}
+    return true;
+  }
   bool enableAll() override
   {
     ++enable_count;
     if (stop_after_enable) {stop_requested_.store(true);}
     return true;
   }
-  void disableAll() noexcept override {++disable_count;}
-  void close() noexcept override {++close_count; ++disable_count;}
+  void disableAll() noexcept override
+  {
+    ++disable_count;
+    ++action_sequence;
+    if (first_disable_sequence == 0) {first_disable_sequence = action_sequence;}
+  }
+  void close() noexcept override {++close_count; disableAll();}
 
   int read_count = 0;
   int zero_count = 0;
@@ -63,6 +74,9 @@ public:
   int close_count = 0;
   int poll_count = 0;
   int enable_count = 0;
+  int action_sequence = 0;
+  int first_disable_sequence = 0;
+  int first_poll_sequence = 0;
   bool zeroed = false;
   bool tilted = false;
   bool stop_after_enable = false;
@@ -100,6 +114,8 @@ TEST(HardwareBridgeTest, ReadOnlyStartupDoesNotResetMotorZeros)
   EXPECT_GE(hardware.disable_count, 1);
   EXPECT_EQ(hardware.close_count, 1);
   EXPECT_EQ(hardware.poll_count, 1);
+  ASSERT_GT(hardware.first_poll_sequence, 0);
+  EXPECT_LT(hardware.first_disable_sequence, hardware.first_poll_sequence);
 }
 
 TEST(HardwareBridgeTest, SetZeroExplicitlyResetsAllMotorZeros)
@@ -136,7 +152,7 @@ TEST(HardwareBridgeTest, SmallOffsetEnablesWithoutWritingMotorZeros)
   EXPECT_EQ(hardware.enable_count, 1);
 }
 
-TEST(HardwareBridgeTest, MediumOffsetIsResetBeforeOutputIsEnabled)
+TEST(HardwareBridgeTest, OffsetWithinWindowEnablesWithoutWritingMotorZeros)
 {
   std::atomic_bool stop_requested{false};
   StartupZeroHardware hardware(stop_requested);
@@ -147,8 +163,39 @@ TEST(HardwareBridgeTest, MediumOffsetIsResetBeforeOutputIsEnabled)
   HardwareBridge bridge(hardware, calibration(), options);
 
   EXPECT_EQ(bridge.run(stop_requested), 0);
-  EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
+  EXPECT_EQ(hardware.zero_count, 0);
   EXPECT_EQ(hardware.enable_count, 1);
+}
+
+TEST(HardwareBridgeTest, InvalidInitialMitCommandNeverEnablesMotors)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 13.0F;
+  hardware.stop_after_enable = true;
+  auto invalid_calibration = calibration();
+  for (auto & item : invalid_calibration) {
+    item.zero_position = 13.0F;
+  }
+  HardwareBridge::Options options;
+  options.enable_output = true;
+  HardwareBridge bridge(hardware, invalid_calibration, options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 8);
+  EXPECT_EQ(hardware.enable_count, 0);
+}
+
+TEST(HardwareBridgeTest, SetZeroWritesEvenWhenOffsetIsSmall)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.01F;
+  HardwareBridge::Options options;
+  options.set_zero = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 0);
+  EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
 }
 
 TEST(HardwareBridgeTest, LargeOffsetRejectsOutputStartup)

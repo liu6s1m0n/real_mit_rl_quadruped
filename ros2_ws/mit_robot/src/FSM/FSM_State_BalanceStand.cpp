@@ -59,6 +59,11 @@ void FSM_State_BalanceStand<T>::onEnter()
   // 切换瞬间的 roll/pitch 锁存为目标，否则已有倾斜会被 WBC 永久维持。
   initial_body_rpy_ << T(0), T(0), this->_data->state_estimate->rpy.z();
   body_weight_ = this->_data->control_parameters->standing_supported_mass * T(9.81);
+  posture_ramp_iteration_ = 0;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    entry_foot_positions_[leg] = this->_data->leg_controller->datas[leg].p;
+    entry_joint_positions_[leg] = this->_data->leg_controller->datas[leg].q;
+  }
 }
 
 template<typename T>
@@ -85,6 +90,10 @@ FSM_StateName FSM_State_BalanceStand<T>::checkTransition()
       this->nextStateName = FSM_StateName::LOCOMOTION;
       this->transitionDuration = T(0);
       this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
+      break;
+    case ControlMode::ProneDown:
+      this->nextStateName = FSM_StateName::LIE_DOWN;
+      this->transitionDuration = T(0);
       break;
     case ControlMode::Passive:
       this->nextStateName = FSM_StateName::PASSIVE;
@@ -163,7 +172,9 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
 
   // 静态站立时先把体重平均分配给四只脚，WBIC 会在动力学约束下修正它。
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    wbc_data_.pFoot_des[leg].setZero();
+    // 足端目标必须从入场时的实测腿坐标开始；清零会把目标瞬间移到髋部，
+    // 在状态切换帧给 WBC 施加不必要的腿部冲击。
+    wbc_data_.pFoot_des[leg] = entry_foot_positions_[leg];
     wbc_data_.vFoot_des[leg].setZero();
     wbc_data_.aFoot_des[leg].setZero();
     wbc_data_.Fr_des[leg] = Vec3<T>(T(0), T(0), body_weight_ / T(4));
@@ -205,13 +216,26 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
             leg * kJointsPerLeg + joint]);
       }
     }
-    command.position_desired = home;
+    // During prone stand-up, the prepare pose is the support pose captured by
+    // StandUp.  Blending it toward the nominal home pose while the body is
+    // still rising makes the null-space PD retract the legs and unload the
+    // contacts.  Keep that pose until the body has completed the height ramp.
+    // For ordinary BalanceStand entries, retain the normal home-pose nullspace
+    // target.
+    const T posture_alpha = this->_data->control_parameters->start_in_prone_home ?
+      std::clamp(static_cast<T>(posture_ramp_iteration_) / T(2000), T(0), T(1)) :
+      T(1);
+    const T smooth_alpha = posture_alpha * posture_alpha *
+      (T(3) - T(2) * posture_alpha);
+    command.position_desired = entry_joint_positions_[leg] +
+      smooth_alpha * (home - entry_joint_positions_[leg]);
     command.position_desired = command.position_desired.cwiseMax(
       leg_model.joints.lower_limit).cwiseMin(leg_model.joints.upper_limit);
     command.velocity_desired.setZero();
     command.kp_joint = this->_data->control_parameters->balance_joint_kp;
     command.kd_joint = this->_data->control_parameters->balance_joint_kd;
   }
+  ++posture_ramp_iteration_;
 }
 
 template class FSM_State_BalanceStand<float>;

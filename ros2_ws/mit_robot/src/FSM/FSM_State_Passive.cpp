@@ -46,6 +46,9 @@ FSM_StateName FSM_State_Passive<T>::checkTransition()
     case ControlMode::StairsRl:
       this->nextStateName = FSM_StateName::LOCOMOTION;
       break;
+    case ControlMode::ProneDown:
+      this->nextStateName = FSM_StateName::LIE_DOWN;
+      break;
     case ControlMode::StandUp:
       this->nextStateName = FSM_StateName::STAND_UP;
       break;

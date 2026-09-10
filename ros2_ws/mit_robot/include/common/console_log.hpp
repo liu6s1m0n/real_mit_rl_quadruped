@@ -1,9 +1,9 @@
-/*! @file imu_log.hpp
- *  @brief IMU 日志颜色与非终端输出处理。
+/*! @file console_log.hpp
+ *  @brief 工程统一的终端/非终端日志输出。
  */
 
-#ifndef MYMIT_ROBOT_SENSOR_IMU_LOG_HPP_
-#define MYMIT_ROBOT_SENSOR_IMU_LOG_HPP_
+#ifndef MYMIT_ROBOT_COMMON_CONSOLE_LOG_HPP_
+#define MYMIT_ROBOT_COMMON_CONSOLE_LOG_HPP_
 
 #include <cstdarg>
 #include <cstdio>
@@ -11,7 +11,7 @@
 
 #include <unistd.h>
 
-namespace imu_log
+namespace robot_log
 {
 
 enum class Level
@@ -57,6 +57,11 @@ inline void print(Level level, const char * format, ...) noexcept
   std::fflush(stderr);
 }
 
-}  // namespace imu_log
+}  // namespace robot_log
 
-#endif  // MYMIT_ROBOT_SENSOR_IMU_LOG_HPP_
+// Temporary source compatibility for the existing hardware/IMU call sites.
+// New code should use robot_log directly; this alias can be removed after
+// downstream users have migrated.
+namespace imu_log = robot_log;
+
+#endif  // MYMIT_ROBOT_COMMON_CONSOLE_LOG_HPP_

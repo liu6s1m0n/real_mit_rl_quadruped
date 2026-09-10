@@ -8,6 +8,7 @@
 # 6: WALK_CLASSIC（经典 MPC/WBC 行走）
 # 7: WALK_RL（平地强化学习行走）
 # 8: STAIRS_RL（楼梯强化学习行走；需要冻结策略白名单）
+# 9: PRONE_DOWN（使用 MPC/WBC 从站立平滑降到趴卧；不使用 RL）
 uint8 mode
 
 # 是否允许绕过常规状态转换检查

@@ -113,8 +113,8 @@ void FSM_State_RecoveryStand<T>::setJointPositionInterpolated(
   command.force_feedforward.setZero();
   command.kp_cartesian.setZero();
   command.kd_cartesian.setZero();
-  command.kp_joint.setConstant(T(20));
-  command.kd_joint.setConstant(T(2));
+  command.kp_joint = this->_data->control_parameters->stand_up_joint_kp;
+  command.kd_joint = this->_data->control_parameters->stand_up_joint_kd;
 }
 
 template<typename T>
@@ -232,6 +232,9 @@ FSM_StateName FSM_State_RecoveryStand<T>::checkTransition()
     case ControlMode::WalkRl:
     case ControlMode::StairsRl:
       this->nextStateName = FSM_StateName::LOCOMOTION;
+      break;
+    case ControlMode::ProneDown:
+      this->nextStateName = FSM_StateName::LIE_DOWN;
       break;
     case ControlMode::StandUp:
       this->nextStateName = FSM_StateName::STAND_UP;

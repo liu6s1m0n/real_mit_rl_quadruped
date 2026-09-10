@@ -62,8 +62,8 @@ void FSM_State_Locomotion<T>::onEnter()
     目标位置；约束和缓存。*/
   mpc_->initialize();
   resetSwingTrajectories();
-  mpc_->setGait(GaitType::TROT);
   active_mode_ = this->_data->desired_state->mode;
+  mpc_->setGait(GaitType::TROT);
   rl_history_.fill(0.0F);
   rl_history_initialized_ = false;
   rl_previous_action_.fill(0.0F);
@@ -128,6 +128,10 @@ FSM_StateName FSM_State_Locomotion<T>::checkTransition()
         this->nextStateName = FSM_StateName::BALANCE_STAND;
         this->transitionDuration = T(0);
       }
+      break;
+    case ControlMode::ProneDown:
+      this->nextStateName = FSM_StateName::LIE_DOWN;
+      this->transitionDuration = T(0);
       break;
     case ControlMode::BalanceStand:
       this->nextStateName = FSM_StateName::BALANCE_STAND;

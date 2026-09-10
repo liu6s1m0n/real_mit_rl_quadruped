@@ -32,14 +32,14 @@
  *******************************************************************************/
 
 //
-// Created by qiayuan on 3/3/21.
+// 创建者：qiayuan，创建时间：2021 年 3 月 3 日。
 //
 
 #pragma once
 
 #include <linux/can.h>
 #include <net/if.h>
-// Multi-threading
+// 多线程支持
 #include <pthread.h>
 #include <atomic>
 #include <cstdint>
@@ -57,31 +57,36 @@ public:
     SocketCAN(const SocketCAN &) = delete;
     SocketCAN & operator = (const SocketCAN &) = delete;
 
-    /** \brief Open and bind socket.
+    /** \brief 打开并绑定套接字。
      *
-     * \param interface bus's name(example: can0).
-     * \param handler Pointer to a function which shall be called when frames are being received from the CAN bus.
+     * \param interface 总线名称（例如：can0）。
+     * \param handler 从 CAN 总线接收到数据帧时调用的回调函数。
+     * \param thread_priority 接收线程的实时优先级；小于等于 0 表示不设置实时优先级。
      *
-     * \returns \c true if it successfully open and bind socket.
+     * \returns 如果套接字成功打开并绑定，则返回 \c true。
      */
     bool open(
       const std::string & interface,
       std::function < void(const canfd_frame & frame) > handler,
       int thread_priority);
-    /** \brief Close and unbind socket.
+    /** \brief 关闭并解除绑定套接字。
      *
      */
     void close();
-    /** \brief Returns whether the socket is open or closed.
+    /** \brief 返回套接字当前是否处于打开状态。
      *
-     * \returns \c True if socket has opened.
+     * \returns 如果套接字已打开，则返回 \c true。
      */
     bool isOpen() const;
-    /** \brief Sends the referenced frame to the bus.
+    /** \brief 将指定的数据帧发送到总线。
      *
-     * \param frame referenced frame which you want to send.
+     * \param frame 指向待发送数据帧的指针。
      */
     bool write(const can_frame * frame) const;
+    /** \brief 将 CAN FD 数据帧发送到总线。
+     *
+     * \param frame 指向待发送 CAN FD 数据帧的指针。
+     */
     bool write2(const canfd_frame * frame) const;
 
 private:

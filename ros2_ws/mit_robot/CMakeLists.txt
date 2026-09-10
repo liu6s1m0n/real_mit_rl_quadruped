@@ -159,6 +159,7 @@ add_library(mymit_robot_model
   src/QuadProg++.cc
   src/FSM/ControlFSM.cpp
   src/FSM/FSM_State_BalanceStand.cpp
+  src/FSM/FSM_State_LieDown.cpp
   src/FSM/FSM_State_Locomotion.cpp
   src/FSM/FSM_State_Passive.cpp
   src/FSM/FSM_State_RecoveryStand.cpp
@@ -211,6 +212,26 @@ install(TARGETS mymit_robot_model
   RUNTIME DESTINATION bin
 )
 
+# Terminal input and the shared motor-output arbiter are kept separate from
+# the mathematical model library so POSIX TTY/thread code does not leak into
+# model-only consumers and tests.
+add_library(mymit_robot_teleop
+  src/teleop/operator_command.cpp
+  src/teleop/keyboard_teleop.cpp
+)
+target_compile_features(mymit_robot_teleop PUBLIC cxx_std_17)
+target_include_directories(mymit_robot_teleop PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(mymit_robot_teleop PUBLIC pthread)
+install(TARGETS mymit_robot_teleop
+  EXPORT mymit_robot_model_targets
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
 # The DM protocol is compiled as a small internal, ROS-independent library.
 # The legacy ROS 1 legged_damiao_hw package is intentionally not part of this
 # target or its dependency graph.
@@ -255,6 +276,7 @@ target_include_directories(mymit_robot_user SYSTEM PRIVATE
 )
 target_link_libraries(mymit_robot_user
   mymit_robot_model
+  mymit_robot_teleop
   Eigen3::Eigen
   /usr/local/lib/libmujoco.so
   /usr/local/lib/libsimulate.a
@@ -285,11 +307,11 @@ target_link_libraries(mymit_robot_height_service
 )
 
 # DM1 real-hardware executable. The vendor CAN/IMU calls are intentionally
-# isolated in Dm1HardwareDriver.cpp and default to fail-closed until connected.
+# isolated in src/hardware and default to fail-closed until connected.
 add_executable(hardware_main
-  user/hardware_main.cpp
-  user/HardwareBridge.cpp
-  user/Dm1HardwareDriver.cpp
+  src/hardware/hardware_main.cpp
+  src/hardware/hardware_bridge.cpp
+  src/hardware/dm1_hardware_driver.cpp
   src/hardware/dm_motor_driver.cpp
   user/RobotRunner.cpp
 )
@@ -303,6 +325,7 @@ target_include_directories(hardware_main BEFORE PRIVATE
 )
 target_link_libraries(hardware_main
   mymit_robot_model
+  mymit_robot_teleop
   mymit_dmbot_serial
   Eigen3::Eigen
   pthread
@@ -310,6 +333,9 @@ target_link_libraries(hardware_main
 
 install(TARGETS mymit_robot_user mymit_robot_height_service hardware_main
   RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+install(DIRECTORY docs/
+  DESTINATION share/${PROJECT_NAME}/docs
 )
 
 if(BUILD_TESTING)
@@ -345,19 +371,18 @@ if(BUILD_TESTING)
     Middlewares/dmbot_serial/include/dmbot_serial/protocol/socketcan.h
     Middlewares/dmbot_serial/include/dmbot_serial/protocol/terminal_colors.h
     Middlewares/dmbot_serial/src/protocol/socketcan.cpp
+    include/common
     include/hardware
     include/model/robot_types.hpp
+    include/teleop
     include/sensor
     src/controller/OrientationEstimator.cpp
     src/controller/PositionVelocityEstimator.cpp
     src/hardware
     src/sensor
+    src/teleop
+    test/teleop
     test/hardware
-    user/Dm1HardwareDriver.cpp
-    user/Dm1HardwareDriver.hpp
-    user/HardwareBridge.cpp
-    user/HardwareBridge.hpp
-    user/hardware_main.cpp
   )
   ament_xmllint(
     src/dm1_description/dm1/dm1.xml

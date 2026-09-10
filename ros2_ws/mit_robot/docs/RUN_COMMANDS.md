@@ -32,7 +32,9 @@ source install/setup.bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
 ```
 
-默认启动 MPC/WBC 控制链。仿真窗口打开后，先点击 `Stand up`，再点击方向按钮。
+默认启动 MPC/WBC 控制链。仿真窗口打开后默认电机上锁；先按键盘 `Shift+U`（或点击
+`Enable motors`），再按 `1`/点击 `Stand up`，最后按方向键或使用方向按钮。方向命令会
+锁存，按 `Space` 或点击 `Stop` 显式停止。
 
 ### 启动 RL 仿真
 
@@ -59,6 +61,31 @@ ros2 launch mymit_robot dm1_control.launch.py walk_mode:=rl
 ```bash
 ros2 launch mymit_robot dm1_display.launch.py
 ```
+
+### 仿真键盘控制
+
+程序从可交互终端启动时启用终端输入；非 TTY 启动时仿真继续运行，但终端输入不可用，
+MuJoCo GUI 仍可独立控制。方向键和 GUI 方向按钮都是锁存选择，不依赖系统按键重复；
+按 `Space` 或点击 `Stop` 回到 `BalanceStand`，按 `Esc` 上锁并退出仿真。
+
+| 按键 | 功能 |
+|---|---|
+| `Shift+U` | 电机解锁/使能 |
+| `0` | 电机上锁/失能，最高优先级 |
+| `1` | 请求站起；行走中回到 BalanceStand |
+| `2` | 请求趴卧；由 MPC/WBC 下降并用 Joint-PD 收腿保持，RL 不参与 |
+| `W` / `S` | 前进 / 后退 |
+| `A` / `D` | 左移 / 右移 |
+| `Q` / `E` | 逆时针 / 顺时针原地旋转 |
+| `Space` | 停止运动并回到 BalanceStand，不失能 |
+| `H` | 打印帮助 |
+| `Esc` | 上锁并退出 |
+
+在 RL 仿真中也使用同一个 `2` 趴卧命令；它会从 RL 行走状态直接切换到独立的
+`LIE_DOWN` 状态，下降阶段复用现有 MPC/WBC，完成后进入安全的 `JointPd` 保持。
+
+MuJoCo Reset 后会重新上锁；上锁时仍执行 `mj_step()`，机器人会在重力和接触动力学
+作用下自然下落，不会暂停物理仿真。
 
 ## 3. 单独启动 IMU
 
@@ -170,12 +197,28 @@ ros2 run mymit_robot hardware_main \
 
 启动零位策略：
 
-- 偏差 `<0.02 rad`：不写零，直接使能；
-- 偏差 `[0.02, 0.05) rad`：写入全部 12 个零位，复核成功后使能；
-- 偏差 `>=0.05 rad`：报初始位置错误，拒绝使能。
+- 偏差 `<0.05 rad`（或 `--zero-tolerance` 指定的窗口）：允许继续，不写零；
+- 偏差 `>=` 接受窗口：报初始位置错误，拒绝使能；
+- 任何写零操作都必须显式使用 `--set-zero`。
 
 只有完整连接 12 个电机、机器人固定在安全支架上、急停可用时，才允许使用
 `--enable-output`。单电机测试不要使用这个命令。
+
+### 键盘控制完整硬件模式
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --keyboard-control
+```
+
+该模式启动后始终上锁，且绝不会自动写电机零位。只有在悬空安全支架、急停可用、
+机器人静止、水平、12 个电机反馈完整且所有关节位于已配置零位窗口时，才按 `Shift+U`
+解锁。解锁失败会失能并退出；`0` 立即失能，`Esc` 失能后退出。键盘控制与
+`--enable-output`、`--stand-up`、`--set-zero`、`--imu-only`、`--motor-only` 互斥。
+
+实机推荐顺序：先用 `--motor-only --poll-feedback` 确认反馈，再用只读完整模式确认 IMU
+和姿态，最后在物理急停旁执行键盘模式。软件上锁不能替代物理急停。
 
 可选：使能后请求站起：
 
@@ -205,9 +248,10 @@ ros2 run mymit_robot hardware_main \
 | `--imu-only` | 是 | 否 | 否 | 否 | 否 |
 | `--motor-only --poll-feedback ...` | 否 | 是 | 否 | 否 | 否，可监听单个电机 |
 | 完整模式 | 是 | 是 | 否 | 否 | 是 |
-| 完整模式 `--enable-output` | 是 | 是 | 是 | 视零位偏差而定 | 是 |
+| 完整模式 `--enable-output` | 是 | 是 | 是 | 否 | 是 |
 | 完整模式 `--set-zero` | 是 | 是 | 否 | 是 | 是 |
-| MuJoCo 仿真 | 否 | 否 | 否 | 否 | 否 |
+| 完整模式 `--keyboard-control` | 是 | 是 | 按键控制 | 否 | 是 |
+| MuJoCo 仿真 | 否 | 否 | 按键/GUI 控制 | 否 | 否 |
 
 退出任何硬件程序都应使用 `Ctrl+C`。硬件测试前确认没有另一个程序占用 IMU 串口或
 CAN 接口。

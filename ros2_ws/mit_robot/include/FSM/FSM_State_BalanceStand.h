@@ -7,6 +7,7 @@
 #ifndef MYMIT_ROBOT_FSM_STATE_BALANCE_STAND_H_
 #define MYMIT_ROBOT_FSM_STATE_BALANCE_STAND_H_
 
+#include <array>
 #include <memory>
 
 #include "FSM/FSM_State.h"
@@ -49,6 +50,9 @@ private:
   Vec3 < T > initial_body_rpy_ = Vec3 < T > ::Zero();
   T last_height_command_ = T(0);
   T body_weight_ = T(0);
+  std::array<Vec3<T>, kNumLegs> entry_foot_positions_{};
+  std::array<Vec3<T>, kNumLegs> entry_joint_positions_{};
+  std::size_t posture_ramp_iteration_ = 0;
 };
 
 extern template class FSM_State_BalanceStand < float >;

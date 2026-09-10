@@ -31,7 +31,8 @@ public:
    */
   void write(
     const RobotRunner & runner, mjData * data,
-    std::array<std::size_t, kNumLegs> & torque_speed_saturation_by_leg) const;
+    std::array<std::size_t, kNumLegs> & torque_speed_saturation_by_leg,
+    bool motors_enabled = true) const;
 
 private:
   struct JointAddress

@@ -32,7 +32,7 @@
  *******************************************************************************/
 
 //
-// Created by qiayuan on 3/3/21.
+// 创建者：qiayuan，创建时间：2021 年 3 月 3 日。
 //
 #include "dmbot_serial/protocol/socketcan.h"
 #include "dmbot_serial/protocol/terminal_colors.h"
@@ -50,7 +50,7 @@
 
 namespace damiao
 {
-/* ref:
+/* 参考资料：
  * https://github.com/JCube001/socketcan-demo
  * http://blog.mbedded.ninja/programming/operating-systems/linux/how-to-use-socketcan-with-c-in-linux
  * https://github.com/linux-can/can-utils/blob/master/candump.c
@@ -85,7 +85,7 @@ bool SocketCAN::open(
   reception_handler_ = std::move(handler);
   sock_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
   if (sock_fd_ == -1) {
-    //ROS_ERROR("Error: Unable to create a CAN socket");
+    // 创建 CAN 套接字失败。
     std::cerr << terminalColor(TerminalColor::Red, stderr) <<
       "[ERROR] Error: Unable to create a CAN socket" << terminalColorReset(stderr) << std::endl;
     return false;
@@ -104,23 +104,23 @@ bool SocketCAN::open(
   }
   interface_request_ = {};
   std::strncpy(interface_request_.ifr_name, interface.c_str(), IFNAMSIZ - 1);
-  // Get the index of the network interface
+  // 获取网络接口的索引。
   if (ioctl(sock_fd_, SIOCGIFINDEX, &interface_request_) == -1) {
-    //ROS_ERROR("Unable to select CAN interface %s: I/O control error", name);
+    // 查询 CAN 网络接口索引失败。
     std::cerr << terminalColor(TerminalColor::Red, stderr) <<
       "[ERROR] Unable to select CAN interface " << interface << ": I/O control error" <<
       terminalColorReset(stderr) << std::endl;
-    // Invalidate unusable socket
+    // 关闭并使不可用的套接字失效。
     ::close(sock_fd_);
     sock_fd_ = -1;
     return false;
   }
-  // Bind the socket to the network interface
-  address_.can_family = AF_CAN;// 指定协议族
-  address_.can_ifindex = interface_request_.ifr_ifindex; // 设备索引
+  // 将套接字绑定到指定的网络接口。
+  address_.can_family = AF_CAN;  // 指定协议族。
+  address_.can_ifindex = interface_request_.ifr_ifindex;  // 指定设备索引。
   int rc = bind(sock_fd_, reinterpret_cast<struct sockaddr *>(&address_), sizeof(address_));
   if (rc == -1) {
-    //ROS_ERROR("Failed to bind socket to %s network interface", name);
+    // 将套接字绑定到 CAN 网络接口失败。
     std::cerr << terminalColor(TerminalColor::Red, stderr) <<
       "[ERROR] Failed to bind socket to " << interface << " network interface" <<
       terminalColorReset(stderr) << std::endl;
@@ -128,7 +128,7 @@ bool SocketCAN::open(
     sock_fd_ = -1;
     return false;
   }
-  // Start a separate, event-driven thread for frame reception
+  // 启动独立的事件驱动线程，用于接收数据帧。
   if (startReceiverThread(thread_priority)) {return true;}
   ::close(sock_fd_);
   sock_fd_ = -1;
@@ -157,13 +157,13 @@ bool SocketCAN::isOpen() const
 bool SocketCAN::write(const can_frame * frame) const
 {
   if (!isOpen()) {
-    //ROS_ERROR_THROTTLE(5., "Unable to write: Socket %s not open", interface_request_.ifr_name);
+    // 套接字未打开，无法发送 CAN 数据帧。
     logThrottledError();
     return false;
   }
   const ssize_t written = ::write(sock_fd_, frame, sizeof(can_frame));
   if (written != static_cast<ssize_t>(sizeof(can_frame))) {
-    //ROS_DEBUG_THROTTLE(5., "Unable to write: The %s tx buffer may be full", interface_request_.ifr_name);
+    // 数据帧未完整写入，发送缓冲区可能已满。
     logThrottledError();
     return false;
   }
@@ -173,13 +173,13 @@ bool SocketCAN::write(const can_frame * frame) const
 bool SocketCAN::write2(const canfd_frame * frame) const
 {
   if (!isOpen()) {
-    //ROS_ERROR_THROTTLE(5., "Unable to write: Socket %s not open", interface_request_.ifr_name);
+    // 套接字未打开，无法发送 CAN FD 数据帧。
     logThrottledError();
     return false;
   }
   const ssize_t written = ::write(sock_fd_, frame, sizeof(canfd_frame));
   if (written != static_cast<ssize_t>(sizeof(canfd_frame))) {
-    //ROS_DEBUG_THROTTLE(5., "Unable to write: The %s tx buffer may be full", interface_request_.ifr_name);
+    // 数据帧未完整写入，发送缓冲区可能已满。
     logThrottledError();
     return false;
   }
@@ -222,13 +222,13 @@ bool SocketCAN::startReceiverThread(int thread_priority)
   terminate_receiver_thread_.store(false);
   const int rc = pthread_create(&receiver_thread_id_, nullptr, &SocketCAN::receiverThread, this);
   if (rc != 0) {
-    //ROS_ERROR("Unable to start receiver thread");
+    // 创建接收线程失败。
     std::cerr << terminalColor(TerminalColor::Red, stderr) <<
       "[ERROR] Unable to start receiver thread" << terminalColorReset(stderr) << std::endl;
     return false;
   }
   receiver_thread_started_ = true;
-  //ROS_INFO("Successfully started receiver thread with ID %lu", receiver_thread_id_);
+  // 接收线程已成功启动。
   std::cout << terminalColor(TerminalColor::White, stdout) <<
     "[INFO] Successfully started receiver thread with ID " << receiver_thread_id_ <<
     terminalColorReset(stdout) << std::endl;

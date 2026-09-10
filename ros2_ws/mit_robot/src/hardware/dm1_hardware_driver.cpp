@@ -1,11 +1,11 @@
-#include "Dm1HardwareDriver.hpp"
+#include "hardware/dm1_hardware_driver.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <thread>
 #include <utility>
 
-#include "sensor/imu_log.hpp"
+#include "common/console_log.hpp"
 
 Dm1HardwareDriver::Dm1HardwareDriver(
   std::string can0, std::string can1, std::string imu_device,
@@ -32,6 +32,9 @@ bool Dm1HardwareDriver::open()
     opened_ = false;
     return false;
   }
+  // SocketCAN open does not clear a drive's previous enable state. Disable
+  // every motor before the first feedback poll performed during startup.
+  motor_driver_.disableAll();
   // MIT feedback is returned in response to an MIT frame.  Poll all twelve
   // motors while they remain disabled; waiting on the receive thread alone
   // would always time out on a cold start.

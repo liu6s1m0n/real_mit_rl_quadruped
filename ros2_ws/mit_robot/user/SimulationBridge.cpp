@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include <glfw_adapter.h>
 #include <mujoco/mujoco.h>
@@ -37,11 +38,59 @@
 #include "StandingHeightIpc.hpp"
 #include "controller/frozen_dwaq_policy.hpp"
 #include "model/robot_control_parameters.hpp"
+#include "teleop/keyboard_teleop.hpp"
+#include "teleop/operator_command.hpp"
 
 namespace mj = ::mujoco;
 
 namespace
 {
+
+/**
+ * @brief Feed MuJoCo window key events into the same command queue as TTY keys.
+ *
+ * The previous implementation only read stdin. Once the MuJoCo window had
+ * focus, W/A/S/D and the enable/stand keys never reached the controller.
+ */
+class TeleopGlfwAdapter final : public mj::GlfwAdapter
+{
+public:
+  explicit TeleopGlfwAdapter(teleop::KeyboardTeleop * keyboard)
+  : keyboard_(keyboard) {}
+
+protected:
+  void OnKey(int key, int scancode, int action) override
+  {
+    mj::GlfwAdapter::OnKey(key, scancode, action);
+    (void)scancode;
+    // GUI motion is latched. A repeat event must not act as a hidden
+    // heartbeat; Space is the explicit stop command.
+    if (keyboard_ == nullptr || action != GLFW_PRESS) {
+      return;
+    }
+    int decoded = 0;
+    switch (key) {
+      case GLFW_KEY_U: decoded = 'U'; break;
+      case GLFW_KEY_0: decoded = '0'; break;
+      case GLFW_KEY_1: decoded = '1'; break;
+      case GLFW_KEY_2: decoded = '2'; break;
+      case GLFW_KEY_W: decoded = 'W'; break;
+      case GLFW_KEY_S: decoded = 'S'; break;
+      case GLFW_KEY_A: decoded = 'A'; break;
+      case GLFW_KEY_D: decoded = 'D'; break;
+      case GLFW_KEY_Q: decoded = 'Q'; break;
+      case GLFW_KEY_E: decoded = 'E'; break;
+      case GLFW_KEY_H: decoded = 'H'; break;
+      case GLFW_KEY_SPACE: decoded = ' '; break;
+      case GLFW_KEY_ESCAPE: decoded = 27; break;
+      default: break;
+    }
+    if (decoded != 0) {keyboard_->injectKey(decoded);}
+  }
+
+private:
+  teleop::KeyboardTeleop * keyboard_ = nullptr;
+};
 
 /** MuJoCo UI 添加函数的原始函数指针类型。 */
 using MjuiAddFunction = void (*)(mjUI *, const mjuiDef *);
@@ -52,6 +101,7 @@ using MjuiEventFunction = mjuiItem * (*)(mjUI *, mjuiState *, const mjrContext *
 // C 风格的 MuJoCo 回调通过它们访问主对象中的共享状态。
 double * g_standing_height_slider = nullptr;
 std::atomic<int> * g_pending_motion_command = nullptr;
+std::atomic_bool * g_pending_disable_command = nullptr;
 
 enum MotionCommand : int
 {
@@ -64,15 +114,20 @@ enum MotionCommand : int
   kRight = 5,
   kRotate = 6,
   kSelectMpc = 7,
-  kSelectRl = 8
+  kSelectRl = 8,
+  kEnableMotors = 9,
+  kDisableMotors = 10,
+  kStop = 11,
+  kProneDown = 12
 };
 
 int commandForButton(const char * name)
 {
   if (name == nullptr) {return kNoMotionCommand;}
-  constexpr std::array<const char *, 9> names{
+  constexpr std::array<const char *, 13> names{
     "Stand up", "Forward slow", "Forward fast", "Backward",
-    "Left", "Right", "Rotate CCW", "Use MPC", "Use RL"};
+    "Left", "Right", "Rotate CCW", "Use MPC", "Use RL",
+    "Enable motors", "Disable motors", "Stop", "Prone down"};
   for (std::size_t index = 0; index < names.size(); ++index) {
     if (std::strcmp(name, names[index]) == 0) {
       return static_cast<int>(index);
@@ -133,8 +188,10 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
 
   // 如果回调发生在共享指针尚未初始化或已经清空之后，只显示原生 UI。
   if (g_standing_height_slider == nullptr || g_pending_motion_command == nullptr ||
+    g_pending_disable_command == nullptr ||
     definition == nullptr ||
     definition[0].type != mjITEM_SECTION ||
+    definition[0].name == nullptr ||
     std::strcmp(definition[0].name, "Simulation") != 0)
   {
     return;
@@ -156,6 +213,10 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
     {mjITEM_BUTTON, "Use MPC", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Use RL", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Stand up", 2, nullptr, "", 0},
+    {mjITEM_BUTTON, "Enable motors", 2, nullptr, "", 0},
+    {mjITEM_BUTTON, "Disable motors", 2, nullptr, "", 0},
+    {mjITEM_BUTTON, "Stop", 2, nullptr, "", 0},
+    {mjITEM_BUTTON, "Prone down", 2, nullptr, "", 0},
     {mjITEM_END, "", 0, nullptr, "", 0}
   };
   add(ui, height_controls);
@@ -165,8 +226,8 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
  * @brief 包装 MuJoCo UI 事件，并转发一次性动作请求。
  *
  * MuJoCo 原函数负责处理鼠标点击和控件状态。本函数只检查返回的控件，
- * 通过 atomic 命令通知物理线程；物理线程用 exchange(kNoMotionCommand)
- * 消费一次性请求。
+ * 通过 atomic 命令通知物理线程；普通按钮用 exchange(kNoMotionCommand)
+ * 消费一次性请求，失能按钮另有不可覆盖的锁存位。
  */
 extern "C" mjuiItem * mjui_event(
   mjUI * ui, mjuiState * state, const mjrContext * context)
@@ -179,10 +240,12 @@ extern "C" mjuiItem * mjui_event(
   // 先执行原生事件处理，再分析发生变化的控件。
   mjuiItem * changed = event(ui, state, context);
   if (changed != nullptr && changed->type == mjITEM_BUTTON &&
-    g_pending_motion_command != nullptr)
+    g_pending_motion_command != nullptr && g_pending_disable_command != nullptr)
   {
     const int command = commandForButton(changed->name);
-    if (command != kNoMotionCommand) {
+    if (command == kDisableMotors) {
+      g_pending_disable_command->store(true);
+    } else if (command != kNoMotionCommand) {
       g_pending_motion_command->store(command);
     }
   }
@@ -312,7 +375,9 @@ float synchronizeStandingHeight(
 void runPhysics(
   mj::Simulate & simulation, const std::string & scene_path, RobotType robot_type,
   std::atomic<float> & standing_height, double & standing_height_slider,
-  std::atomic<int> & pending_motion_command, float slow_walking_forward_speed,
+  std::atomic<int> & pending_motion_command, std::atomic_bool & pending_disable_command,
+  teleop::KeyboardTeleop & keyboard,
+  float slow_walking_forward_speed,
   float fast_walking_forward_speed, float walking_backward_speed,
   float walking_lateral_speed, float turning_yaw_rate,
   ControlMode initial_walking_mode, const RlPolicyPtr & rl_policy,
@@ -346,6 +411,7 @@ void runPhysics(
     runner.setRlPolicy(rl_policy);
     SimulationDiagnostics diagnostics(model);
     StandingHeightReceiver height_receiver;
+    teleop::OperatorCommandArbiter arbiter;
 
     // 将模型和数据交给 MuJoCo 的渲染器，使窗口能够显示当前物理状态。
     simulation.Load(model, data, scene_path.c_str());
@@ -360,12 +426,18 @@ void runPhysics(
       initial_walking_mode == ControlMode::WalkRl ? "RL model_4210" : "MPC");
 
     bool controller_ready = false;
+    bool control_active = false;
+    bool stand_up_pending = false;
+    bool prone_down_reported = false;
     std::size_t consecutive_failures = 0;
     double previous_simulation_time = data->time;
     float previous_slider_height = standing_height.load();
-    int previous_direction = -1;
     ControlMode walking_mode = initial_walking_mode;
     Vec3<float> command_body = Vec3<float>::Zero();
+    bool keyboard_fault_reported = false;
+    const teleop::VelocityProfile velocity_profile{
+      slow_walking_forward_speed, fast_walking_forward_speed,
+      walking_backward_speed, walking_lateral_speed, turning_yaw_rate};
     // 物理仿真按模型 timestep 与墙钟同步。Release 构建通常会提前完成控制计算，
     // 剩余时间专门留给 GLFW 渲染线程，避免物理线程无限抢占共享锁。
     using PhysicsClock = std::chrono::steady_clock;
@@ -385,10 +457,13 @@ void runPhysics(
         runner.reset();
         diagnostics.reset();
         controller_ready = false;
+        control_active = false;
+        stand_up_pending = false;
+        prone_down_reported = false;
         consecutive_failures = 0;
-        previous_direction = -1;
+        arbiter.lock();
         std::printf(
-          "MuJoCo reset detected: robot and controller restored to home posture\n");
+          "MuJoCo reset detected: robot/controller restored to home posture; motors locked\n");
       }
       previous_simulation_time = data->time;
       // 高度命令有两条来源：MuJoCo 滑块和 ROS/Unix socket。
@@ -399,13 +474,17 @@ void runPhysics(
         commanded_height, runner.minimumStandingHeight(), runner.maximumStandingHeight());
       standing_height.store(commanded_height);
       standing_height_slider = commanded_height;
-      // 方向控件是一次性按钮：点击后锁存该速度档，直到再次点击另一个
-      // 方向或 Stand up。这样不会因为复选框状态同步产生“幽灵”运动命令。
-      int requested_direction = previous_direction;
+      const bool pending_disable = simulation_running ?
+        pending_disable_command.exchange(false) : false;
       const int pending_command = simulation_running ?
         pending_motion_command.exchange(kNoMotionCommand) : kNoMotionCommand;
+      std::vector<teleop::OperatorCommand> gui_commands;
+      if (pending_disable) {
+        gui_commands.push_back(
+          teleop::OperatorCommand{teleop::CommandType::DisableMotors});
+      }
       if (pending_command == kSelectMpc || pending_command == kSelectRl) {
-        if (previous_direction < 0) {
+        if (!arbiter.motionActive()) {
           walking_mode = pending_command == kSelectRl ?
             ControlMode::WalkRl : ControlMode::Locomotion;
           std::printf(
@@ -417,83 +496,147 @@ void runPhysics(
             "Controller selection ignored while walking; press Stand up first\n");
         }
       }
-      if (pending_command == kStand) {
-        requested_direction = -1;
+      if (pending_command == kEnableMotors) {
+        gui_commands.push_back(
+          teleop::OperatorCommand{teleop::CommandType::EnableMotors});
+      } else if (pending_command == kDisableMotors) {
+        gui_commands.push_back(
+          teleop::OperatorCommand{teleop::CommandType::DisableMotors});
+      } else if (pending_command == kStand) {
+        gui_commands.push_back(
+          teleop::OperatorCommand{teleop::CommandType::StandUp});
+      } else if (pending_command == kProneDown) {
+        gui_commands.push_back(
+          teleop::OperatorCommand{teleop::CommandType::ProneDown});
       } else if (pending_command > kStand && pending_command < kSelectMpc) {
-        // MotionCommand 的编号与下面的 switch 共用同一组枚举值；不能再
-        // 减一，否则按钮会整体错位（Left 变成 Backward 等）。
-        requested_direction = pending_command;
+        teleop::OperatorCommand command;
+        command.type = teleop::CommandType::Motion;
+        command.received_at = std::chrono::steady_clock::now();
+        command.watchdog = false;
+        switch (pending_command) {
+          case kForwardSlow: command.motion = teleop::Motion::Forward; break;
+          case kForwardFast: command.motion = teleop::Motion::ForwardFast; break;
+          case kBackward: command.motion = teleop::Motion::Backward; break;
+          case kLeft: command.motion = teleop::Motion::Left; break;
+          case kRight: command.motion = teleop::Motion::Right; break;
+          case kRotate: command.motion = teleop::Motion::RotateCounterClockwise; break;
+          default: command.type = teleop::CommandType::Stop; break;
+        }
+        gui_commands.push_back(command);
+      } else if (pending_command == kStop) {
+        gui_commands.push_back(
+          teleop::OperatorCommand{teleop::CommandType::Stop});
+      }
+      const auto window_commands = keyboard.consumeWindow();
+      gui_commands.insert(gui_commands.end(), window_commands.begin(), window_commands.end());
+      const auto terminal_commands = keyboard.consume();
+      gui_commands.insert(gui_commands.end(), terminal_commands.begin(), terminal_commands.end());
+      arbiter.applyBatch(gui_commands);
+      if (keyboard.available() && !keyboard.healthy() && !keyboard_fault_reported) {
+        keyboard_fault_reported = true;
+        // stdin is optional in the GUI. Keep the GUI arbiter state intact so
+        // an EOF/HUP in the terminal cannot disable window control.
+        std::fprintf(
+          stderr,
+          "keyboard input stopped; terminal control is unavailable, GUI control remains active\n");
+      }
+      arbiter.expireMotion(std::chrono::steady_clock::now());
+      if (arbiter.takeHelpRequest()) {
+        std::printf(
+          "Keys: U enable, 0 disable, 1 stand, 2 prone down, W/S forward/back, A/D left/right, "
+          "Q/E rotate, Space stop, Esc exit, H help\n");
+      }
+      if (arbiter.quitRequested()) {
+        simulation.exitrequest.store(1);
+        lock.unlock();
+        break;
       }
 
-      // 只有方向发生变化时才向 RobotRunner 重发命令，避免每帧重复切换状态机。
-      if (requested_direction != previous_direction) {
-        if (requested_direction >= 0 && !runner.standingReady()) {
-          requested_direction = -1;
-          std::printf("Motion ignored: press Stand up and wait for BalanceStand\n");
-        }
+      const bool enable_requested = simulation_running && arbiter.takeEnableRequest();
+      if (enable_requested) {
+        // Simulation unlock is only a software gate transition. In particular,
+        // it must not run RobotRunner or reconnect any cached PD command.
+        arbiter.markEnabled();
+        std::printf("Simulation motors unlocked; control remains idle until Stand up\n");
+      }
+      if (arbiter.state() != teleop::MotorOutputState::Enabled) {
+        control_active = false;
+        stand_up_pending = false;
+        controller_ready = false;
+        consecutive_failures = 0;
+      }
+      if (arbiter.takeStopRequest()) {
         command_body.setZero();
-        const char * direction_name = "Stand";
-        switch (requested_direction) {
-          case kForwardSlow:
-            command_body.x() = slow_walking_forward_speed;
-            direction_name = "Forward slow";
-            break;
-          case kForwardFast:
-            command_body.x() = fast_walking_forward_speed;
-            direction_name = "Forward fast";
-            break;
-          case kBackward:
-            command_body.x() = -walking_backward_speed;
-            direction_name = "Backward";
-            break;
-          case kLeft:
-            command_body.y() = walking_lateral_speed;
-            direction_name = "Left";
-            break;
-          case kRight:
-            command_body.y() = -walking_lateral_speed;
-            direction_name = "Right";
-            break;
-          case kRotate:
-            command_body.z() = turning_yaw_rate;
-            direction_name = "Rotate CCW";
-            break;
-          default:
-            break;
+        if (control_active) {
+          runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+          if (runner.standingReady()) {runner.setControlMode(ControlMode::BalanceStand);}
         }
-        // 将 UI 方向转换成控制器使用的机身速度命令。
-        runner.setLocomotionVelocityCommand(
-          command_body.x(), command_body.y(), command_body.z());
-        runner.setControlMode(
-          requested_direction < 0 ?
-          ControlMode::BalanceStand : walking_mode);
-        // 每次切换方向重新开始一段统计，方便直接观察该命令下的估计误差、
-        // 俯仰和小腿碰地情况，而不是被上一方向的累计峰值污染。
         diagnostics.reset();
-        std::printf("Robot direction set to %s\n", direction_name);
-        previous_direction = requested_direction;
+      }
+      if (arbiter.takeStandUpRequest()) {
+        if (!control_active) {
+          runner.prepareForMotionControl();
+          control_active = true;
+          controller_ready = false;
+          consecutive_failures = 0;
+        }
+        stand_up_pending = true;
+        command_body.setZero();
+        diagnostics.reset();
+      }
+      if (arbiter.takeProneDownRequest()) {
+        if (!control_active || !runner.requestProneDown()) {
+          std::printf("Prone down ignored: press Stand up and wait for BalanceStand\n");
+        } else {
+          arbiter.stopMotion();
+          runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+          stand_up_pending = false;
+          prone_down_reported = false;
+          command_body.setZero();
+          diagnostics.reset();
+          std::printf(
+            "Prone-down request accepted: MPC/WBC descent active (RL policy bypassed)\n");
+        }
+      }
+      command_body.setZero();
+      if (arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive()) {
+        if (!control_active || !runner.standingReady()) {
+          std::printf("Motion ignored: press Stand up and wait for BalanceStand\n");
+          arbiter.stopMotion();
+          if (control_active) {
+            runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+          }
+        } else {
+          const auto velocity = teleop::velocityForMotion(arbiter.motion(), velocity_profile);
+          command_body << velocity.forward, velocity.lateral, velocity.yaw;
+          runner.setLocomotionVelocityCommand(
+            velocity.forward, velocity.lateral, velocity.yaw);
+          runner.setControlMode(walking_mode);
+        }
       }
       if (simulation_running) {
-        // exchange(false) 具有“读取并清零”的原子语义，避免按钮请求重复执行。
-        if (pending_command == kStand) {
-          if (runner.requestStandUp()) {
-            previous_direction = -1;
-            diagnostics.reset();
-            std::printf("Stand-up request accepted\n");
-          } else {
-            std::printf("Stand up ignored: initialization incomplete or robot already standing\n");
-          }
-        }
         // 控制计算使用当前传感器状态，随后写力矩，最后推进一个物理时间步。
         // BalanceStand/MPC follows the external height command. RL walking has
         // one owner for its training posture: RobotRunner starts the 0.39 ->
         // 0.38 m transition and keeps that target after entry, so the GUI
         // height slider cannot overwrite the RL contract every frame.
-        if (!(walking_mode == ControlMode::WalkRl && requested_direction > kStand)) {
+        if (control_active &&
+          !(walking_mode == ControlMode::WalkRl && arbiter.motionActive())) {
           runner.setStandingHeight(commanded_height);
         }
-        const bool control_valid = runner.run();
-        if (control_valid) {
+        const bool control_valid = !control_active || runner.run();
+        if (control_active && control_valid && stand_up_pending &&
+          runner.requestStandUp())
+        {
+          stand_up_pending = false;
+          prone_down_reported = false;
+          std::printf("Stand-up request accepted\n");
+        }
+        if (control_active && runner.proneDownComplete() && !prone_down_reported) {
+          prone_down_reported = true;
+          std::printf("Prone-down complete: MPC/WBC descent finished; prone hold active\n");
+        }
+        if (control_active && control_valid) {
           consecutive_failures = 0;
           if (!controller_ready) {
             controller_ready = true;
@@ -504,16 +647,18 @@ void runPhysics(
             stderr, "RobotRunner has rejected %zu consecutive control frames\n",
             consecutive_failures);
         }
-        const std::size_t target_joint_limit_hits =
-          countSimulationTargetJointLimitHits(runner);
+        const std::size_t target_joint_limit_hits = control_active ?
+          countSimulationTargetJointLimitHits(runner) : 0;
         const bool direction_active =
-          requested_direction > kStand && requested_direction < kSelectMpc &&
+          arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive() &&
           runner.currentStateName() == FSM_StateName::LOCOMOTION;
         const std::array<float, kRlActionSize> * raw_action =
           walking_mode == ControlMode::WalkRl && direction_active &&
           runner.hasRlRawAction() ? &runner.rlLastRawAction() : nullptr;
         std::array<std::size_t, kNumLegs> torque_speed_saturation_by_leg{};
-        actuator_writer.write(runner, data, torque_speed_saturation_by_leg);
+        actuator_writer.write(
+          runner, data, torque_speed_saturation_by_leg,
+          arbiter.state() == teleop::MotorOutputState::Enabled && control_active);
         diagnostics.observe(
           data, runner.stateEstimate(), control_valid, direction_active, command_body,
           raw_action,
@@ -564,6 +709,8 @@ void runPhysics(
         mj_step(model, data);
       } else {
         // 暂停时只刷新运动学量，不推进时间，也不运行控制器。
+        std::array<std::size_t, kNumLegs> ignored_saturation{};
+        actuator_writer.write(runner, data, ignored_saturation, false);
         mj_forward(model, data);
       }
       // 必须先释放共享锁再等待，否则 RenderLoop 会被物理线程一起阻塞。
@@ -705,7 +852,9 @@ int SimulationBridge::run()
   mjvPerturb perturbation;
   mjv_defaultPerturb(&perturbation);
   // GlfwAdapter 负责创建 GLFW/OpenGL 窗口，Simulate 负责后续渲染和 UI。
-  auto glfw_adapter = std::make_unique<mj::GlfwAdapter>();
+  teleop::KeyboardTeleop keyboard;
+  keyboard.start();
+  auto glfw_adapter = std::make_unique<TeleopGlfwAdapter>(&keyboard);
   const auto * gl_vendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
   const auto * gl_renderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
   std::printf(
@@ -727,6 +876,7 @@ int SimulationBridge::run()
   // UI 回调没有 this 指针，因此在 RenderLoop 期间把成员地址注册到文件内全局指针。
   g_standing_height_slider = &standing_height_slider_;
   g_pending_motion_command = &pending_motion_command_;
+  g_pending_disable_command = &pending_disable_command_;
   auto simulation = std::make_unique<mj::Simulate>(
     std::move(glfw_adapter), &camera, &options, &perturbation, false);
   simulation->run = true;
@@ -736,7 +886,9 @@ int SimulationBridge::run()
   std::thread physics(
     runPhysics, std::ref(*simulation), std::cref(scene_path_), robot_type_,
     std::ref(standing_height_), std::ref(standing_height_slider_),
-    std::ref(pending_motion_command_), slow_walking_forward_speed_,
+    std::ref(pending_motion_command_), std::ref(pending_disable_command_),
+    std::ref(keyboard),
+    slow_walking_forward_speed_,
     fast_walking_forward_speed_, walking_backward_speed_, walking_lateral_speed_,
     turning_yaw_rate_, walking_mode_, rl_policy_, std::ref(failure));
   // 当前线程进入渲染循环，直到用户关闭窗口或物理线程发生异常。
@@ -745,6 +897,7 @@ int SimulationBridge::run()
   // RenderLoop 结束后不再允许 UI 回调访问这些成员地址。
   g_standing_height_slider = nullptr;
   g_pending_motion_command = nullptr;
+  g_pending_disable_command = nullptr;
   if (failure != nullptr) {std::rethrow_exception(failure);}
   return 0;
 }

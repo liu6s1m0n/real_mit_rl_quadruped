@@ -22,6 +22,7 @@ enum class FSM_StateName
   RECOVERY_STAND,
   BALANCE_STAND,
   LOCOMOTION,
+  LIE_DOWN,
   WALK_RL,
   STAIRS_RL
 };

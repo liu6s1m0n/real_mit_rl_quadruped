@@ -19,6 +19,8 @@ FSM_StateName stateForMode(ControlMode mode) noexcept
     case ControlMode::WalkRl:
     case ControlMode::StairsRl:
       return FSM_StateName::LOCOMOTION;
+    case ControlMode::ProneDown:
+      return FSM_StateName::LIE_DOWN;
     case ControlMode::StandUp: return FSM_StateName::STAND_UP;
     case ControlMode::RecoveryStand: return FSM_StateName::RECOVERY_STAND;
   }
@@ -109,6 +111,7 @@ ControlFSM<T>::ControlFSM(
   statesList.recovery_stand = std::make_unique<FSM_State_RecoveryStand<T>>(&data);
   statesList.balance_stand = std::make_unique<FSM_State_BalanceStand<T>>(&data);
   statesList.locomotion = std::make_unique<FSM_State_Locomotion<T>>(&data);
+  statesList.lie_down = std::make_unique<FSM_State_LieDown<T>>(&data);
   safety_checker_ = std::make_unique<SafetyChecker<T>>(&data);
   initialize();
 }
@@ -238,6 +241,7 @@ FSM_State<T> * ControlFSM<T>::getNextState(FSM_StateName state_name) noexcept
     case FSM_StateName::RECOVERY_STAND: return statesList.recovery_stand.get();
     case FSM_StateName::BALANCE_STAND: return statesList.balance_stand.get();
     case FSM_StateName::LOCOMOTION: return statesList.locomotion.get();
+    case FSM_StateName::LIE_DOWN: return statesList.lie_down.get();
     case FSM_StateName::WALK_RL:
     case FSM_StateName::STAIRS_RL:
       return statesList.locomotion.get();

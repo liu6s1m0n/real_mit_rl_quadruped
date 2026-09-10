@@ -102,6 +102,8 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
   joint_initialization_duration_ = control_parameters_.joint_initialization_duration;
   // 换站立速度要修改的地方：硬件和仿真共用的抬升速率限制。
   standing_height_rate_limit_ = control_parameters_.standing_height_rate;
+  prone_body_height_ = control_parameters_.prone_body_height;
+  prone_down_height_rate_ = control_parameters_.prone_down_height_rate;
 
   PositionVelocityEstimatorParameters<float> estimator_parameters;
   estimator_parameters.nominal_time_step = control_time_step_;
@@ -165,6 +167,16 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
   {
     return;
   }
+  // SimulationBridge reapplies the selected walking mode every control cycle
+  // while a motion command is latched. RL entry is intentionally delayed until
+  // the BalanceStand posture is stable, so an identical request during that
+  // delay must not restart the timer and posture latch.
+  if ((mode == ControlMode::WalkRl || mode == ControlMode::StairsRl) &&
+    rl_posture_transition_pending_ && pending_rl_mode_ == mode &&
+    control_fsm_->currentStateName() == FSM_StateName::BALANCE_STAND)
+  {
+    return;
+  }
   // MPC、平地 RL 和楼梯 RL 必须经由 BalanceStand 完成独立初始化；不允许
   // 在 LOCOMOTION 内热切换策略、历史和执行器语义。
   if (isLocomotionMode(desired_state_.mode) && isLocomotionMode(mode) &&
@@ -209,6 +221,8 @@ bool RobotRunner::requestStandUp() noexcept
   if (!jointInitializationComplete() || !state_estimate_.valid) {return false;}
   const FSM_StateName state = control_fsm_->currentStateName();
   if (state == FSM_StateName::BALANCE_STAND || state == FSM_StateName::LOCOMOTION) {
+    prone_down_active_ = false;
+    prone_down_complete_ = false;
     rl_posture_transition_pending_ = false;
     rl_entry_posture_latched_ = false;
     rl_entry_stable_time_s_ = 0.0F;
@@ -223,10 +237,14 @@ bool RobotRunner::requestStandUp() noexcept
     desired_state_.body_acceleration_world.setZero();
     desired_state_.body_angular_velocity.setZero();
     desired_state_.mode = ControlMode::BalanceStand;
+    motion_start_hold_active_ = false;
+    motion_start_hold_release_pending_ = false;
     setHomeCalfContactsEnabled(false);
     return true;
   }
-  if (state != FSM_StateName::JOINT_PD && state != FSM_StateName::PASSIVE) {
+  if (state != FSM_StateName::JOINT_PD && state != FSM_StateName::PASSIVE &&
+    state != FSM_StateName::LIE_DOWN)
+  {
     return false;
   }
   if (std::abs(state_estimate_.rpy.x()) > 0.20F ||
@@ -234,6 +252,8 @@ bool RobotRunner::requestStandUp() noexcept
   {
     return false;
   }
+  prone_down_active_ = false;
+  prone_down_complete_ = false;
   desired_state_.body_position_world.x() = state_estimate_.position_world.x();
   desired_state_.body_position_world.y() = state_estimate_.position_world.y();
   desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
@@ -247,6 +267,42 @@ bool RobotRunner::requestStandUp() noexcept
   // DM1 先贴地收腿到四足支撑区，再自动交给
   // BalanceStand/WBC 抬升机身，避免展开的趴卧腿直接发力导致前翻。
   desired_state_.mode = ControlMode::StandUp;
+  // Stand explicitly armed this runner, so keep the captured posture for the
+  // one FSM transition frame. JointPd's transition command
+  // normally targets motor zero; releasing the hold only after StandUp::onEnter
+  // prevents that one stale frame from reaching the actuators.
+  motion_start_hold_release_pending_ = motion_start_hold_active_;
+  return true;
+}
+
+bool RobotRunner::requestProneDown() noexcept
+{
+  if (!jointInitializationComplete() || !state_estimate_.valid) {return false;}
+  const FSM_StateName state = control_fsm_->currentStateName();
+  if (state != FSM_StateName::BALANCE_STAND &&
+    state != FSM_StateName::LOCOMOTION)
+  {
+    return false;
+  }
+  rl_posture_transition_pending_ = false;
+  rl_entry_posture_latched_ = false;
+  rl_entry_stable_time_s_ = 0.0F;
+  control_fsm_->setRlEntryPostureActive(false);
+  prone_down_active_ = true;
+  prone_down_complete_ = false;
+  prone_down_height_command_ = std::clamp(
+    measuredBodyHeight(), prone_body_height_, quadruped_.nominalBodyHeight());
+  desired_state_.body_position_world.x() = state_estimate_.position_world.x();
+  desired_state_.body_position_world.y() = state_estimate_.position_world.y();
+  desired_state_.body_position_world.z() = prone_down_height_command_;
+  desired_state_.body_rpy << 0.0F, 0.0F, state_estimate_.rpy.z();
+  desired_state_.body_velocity_world.setZero();
+  desired_state_.body_acceleration_world.setZero();
+  desired_state_.body_angular_velocity.setZero();
+  // This is a direct handoff from RL/locomotion to the independent lie-down
+  // state. The state owns the MPC/WBC descent, so no RL transition frame is
+  // executed after this request.
+  desired_state_.mode = ControlMode::ProneDown;
   return true;
 }
 
@@ -351,16 +407,32 @@ void RobotRunner::reset()
   desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
   desired_state_.valid = true;
   joint_initialization_started_ = false;
+  motion_start_hold_active_ = false;
+  motion_start_hold_release_pending_ = false;
   joint_initialization_start_time_ = 0.0F;
   standing_height_command_initialized_ = false;
   desired_state_initialized_ = false;
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
   rl_entry_stable_time_s_ = 0.0F;
+  prone_down_active_ = false;
+  prone_down_complete_ = false;
+  prone_down_height_command_ = quadruped_.nominalBodyHeight();
   control_fsm_->setRlEntryPostureActive(false);
   control_fsm_->initialize();
   setHomeCalfContactsEnabled(control_parameters_.start_in_prone_home);
   disableCommands();
+}
+
+void RobotRunner::prepareForMotionControl()
+{
+  // This is deliberately separate from motor enable. Unlocking a drive is not
+  // a motion command and must not start RobotRunner. Only Stand (or another
+  // explicit motion-start command) rebuilds the time-based controller state.
+  reset();
+  setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+  motion_start_hold_active_ = true;
+  motion_start_hold_release_pending_ = false;
 }
 
 void RobotRunner::setHomeCalfContactsEnabled(bool enabled) noexcept
@@ -415,6 +487,9 @@ void RobotRunner::prepareJointInitialization()
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       //锁存四条腿当前实际关节角，作为轨迹起点
       initial_joint_positions_[leg] = leg_controller_.datas[leg].q;
+      if (motion_start_hold_active_) {
+        motion_start_hold_positions_[leg] = initial_joint_positions_[leg];
+      }
     }
     //记录初始化起始时间
     joint_initialization_start_time_ = currentTime();
@@ -438,9 +513,11 @@ void RobotRunner::prepareJointInitialization()
 
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     /*target,travel这两个是啥玩意*/
-    const Vec3<float> target = control_parameters_.start_in_prone_home ?
+    const Vec3<float> target = motion_start_hold_active_ ?
+      motion_start_hold_positions_[leg] :
+      (control_parameters_.start_in_prone_home ?
       control_parameters_.motor_zero_position :
-      quadruped_.leg(kLegOrder[leg]).joints.home_position;
+      quadruped_.leg(kLegOrder[leg]).joints.home_position);
     const Vec3<float> travel = target - initial_joint_positions_[leg];
     auto & command = leg_controller_.commands[leg];
     command.position_desired = initial_joint_positions_[leg] + blend * travel;
@@ -449,6 +526,19 @@ void RobotRunner::prepareJointInitialization()
     // 避免把更快的启动过程误认为电机行走速度提升。
     // DM1 Home 有四段小腿同时接地，必须从第一帧使用专用零位刚度抵抗
     // 接触反力；该增益仅在趴卧锁定阶段使用，不会进入 WBC/步态控制。
+    command.kp_joint = control_parameters_.prone_home_joint_kp;
+    command.kd_joint = control_parameters_.prone_home_joint_kd;
+  }
+}
+
+void RobotRunner::holdMotionStartPosture()
+{
+  leg_controller_.zeroCommand();
+  leg_controller_.setEnabled(true);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    auto & command = leg_controller_.commands[leg];
+    command.position_desired = motion_start_hold_positions_[leg];
+    command.velocity_desired.setZero();
     command.kp_joint = control_parameters_.prone_home_joint_kp;
     command.kd_joint = control_parameters_.prone_home_joint_kd;
   }
@@ -532,6 +622,23 @@ bool RobotRunner::run()
     return collectJointCommands();
   }
 
+  // Stand, not motor unlock, starts this path. Keep the measured posture while
+  // the initialization/FSM handshake completes, then begin the stand trajectory.
+  if (motion_start_hold_active_) {
+    // Keep the FSM synchronized behind the output hold. In particular, move
+    // Passive -> JointPd before accepting StandUp, then mask JointPd's
+    // transition frame until StandUp has captured the measured starting pose.
+    control_fsm_->runFSM();
+    holdMotionStartPosture();
+    if (motion_start_hold_release_pending_ &&
+      control_fsm_->currentStateName() == FSM_StateName::STAND_UP)
+    {
+      motion_start_hold_active_ = false;
+      motion_start_hold_release_pending_ = false;
+    }
+    return collectJointCommands();
+  }
+
   // 4. 首次进入闭环时从当前水平位置和航向建立参考。初始化期间产生的
   // roll/pitch 是需要消除的扰动，不能锁存成后续站立和行走的目标姿态。
   if (!desired_state_initialized_) {
@@ -553,9 +660,24 @@ bool RobotRunner::run()
   }
 
   // 5. 更新高度目标，最后由 FSM 选择站立或行走控制器并生成命令。
-  updateStandingHeightCommand();
+  if (prone_down_active_) {
+    const float maximum_step = prone_down_height_rate_ * control_time_step_;
+    prone_down_height_command_ = std::max(
+      prone_body_height_, prone_down_height_command_ - maximum_step);
+    desired_state_.body_position_world.z() = prone_down_height_command_;
+  } else {
+    updateStandingHeightCommand();
+  }
 
   control_fsm_->runFSM();
+  // FSM_State_LieDown remains active after the fold so MPC/WBC can damp the
+  // floating base. Report completion at that hold-phase handoff, never while
+  // the RL locomotion state is active.
+  if (prone_down_active_ &&
+    control_fsm_->lieDownComplete())
+  {
+    prone_down_complete_ = true;
+  }
   if (rl_posture_transition_pending_) {
     rl_entry_stable_time_s_ = rlEntryPostureStable() ?
       rl_entry_stable_time_s_ + control_time_step_ : 0.0F;

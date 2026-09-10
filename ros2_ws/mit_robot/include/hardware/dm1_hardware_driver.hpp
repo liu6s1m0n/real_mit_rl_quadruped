@@ -1,10 +1,10 @@
-/*! @file Dm1HardwareDriver.hpp
+/*! @file dm1_hardware_driver.hpp
  *  @brief DM1 厂商 CAN/IMU SDK 的集中接入点。
  *
  *  CAN 与 IMU 都在这里集中管理；控制器只看到统一的快照和 MIT 帧。
  */
-#ifndef MYMIT_ROBOT_USER_DM1_HARDWARE_DRIVER_HPP_
-#define MYMIT_ROBOT_USER_DM1_HARDWARE_DRIVER_HPP_
+#ifndef MYMIT_ROBOT_HARDWARE_DM1_HARDWARE_DRIVER_HPP_
+#define MYMIT_ROBOT_HARDWARE_DM1_HARDWARE_DRIVER_HPP_
 
 #include <string>
 
@@ -39,4 +39,4 @@ private:
   bool opened_ = false;
 };
 
-#endif  // MYMIT_ROBOT_USER_DM1_HARDWARE_DRIVER_HPP_
+#endif  // MYMIT_ROBOT_HARDWARE_DM1_HARDWARE_DRIVER_HPP_

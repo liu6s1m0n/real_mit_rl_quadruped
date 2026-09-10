@@ -1,5 +1,5 @@
 // DM1 真机入口。ROS 2 工程结构保持不变；底层设备调用集中在
-// Dm1HardwareDriver.cpp，控制算法集中在 RobotRunner。
+// 硬件适配集中在本目录，控制算法集中在 user/RobotRunner。
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -17,9 +17,9 @@
 #include <thread>
 #include <vector>
 
-#include "Dm1HardwareDriver.hpp"
-#include "HardwareBridge.hpp"
-#include "sensor/imu_log.hpp"
+#include "hardware/dm1_hardware_driver.hpp"
+#include "hardware/hardware_bridge.hpp"
+#include "common/console_log.hpp"
 
 namespace
 {
@@ -39,6 +39,7 @@ struct Arguments
   float control_time_step = 0.002F;
   float zero_tolerance_rad = 0.05F;
   bool enable_output = false;
+  bool keyboard_control = false;
   bool stand_up = false;
   bool set_zero = false;
   bool imu_only = false;
@@ -52,8 +53,9 @@ struct Arguments
           message +
           "\nusage: hardware_main --calibration FILE [--can0 can0] [--can1 can1] "
           "[--imu auto|DEVICE] [--control-dt 0.002] "
-          "[--zero-tolerance 0.05] (automatic-zero upper bound; direct start is 0.02) "
-          "[--enable-output] [--stand-up] [--set-zero] [--imu-only | --motor-only] "
+          "[--zero-tolerance 0.05] (startup zero-position acceptance window) "
+          "[--enable-output | --keyboard-control] [--stand-up] [--set-zero] "
+          "[--imu-only | --motor-only] "
           "[--poll-feedback BUS CAN_ID]");
 }
 
@@ -111,6 +113,8 @@ Arguments parseArguments(int argc, char ** argv)
       result.zero_tolerance_rad = std::stof(requireValue("--zero-tolerance"));
     } else if (argument == "--enable-output") {
       result.enable_output = true;
+    } else if (argument == "--keyboard-control") {
+      result.keyboard_control = true;
     } else if (argument == "--stand-up") {
       result.stand_up = true;
     } else if (argument == "--set-zero") {
@@ -149,8 +153,12 @@ Arguments parseArguments(int argc, char ** argv)
   if (!result.imu_only && result.calibration_path.empty()) {
     usageError("--calibration is required unless --imu-only is used");
   }
-  if ((result.imu_only || result.motor_only) && (result.enable_output || result.stand_up)) {
-    usageError("read-only modes cannot be combined with --enable-output or --stand-up");
+  if ((result.imu_only || result.motor_only) &&
+    (result.enable_output || result.keyboard_control || result.stand_up))
+  {
+    usageError(
+      "read-only modes cannot be combined with --enable-output, "
+      "--keyboard-control or --stand-up");
   }
   if (result.imu_only && result.motor_only) {
     usageError("--imu-only and --motor-only are mutually exclusive");
@@ -161,11 +169,18 @@ Arguments parseArguments(int argc, char ** argv)
   if (result.stand_up && !result.enable_output) {
     usageError("--stand-up requires --enable-output");
   }
+  if (result.enable_output && result.keyboard_control) {
+    usageError("--enable-output and --keyboard-control are mutually exclusive");
+  }
   if (result.set_zero && (result.imu_only || result.motor_only)) {
     usageError("--set-zero requires the complete hardware mode");
   }
-  if (result.set_zero && (result.enable_output || result.stand_up)) {
-    usageError("--set-zero cannot be combined with --enable-output or --stand-up");
+  if (result.set_zero &&
+    (result.enable_output || result.keyboard_control || result.stand_up))
+  {
+    usageError(
+      "--set-zero cannot be combined with --enable-output, "
+      "--keyboard-control or --stand-up");
   }
   return result;
 }
@@ -399,6 +414,7 @@ int main(int argc, char ** argv)
     options.control_time_step = arguments.control_time_step;
     options.startup_zero_tolerance_rad = arguments.zero_tolerance_rad;
     options.enable_output = arguments.enable_output;
+    options.keyboard_control = arguments.keyboard_control;
     options.request_stand_up = arguments.stand_up;
     options.set_zero = arguments.set_zero;
     HardwareBridge bridge(driver, calibration, options);
@@ -408,11 +424,16 @@ int main(int argc, char ** argv)
         imu_log::Level::Warning,
         "DM1 maintenance mode: --set-zero writes all motor zero parameters; "
         "output remains disabled.\n");
+    } else if (arguments.keyboard_control) {
+      imu_log::print(
+        imu_log::Level::Warning,
+        "DM1 keyboard control: motors start locked; no motor zero parameters will be changed. "
+        "Use Shift+U only after placing the robot motionless and level in the zero window.\n");
     } else if (arguments.enable_output) {
       imu_log::print(
         imu_log::Level::Warning,
-        "DM1 control startup: offsets below 0.020 rad are accepted directly; "
-        "offsets in [0.020, %.3f) rad are zeroed and verified before enable.\n",
+        "DM1 control startup: all joints must be within %.3f rad; "
+        "startup will not modify motor parameters.\n",
         arguments.zero_tolerance_rad);
     } else {
       imu_log::print(

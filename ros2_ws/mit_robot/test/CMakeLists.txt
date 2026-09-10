@@ -38,6 +38,10 @@ add_robot_unit_test(test_dm1_contract dm1_control_contract_test.cpp)
 add_robot_unit_test(
   test_dm1_mit_interface hardware/dm1_mit_interface_test.cpp)
 
+ament_add_gtest(test_teleop teleop/operator_command_test.cpp)
+target_include_directories(test_teleop PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(test_teleop mymit_robot_teleop Eigen3::Eigen pthread)
+
 ament_add_gtest(
   test_dm_motor_driver
   hardware/dm_motor_driver_test.cpp
@@ -73,13 +77,15 @@ target_include_directories(test_dm1_sim2sim_direction PRIVATE
   ${PROJECT_SOURCE_DIR}/user
 )
 target_link_libraries(test_dm1_sim2sim_direction mymit_robot_model Eigen3::Eigen)
+target_link_libraries(test_dm1_sim2sim_direction mymit_robot_teleop)
 
 ament_add_gtest(test_hardware_bridge
   hardware/hardware_bridge_test.cpp
-  ${PROJECT_SOURCE_DIR}/user/HardwareBridge.cpp
+  ${PROJECT_SOURCE_DIR}/src/hardware/hardware_bridge.cpp
   ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
 )
 target_include_directories(test_hardware_bridge PRIVATE
+  ${PROJECT_SOURCE_DIR}/include
   ${PROJECT_SOURCE_DIR}/user
 )
-target_link_libraries(test_hardware_bridge mymit_robot_model Eigen3::Eigen)
+target_link_libraries(test_hardware_bridge mymit_robot_model mymit_robot_teleop Eigen3::Eigen)

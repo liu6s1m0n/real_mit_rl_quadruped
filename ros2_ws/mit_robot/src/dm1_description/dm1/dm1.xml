@@ -59,7 +59,13 @@
       <inertial pos="-0.001955 0.002743 -0.068608" mass="6.889103"
         fullinertia="0.035976 0.081109 0.103076 0.000077 -0.000148 0.000272"/>
       <geom class="visual" mesh="dm_base"/>
-      <geom name="trunk_collision" type="box" size="0.14 0.09 0.05" pos="0 0 -0.069779"/>
+      <!-- Once LieDown reaches the grounded pose, this body contact is the
+           primary horizontal brake.  The generic DM1 geom default uses
+           condim=1 for leg collision filtering, which is frictionless and
+           lets the finished robot drift under tiny joint/contact impulses. -->
+      <geom name="trunk_collision" type="box" size="0.14 0.09 0.05" pos="0 0 -0.069779"
+        condim="6" friction="0.6 0.02 0.01" solref="0.008 1.5"
+        solimp="0.9 0.95 0.001"/>
 
       <body name="FR_hip" pos="0.16175 -0.059997 -0.061498">
         <joint class="haa" name="FR_hip_joint"/>

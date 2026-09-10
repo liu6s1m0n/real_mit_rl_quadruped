@@ -17,7 +17,7 @@
 #include <utility>
 
 #include "sensor/imu_driver.hpp"
-#include "sensor/imu_log.hpp"
+#include "common/console_log.hpp"
 
 // ---------- 内部辅助函数（匿名命名空间） ----------
 namespace

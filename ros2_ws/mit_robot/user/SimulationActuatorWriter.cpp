@@ -27,21 +27,21 @@ double clampActuatorForce(
   const mjModel * model, const mjData * data, int actuator, int dof, double force,
   bool * saturated)
 {
+  (void)data;
+  (void)dof;
   if (saturated != nullptr) {*saturated = false;}
   if (model->actuator_forcelimited[actuator] == 0) {return force;}
   const double minimum = model->actuator_forcerange[2 * actuator];
   const double maximum = model->actuator_forcerange[2 * actuator + 1];
-  // Isaac DM1 uses the no-load 60 rpm limit for the same linear torque-speed
-  // envelope used during training.
-  constexpr double kNoLoadSpeedRadPerSecond = 6.283185307179586;
-  const double speed_fraction = std::clamp(
-    1.0 - std::abs(data->qvel[dof]) / kNoLoadSpeedRadPerSecond, 0.0, 1.0);
   const double symmetric_limit = std::max(std::abs(minimum), std::abs(maximum));
-  const double effective_limit = symmetric_limit * speed_fraction;
-  if (saturated != nullptr && std::abs(force) > effective_limit + 1.0e-6) {
+  // MuJoCo's actuator forcerange is already the configured motor limit.  A
+  // second linear speed derating here could drive the available torque to zero
+  // during a normal swing, which presents as one step followed by a pause and
+  // is not part of the controller/training contract.
+  if (saturated != nullptr && std::abs(force) > symmetric_limit + 1.0e-6) {
     *saturated = true;
   }
-  return std::clamp(force, -effective_limit, effective_limit);
+  return std::clamp(force, -symmetric_limit, symmetric_limit);
 }
 }  // namespace
 
@@ -89,7 +89,8 @@ SimulationActuatorWriter::SimulationActuatorWriter(const mjModel * model)
 
 void SimulationActuatorWriter::write(
   const RobotRunner & runner, mjData * data,
-  std::array<std::size_t, kNumLegs> & torque_speed_saturation_by_leg) const
+  std::array<std::size_t, kNumLegs> & torque_speed_saturation_by_leg,
+  bool motors_enabled) const
 {
   if (data == nullptr) {throw std::invalid_argument("MuJoCo data is null");}
   mju_zero(data->qfrc_applied, model_->nv);
@@ -103,7 +104,7 @@ void SimulationActuatorWriter::write(
       // controller's complete MIT-PD torque is written through qfrc_applied;
       // this keeps the simulation from adding a second position-servo path.
       data->ctrl[address.actuator] = 0.0;
-      if (!command.enabled) {continue;}
+      if (!motors_enabled || !command.enabled) {continue;}
       const Eigen::Index index = static_cast<Eigen::Index>(joint);
       const double torque = command.torque_feedforward[index] +
         command.kp[index] * (command.position_desired[index] - data->qpos[address.qpos]) +

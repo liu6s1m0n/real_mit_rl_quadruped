@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 #include "dm_imu/bsp_crc.h"
-#include "sensor/imu_log.hpp"
+#include "common/console_log.hpp"
 
 namespace
 {

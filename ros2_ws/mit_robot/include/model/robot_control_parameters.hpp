@@ -16,6 +16,9 @@ struct RobotControlParameters
   T minimum_standing_height;
   T maximum_standing_height;
   T standing_height_rate;
+  T prone_body_height;
+  T prone_down_height_rate;
+  T prone_down_fold_duration;
   T balance_height_step;
   T joint_initialization_duration;
   Vec3<T> initialization_kp;
@@ -74,7 +77,7 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
   // 换站立速度要修改的地方：站立速度由这两个共享参数控制。
   // standing_height_rate 限制支撑后抬升速度，stand_up_duration 限制趴地展开速度。
   return {
-    T(0.30), T(0.42), T(0.04), T(0.00016), T(1.2),
+    T(0.30), T(0.42), T(0.04), T(0.12), T(0.08), T(2.0), T(0.00016), T(1.2),
     Vec3<T>(T(28), T(36), T(36)), Vec3<T>(T(4), T(5), T(5)),
     true, Vec3<T>::Zero(),
     Vec3<T>(T(1000), T(280), T(280)), Vec3<T>(T(25), T(12), T(12)),

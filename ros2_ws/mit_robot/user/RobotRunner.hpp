@@ -57,9 +57,20 @@ public:
     float now_s) noexcept;
   /** 仿真 Reset 后清空控制器内部历史，但不会改写 MuJoCo 的物理状态。 */
   void reset();
+  /**
+   * @brief 收到运动类命令后启动控制计算，并丢弃此前的旧控制轨迹。
+   *
+   * 电机解锁不得调用本函数；解锁只改变驱动器状态。下一次 run() 会从
+   * 当前实测关节角开始初始化，随后由显式站立命令进入运动控制。
+   */
+  void prepareForMotionControl();
   void setControlMode(ControlMode mode) noexcept;
   /** 请求站立；行走时返回当前水平位置并回到 BalanceStand。 */
   bool requestStandUp() noexcept;
+  /** 使用现有 MPC/WBC 将站立姿态平滑降至场景定义的趴卧高度。 */
+  bool requestProneDown() noexcept;
+  /** 趴卧轨迹已达到目标并切换到趴卧保持。 */
+  bool proneDownComplete() const noexcept {return prone_down_complete_;}
   /** 注入已经通过 golden-vector 校验的 RL 推理后端。 */
   void setRlPolicy(RlPolicyPtr policy) noexcept;
   /** 将前进速度透传给 ControlFSM 内的 Locomotion/MPC，单位 m/s。 */
@@ -130,6 +141,8 @@ private:
   static LegSensorPointers sensorPointers(const LegSensorOwners & sensors);
   /*刚启动或 Reset 后，将关节从当前实际位置平滑移动到默认姿态。*/
   void prepareJointInitialization();
+  /** 电机刚使能后保持捕获姿态，直到收到有效的站立请求。 */
+  void holdMotionStartPosture();
   /*按照高度变化速率限制，更新当前实际发送的站立高度。*/
   void updateStandingHeightCommand();
   /*判断关节初始化是否完成。*/
@@ -184,6 +197,8 @@ private:
   std::array<JointCommand<float>, kNumLegs> joint_commands_{};
   /*记录初始化开始瞬间四条腿的实际关节角*/
   std::array<Vec3<float>, kNumLegs> initial_joint_positions_{};
+  /** 显式站立启动瞬间捕获的关节角；单纯解锁不会走到此处。 */
+  std::array<Vec3<float>, kNumLegs> motion_start_hold_positions_{};
   /*关节初始化持续 0.4 秒；启动阶段优先保证平稳，不参与行走电机提速。*/
   float joint_initialization_start_time_ = 0.0F;
   float joint_initialization_duration_ = 0.4F;
@@ -194,8 +209,13 @@ private:
   /*高度变化速率限制为：*/
   // 换站立速度要修改的地方：初始化默认值，构造时会由控制参数覆盖。
   float standing_height_rate_limit_ = 0.04F;
+  float prone_body_height_ = 0.12F;
+  float prone_down_height_rate_ = 0.08F;
+  float prone_down_height_command_ = 0.39F;
   /*标记是否已经开始关节初始化*/
   bool joint_initialization_started_ = false;
+  bool motion_start_hold_active_ = false;
+  bool motion_start_hold_release_pending_ = false;
   /*是否已经根据当前估计高度初始化过高度命令*/
   bool standing_height_command_initialized_ = false;
   /*是否已经建立首次闭环期望状态*/
@@ -204,6 +224,8 @@ private:
   bool rl_entry_posture_latched_ = false;
   ControlMode pending_rl_mode_ = ControlMode::WalkRl;
   float rl_entry_stable_time_s_ = 0.0F;
+  bool prone_down_active_ = false;
+  bool prone_down_complete_ = false;
 };
 
 #endif  // MYMIT_ROBOT_USER_ROBOT_RUNNER_HPP_

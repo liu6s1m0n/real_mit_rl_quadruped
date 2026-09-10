@@ -16,6 +16,7 @@
 #include "FSM/FSM_State.h"
 #include "FSM/FSM_State_BalanceStand.h"
 #include "FSM/FSM_State_Locomotion.h"
+#include "FSM/FSM_State_LieDown.h"
 #include "FSM/FSM_State_Passive.h"
 #include "FSM/FSM_State_RecoveryStand.h"
 #include "FSM/FSM_State_StandUp.h"
@@ -40,6 +41,7 @@ struct FSM_StatesList
   std::unique_ptr < FSM_State_RecoveryStand < T >> recovery_stand;
   std::unique_ptr < FSM_State_BalanceStand < T >> balance_stand;
   std::unique_ptr < FSM_State_Locomotion < T >> locomotion;
+  std::unique_ptr < FSM_State_LieDown < T >> lie_down;
 };
 
 /*这是最高层的状态机。*/
@@ -68,6 +70,12 @@ public:
   void printInfo(int option);
   //返回当前状态名字。
   FSM_StateName currentStateName() const noexcept;
+  /** @brief 趴卧折叠完成且正在由 MPC/WBC 保持的状态。 */
+  bool lieDownComplete() const noexcept
+  {
+    return currentStateName() == FSM_StateName::LIE_DOWN &&
+           statesList.lie_down != nullptr && statesList.lie_down->isComplete();
+  }
   FSM_OperatingMode operatingMode() const noexcept {return operating_mode_;}
   //打开或关闭 WBC。
   void setUseWbc(bool enabled) noexcept {data.use_wbc = enabled;}

@@ -1,4 +1,5 @@
 #include <array>
+#include <limits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -50,6 +51,19 @@ dm1_hardware::Dm1MitInterface::FeedbackArray feedback(double timestamp)
   }
   return result;
 }
+
+dm1_hardware::Dm1MitInterface::CommandArray validCommands(float timestamp)
+{
+  dm1_hardware::Dm1MitInterface::CommandArray result{};
+  for (std::size_t leg = 0; leg < result.size(); ++leg) {
+    result[leg].leg = static_cast<LegId>(leg);
+    result[leg].enabled = true;
+    result[leg].timestamp = timestamp;
+    result[leg].kp.setConstant(1.0F);
+    result[leg].kd.setConstant(0.1F);
+  }
+  return result;
+}
 }  // namespace
 
 TEST(Dm1MitInterfaceTest, ConvertsFeedbackAndSendsTwelveCalibratedFrames)
@@ -77,6 +91,65 @@ TEST(Dm1MitInterfaceTest, ConvertsFeedbackAndSendsTwelveCalibratedFrames)
   EXPECT_FLOAT_EQ(transport.frames.front().position, -0.1F);
 }
 
+TEST(Dm1MitInterfaceTest, ValidatesCommandLimitsBeforeSending)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  dm1_hardware::Dm1MitInterface::CommandArray commands{};
+  for (std::size_t leg = 0; leg < commands.size(); ++leg) {
+    commands[leg].leg = static_cast<LegId>(leg);
+    commands[leg].enabled = true;
+    commands[leg].timestamp = 1.0F;
+  }
+  commands[0].position_desired[0] = 2.0F;
+
+  EXPECT_FALSE(interface.validateCommands(commands, 1.0));
+  EXPECT_TRUE(transport.frames.empty());
+  EXPECT_EQ(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsProtocolGainBoundsBeforeEnable)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  auto commands = validCommands(1.0F);
+  commands[0].kp[0] = dm1_hardware::mit_protocol::kKpMax + 1.0F;
+  EXPECT_FALSE(interface.validateCommands(commands, 1.0));
+  EXPECT_EQ(transport.disable_count, 0);
+
+  commands = validCommands(1.0F);
+  commands[0].kd[0] = dm1_hardware::mit_protocol::kKdMax + 0.1F;
+  EXPECT_FALSE(interface.validateCommands(commands, 1.0));
+  EXPECT_EQ(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsCalibratedMotorPositionOutsideWireRange)
+{
+  MockTransport transport;
+  auto calibrated = calibration();
+  calibrated[0].zero_position = 12.0F;
+  dm1_hardware::Dm1MitInterface interface(transport, calibrated);
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  auto commands = validCommands(1.0F);
+  commands[0].position_desired[0] = -1.0F;
+  EXPECT_FALSE(interface.validateCommands(commands, 1.0));
+  EXPECT_EQ(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsNonFiniteCalibrationZero)
+{
+  MockTransport transport;
+  auto invalid = calibration();
+  invalid[0].zero_position = std::numeric_limits<float>::quiet_NaN();
+  EXPECT_THROW(
+    dm1_hardware::Dm1MitInterface(transport, invalid), std::invalid_argument);
+}
+
 TEST(Dm1MitInterfaceTest, RejectsStaleFeedbackAndDisablesAllMotors)
 {
   MockTransport transport;
@@ -91,6 +164,21 @@ TEST(Dm1MitInterfaceTest, AllowsARepeatedSequenceWhileFeedbackIsFresh)
   dm1_hardware::Dm1MitInterface interface(transport, calibration());
   ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
   EXPECT_TRUE(interface.updateFeedback(feedback(1.01), 1.01));
+  EXPECT_EQ(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, AcceptsProtocolFeedbackWithoutBusVoltage)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  auto samples = feedback(1.0);
+  for (auto & sample : samples) {
+    sample.voltage_valid = false;
+    sample.voltage_v = 0.0F;
+  }
+
+  EXPECT_TRUE(interface.updateFeedback(samples, 1.0));
+  EXPECT_TRUE(interface.feedbackValid());
   EXPECT_EQ(transport.disable_count, 0);
 }
 

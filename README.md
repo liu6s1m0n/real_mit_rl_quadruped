@@ -2,6 +2,8 @@
 
 MY_ROBOT 是一个面向四足机器人运动控制与仿真研究的 ROS 2 工程。项目以 C++ 为主要开发语言，结合 MuJoCo 构建机器人仿真环境，并集成状态估计、步态规划、有限状态机、模型预测控制（MPC）和全身控制（WBC）等模块。
 
+常用启动命令见：[DM1 硬件与仿真运行指令](ros2_ws/mit_robot/docs/RUN_COMMANDS.md)。
+
 仓库当前以 DM1 为唯一机器人模型，用于控制算法开发、MuJoCo 验证、RL
 策略回放和真实 DM1 执行器接入。
 
@@ -176,12 +178,10 @@ ros2 run mymit_robot hardware_main \
 ```
 
 完整模式现在会等待真实的 12 路健康反馈，并检查静止、水平和机械零位。默认策略是：
-偏差 `<0.02 rad` 时直接启动；偏差在 `[0.02, 0.05) rad` 时，只有显式使用
-`--enable-output` 才会先失能、写入全部 12 个电机零位、重新轮询验证后使能；偏差
-`>=0.05 rad` 直接报“机器人初始位置错误”并拒绝使能。普通启动和只读模式绝不会写入
-电机参数。`--zero-tolerance` 可调整自动写零上限，但不能低于直接启动阈值 0.02 rad。
-需要无论当前偏差大小都执行明确零位维护时，使用 `--set-zero`；该模式仍不会使能输出，
-也不能与 `--enable-output` 或 `--stand-up` 同时使用。
+所有关节偏差必须小于 `--zero-tolerance`（默认 `0.05 rad`），超出窗口直接拒绝启动。
+普通启动、`--enable-output` 和键盘解锁都绝不会写入电机参数；需要无论当前偏差大小
+执行明确零位维护时，使用 `--set-zero`。该模式仍不会使能输出，也不能与
+`--enable-output` 或 `--stand-up` 同时使用。
 
 ### 常见报错排查
 
@@ -202,7 +202,7 @@ ros2 run mymit_robot hardware_main \
 | `cannot open calibration file` | 完整模式的标定文件路径错误或文件不存在。使用标定文件的绝对路径；首次可先使用 `--imu-only` 验证 IMU。 |
 | `motor ID must be in [1,255]` | 标定文件中的电机 ID 仍为 0 或超出范围。检查 `config/dm1_hardware_calibration.txt`，每个 ID 必须是 1 到 255。 |
 | `Startup check rejected` | 普通完整模式启动检查失败。机器人必须保持静止、水平、机械零位正确，并收到 12 路健康电机反馈。 |
-| `Startup rejected: robot initial position error` | 至少一个电机偏差达到自动写零上限（默认 `0.05 rad`）；程序不会自动写零，需先把机器人摆回正确初始位置。 |
+| `Startup rejected: robot initial position error` | 至少一个电机偏差达到零位接受窗口（默认 `0.05 rad`）；程序不会自动写零，需先把机器人摆回正确初始位置，或显式执行 `--set-zero`。 |
 | `Startup zero rejected` | `--set-zero` 维护模式要求机器人静止、水平并收到 12 路健康电机反馈。 |
 | `DM1 hardware bridge is read-only at startup` | 普通启动不会写零；确认机械状态后如需维护操作，显式使用 `--set-zero`。 |
 
@@ -242,8 +242,8 @@ ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 
 MuJoCo 窗口中的 `Stand up`、`Forward slow`、`Forward fast`、`Backward`、
 `Left`、`Right`、`Rotate CCW`、`Use MPC` 和 `Use RL` 按钮可用于站起/回站、
-控制器选择和方向控制。启动后先点击 `Stand up`，再点击方向按钮；MPC 与 RL
-切换须在停止行走后进行。
+控制器选择和方向控制。启动后先点击 `Enable motors`，再点击 `Stand up`，然后使用方向按钮；MPC 与 RL
+切换须在停止行走后进行。方向命令会锁存，按 `Space` 或点击 `Stop` 显式停止。
 
 在不使用 NVIDIA PRIME 独立显卡渲染的环境中，可以选择自动渲染模式：
 
