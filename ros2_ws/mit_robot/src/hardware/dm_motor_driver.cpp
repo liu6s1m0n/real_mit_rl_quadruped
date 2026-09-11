@@ -184,8 +184,36 @@ bool DmMotorDriver::open()
     buses_[0].close();
     return false;
   }
+  active_buses_ = {{true, true}};
+  single_target_.reset();
   {
     // 清空接收缓存，要求启动后重新收到所有电机的反馈。
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshots_ = {};
+  }
+  opened_.store(true);
+  output_disabled_.store(false);
+  return true;
+}
+
+bool DmMotorDriver::openSingle(const dm1_hardware::MotorAddress & address)
+{
+  // 单电机测试只允许打开目标所在的总线，避免另一条 CAN 缺失阻塞测试。
+  if (opened_.load()) {return false;}
+  const std::size_t index = indexFor(address);
+  if (index >= kNumJoints || address.bus > 1 || can_names_[address.bus].empty()) {
+    return false;
+  }
+  if (!buses_[address.bus].open(
+      can_names_[address.bus],
+      [this, bus = address.bus](const canfd_frame & frame) {receive(bus, frame);}, 0))
+  {
+    return false;
+  }
+  active_buses_ = {{false, false}};
+  active_buses_[address.bus] = true;
+  single_target_ = calibration_[index].address;
+  {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshots_ = {};
   }
@@ -201,6 +229,7 @@ bool DmMotorDriver::pollAll()
   if (!opened_.load()) {return false;}
   for (const auto & item : calibration_) {
     const auto & address = item.address;
+    if (!active_buses_[address.bus]) {continue;}
     dm1_hardware::MitFrame frame{};
     frame.bus = address.bus;
     frame.can_id = address.can_id;
@@ -255,6 +284,48 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
   return valid;
 }
 
+bool DmMotorDriver::latestOne(
+  const dm1_hardware::MotorAddress & address, dm1_hardware::MotorFeedback & feedback,
+  double now_s) const
+{
+  if (!opened_.load() || !std::isfinite(now_s)) {return false;}
+  const std::size_t index = indexFor(address);
+  if (index >= kNumJoints) {return false;}
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto & configured = calibration_[index].address;
+  const auto & snapshot = snapshots_[index];
+  feedback = {};
+  feedback.bus = configured.bus;
+  feedback.can_id = configured.can_id;
+  feedback.position = snapshot.position;
+  feedback.velocity = snapshot.velocity;
+  feedback.torque = snapshot.torque;
+  feedback.temperature_c = snapshot.mos_temperature_c;
+  feedback.rotor_temperature_c = snapshot.rotor_temperature_c;
+  feedback.fault_code = isHealthyStatus(snapshot.status) ? 0 : snapshot.status;
+  feedback.sequence = snapshot.sequence;
+  const double age = snapshot.online ?
+    std::chrono::duration<double>(now - snapshot.received_at).count() :
+    std::numeric_limits<double>::infinity();
+  feedback.timestamp = std::max(0.0, now_s - age);
+  feedback.health_valid = snapshot.online && isHealthyStatus(snapshot.status) &&
+    snapshot.mos_temperature_c >= -20.0F && snapshot.mos_temperature_c <= 100.0F &&
+    snapshot.rotor_temperature_c >= -20.0F && snapshot.rotor_temperature_c <= 100.0F;
+  return snapshot.online && std::isfinite(age) && age <= kFeedbackTimeout &&
+         feedback.health_valid;
+}
+
+bool DmMotorDriver::isEnabled(const dm1_hardware::MotorAddress & address) const noexcept
+{
+  const std::size_t index = indexFor(address);
+  if (index >= kNumJoints) {return false;}
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto & snapshot = snapshots_[index];
+  return snapshot.online &&
+    snapshot.status == static_cast<std::uint8_t>(MotorStatus::Enabled);
+}
+
 // 接收回调：验证 CAN 帧、匹配电机地址，并更新对应电机的最新快照。
 void DmMotorDriver::receive(std::uint8_t bus, const canfd_frame & frame) noexcept
 {
@@ -295,7 +366,7 @@ void DmMotorDriver::receive(std::uint8_t bus, const canfd_frame & frame) noexcep
 bool DmMotorDriver::sendMit(const dm1_hardware::MitFrame & frame)
 {
   // 设备未打开时禁止访问底层 CAN 总线。
-  if (!opened_.load()) {return false;}
+  if (!opened_.load() || frame.bus > 1 || !active_buses_[frame.bus]) {return false;}
   const dm1_hardware::MotorAddress address{frame.bus, frame.can_id, frame.master_id};
   const std::size_t index = indexFor(address);
   if (index >= kNumJoints || !std::isfinite(frame.position) ||
@@ -322,7 +393,8 @@ bool DmMotorDriver::sendCommand(
   const dm1_hardware::MotorAddress & address, std::uint8_t command)
 {
   // 目标地址必须属于已打开的驱动器和已登记的标定表。
-  if (!opened_.load() || address.can_id > CAN_SFF_MASK) {
+  if (!opened_.load() || address.bus > 1 || !active_buses_[address.bus] ||
+    address.can_id > CAN_SFF_MASK) {
     return false;
   }
   const auto index = indexFor(address);
@@ -335,6 +407,30 @@ bool DmMotorDriver::sendCommand(
     return false;
   }
   const can_frame output = encodeCommandFrame(configured, command);
+  return buses_[address.bus].write(&output);
+}
+
+bool DmMotorDriver::writeParameter(
+  const dm1_hardware::MotorAddress & address, std::uint8_t register_id,
+  std::uint32_t value)
+{
+  // DM 参数写入使用主站广播/参数命令 ID 0x7FF，不是电机物理控制 ID。
+  if (!opened_.load() || address.bus > 1 || !active_buses_[address.bus] ||
+    indexFor(address) >= kNumJoints)
+  {
+    return false;
+  }
+  can_frame output{};
+  output.can_id = CAN_SFF_MASK;
+  output.can_dlc = 8;
+  output.data[0] = static_cast<std::uint8_t>(address.can_id & 0xFFU);
+  output.data[1] = static_cast<std::uint8_t>((address.can_id >> 8) & 0xFFU);
+  output.data[2] = 0x55;  // 参数写入命令。
+  output.data[3] = register_id;
+  output.data[4] = static_cast<std::uint8_t>(value & 0xFFU);
+  output.data[5] = static_cast<std::uint8_t>((value >> 8) & 0xFFU);
+  output.data[6] = static_cast<std::uint8_t>((value >> 16) & 0xFFU);
+  output.data[7] = static_cast<std::uint8_t>((value >> 24) & 0xFFU);
   return buses_[address.bus].write(&output);
 }
 
@@ -390,6 +486,35 @@ bool DmMotorDriver::enableAll()
   return false;
 }
 
+bool DmMotorDriver::enableOne(const dm1_hardware::MotorAddress & address)
+{
+  // 单电机使能必须只操作已登记的目标地址。先切到 MIT 模式，
+  // 再重复发送使能命令；整个流程不发送 MIT 位置、速度、增益或力矩帧。
+  if (!opened_.load() || indexFor(address) >= kNumJoints) {return false;}
+  output_disabled_.store(false);
+  if (!writeParameter(address, 10, 1)) {return false;}
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    if (!sendCommand(address, 0xFC)) {return false;}
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return true;
+}
+
+bool DmMotorDriver::disableOne(const dm1_hardware::MotorAddress & address) noexcept
+{
+  if (!opened_.load() || indexFor(address) >= kNumJoints) {return false;}
+  bool sent = true;
+  for (int attempt = 0; attempt < kDisableAttempts; ++attempt) {
+    sent = sendCommand(address, 0xFD);
+    if (sent) {
+      output_disabled_.store(true);
+      return true;
+    }
+  }
+  return sent;
+}
+
 // 多次发送禁用命令，尽可能确保所有电机退出输出状态。
 void DmMotorDriver::disableAll() noexcept
 {
@@ -399,6 +524,13 @@ void DmMotorDriver::disableAll() noexcept
     bool all_sent = true;
     // 一次尝试向所有已标定电机发送禁用命令。
     for (const auto & item : calibration_) {
+      if (!active_buses_[item.address.bus]) {continue;}
+      if (single_target_.has_value() &&
+        (item.address.bus != single_target_->bus ||
+        item.address.can_id != single_target_->can_id))
+      {
+        continue;
+      }
       all_sent = sendCommand(item.address, 0xFD) && all_sent;
     }
     if (all_sent) {
@@ -416,6 +548,8 @@ void DmMotorDriver::close() noexcept
   if (!opened_.load()) {return;}
   disableAll();
   opened_.store(false);
+  active_buses_ = {{false, false}};
+  single_target_.reset();
   buses_[0].close();
   buses_[1].close();
 }

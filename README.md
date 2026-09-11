@@ -99,6 +99,86 @@ id
 `id` 输出中应包含 `dialout`。设备每次插拔后不需要再次执行
 `usermod`，但要重新确认设备名是否发生变化。
 
+### 三种硬件启动指令
+
+以下命令都应在新的终端中执行。先进入工作空间并加载 ROS 2 环境：
+
+```bash
+cd /home/simon/real_mitrl_dog/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+```
+
+#### 1. 只打开 IMU
+
+该模式不打开 CAN，不连接电机，也不会发送任何电机命令：
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --imu-only \
+  --imu /dev/ttyACM0
+```
+
+如果 IMU 使用稳定的 `/dev/serial/by-id/...` 路径，也可以将
+`/dev/ttyACM0` 替换为该路径。按 `Ctrl+C` 退出。
+
+#### 2. 只打开并使能一个电机
+
+先配置目标电机所在的 SocketCAN 总线。你当前测试的电机是 `can0`、物理
+CAN ID `0x01`，对应标定文件中的关节索引 `3`（`FL_hip`）：
+
+```bash
+sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh can0
+```
+
+然后启动单电机使能测试：
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --single-motor 3 can0 0x01 \
+  --enable-output
+```
+
+该命令只打开 `can0`，只操作目标电机，不会发送 MIT 位置、速度、增益或
+力矩控制帧。终端会打印使能帧发送结果；按 `Ctrl+C` 后会打印失能帧发送结果。
+这里的 `3`、`can0` 和 `0x01` 必须与标定文件中的同一行对应。
+
+如果测试的是 `can1`，先执行：
+
+```bash
+sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh can1
+```
+
+再把启动命令中的 `can0` 替换为 `can1`，并填写对应的关节索引和物理 CAN ID。
+
+#### 3. 打开全部硬件
+
+先配置两路 CAN：
+
+```bash
+sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh can0 can1
+```
+
+随后启动 IMU 和 12 路电机的完整硬件程序。下面的命令会允许电机输出，使用前
+必须固定机器人并准备好物理急停：
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --imu /dev/ttyACM0 \
+  --enable-output
+```
+
+首次联调建议先删除最后一行的 `--enable-output`，以只读方式确认 IMU 和 12 路
+反馈均正常；不带该参数时不会使能电机：
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --imu /dev/ttyACM0
+```
+
 ### 仅测试 IMU 接收（推荐首次使用）
 
 该模式不需要标定文件，也不会打开电机 CAN，更不会发送任何电机命令：

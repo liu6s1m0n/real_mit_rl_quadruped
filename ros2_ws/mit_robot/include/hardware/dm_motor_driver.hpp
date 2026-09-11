@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -67,16 +68,28 @@ public:
 
   /** @brief 打开两条 SocketCAN 总线，并清空启动前的旧反馈缓存。 */
   bool open();
+  /** @brief 只打开指定电机所在的 SocketCAN 总线。 */
+  bool openSingle(const dm1_hardware::MotorAddress & address);
   /** @brief 向全部电机发送零增益 MIT 帧，请求更新反馈。 */
   bool pollAll();
   /** @brief 非阻塞读取全部电机的最新反馈，并检查反馈是否在线且未超时。 */
   bool latest(FeedbackArray & feedback, double now_s) const;
+  /** @brief 非阻塞读取指定电机的最新反馈，并检查其是否新鲜健康。 */
+  bool latestOne(
+    const dm1_hardware::MotorAddress & address, dm1_hardware::MotorFeedback & feedback,
+    double now_s) const;
+  /** @brief 返回指定电机最近反馈是否明确报告为 Enabled。 */
+  bool isEnabled(const dm1_hardware::MotorAddress & address) const noexcept;
   /** @brief 校验并发送一帧已经转换到电机坐标的 MIT 命令。 */
   bool sendMit(const dm1_hardware::MitFrame & frame);
   /** @brief 向指定电机发送设置当前位置为零位的命令。 */
   bool setZero(const dm1_hardware::MotorAddress & address);
   /** @brief 使能全部电机，并等待反馈确认每台电机均已使能。 */
   bool enableAll();
+  /** @brief 只使能指定电机，并等待该电机反馈确认。 */
+  bool enableOne(const dm1_hardware::MotorAddress & address);
+  /** @brief 只禁用指定电机。 */
+  bool disableOne(const dm1_hardware::MotorAddress & address) noexcept;
   /** @brief 多次尝试发送禁用命令，关闭全部电机输出。 */
   void disableAll() noexcept;
   /** @brief 关闭电机输出并关闭两条 CAN 总线。 */
@@ -123,6 +136,10 @@ private:
   void receive(std::uint8_t bus, const canfd_frame & frame) noexcept;
   // 发送一个原始电机控制命令，例如使能、禁用或设置零位。
   bool sendCommand(const dm1_hardware::MotorAddress & address, std::uint8_t command);
+  // 写入单个电机的协议参数；单电机测试只用于切换到 MIT 模式。
+  bool writeParameter(
+    const dm1_hardware::MotorAddress & address, std::uint8_t register_id,
+    std::uint32_t value);
   // 检查 12 个电机是否都在线且已经进入使能状态。
   bool allMotorsEnabled() const noexcept;
   // 按总线和物理 CAN ID 查找标定数组中的电机索引。
@@ -132,6 +149,8 @@ private:
   damiao::SocketCAN buses_[2];  // 两条底层 SocketCAN 总线对象。
   mutable std::mutex mutex_;  // 保护 snapshots_ 的读写互斥量。
   std::array<Snapshot, kNumJoints> snapshots_{};  // 12 个电机的最新反馈快照。
+  std::array<bool, 2> active_buses_{{false, false}};  // 当前实际打开的总线。
+  std::optional<dm1_hardware::MotorAddress> single_target_;  // 单电机模式的唯一目标。
   std::atomic_bool opened_{false};  // CAN 总线是否已打开。
   std::atomic_bool output_disabled_{false};  // 是否已经完成禁用输出。
 };

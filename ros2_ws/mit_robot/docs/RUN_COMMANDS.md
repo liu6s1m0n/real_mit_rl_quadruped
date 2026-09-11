@@ -169,7 +169,46 @@ candump can0
 DM 电机通常控制帧使用物理 CAN ID，例如 `0x001`，反馈使用 Master ID，例如
 `0x011`。不要把 `candump` 当作使能命令，它只读取总线。
 
-## 5. 完整硬件主程序
+## 5. 单个电机使能测试
+
+单电机测试使用独立路径，不会启动 IMU、控制器或其他电机。命令格式为：
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --single-motor JOINT_INDEX BUS CAN_ID \
+  --enable-output
+```
+
+例如，标定表中第 0 个关节 `FR_hip` 是 `can0` 的物理 ID `4`：
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --single-motor 0 can0 4 \
+  --enable-output
+```
+
+程序只会向该电机发送一次 `0xFC` 使能命令；使能后不再发送任何 MIT 位置、速度、增益或力矩帧。
+按 `Ctrl+C` 会发送 `0xFD` 禁用目标电机后退出。
+`JOINT_INDEX`、`BUS` 和 `CAN_ID` 必须与标定文件对应行一致，否则程序拒绝启动。
+
+如需进行明确的低增益动作测试，必须额外添加 `--slow-move-test`：
+
+```bash
+ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --single-motor 3 can0 1 \
+  --enable-output \
+  --slow-move-test
+```
+
+该测试先切换电机到 MIT 模式并重复发送 5 次使能命令，再读取当前位置，然后在 5 秒内移动
+`30 deg`（`0.5236 rad`），使用 `Kp=20.0`、`Kd=0.2`、前馈力矩为零，到达目标后立即禁用。程序必须
+收到目标电机明确的 `Enabled` 状态才会开始动作；未指定
+`--slow-move-test` 时，单电机模式仍然只使能、不发送 MIT 动作帧。
+
+## 6. 完整硬件主程序
 
 标定文件：
 
