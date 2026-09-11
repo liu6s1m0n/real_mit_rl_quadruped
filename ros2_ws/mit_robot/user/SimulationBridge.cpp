@@ -408,6 +408,8 @@ void runPhysics(
     RobotRunner runner(model, data, robot_type);
     // 只有 RL 模式会使用这个策略；MPC 模式仍走原有 Locomotion 路径。
     runner.setRlPolicy(rl_policy);
+    const std::string rl_model_name = rl_policy == nullptr ?
+      "none" : rl_policy->metadata().name;
     StandingHeightReceiver height_receiver;
     teleop::OperatorCommandArbiter arbiter;
 
@@ -420,8 +422,7 @@ void runPhysics(
       "DM1",
       model->opt.timestep, slow_walking_forward_speed, fast_walking_forward_speed,
       walking_backward_speed, walking_lateral_speed, turning_yaw_rate,
-      // 换模型要修改的地方：启动日志模型编号
-      initial_walking_mode == ControlMode::WalkRl ? "RL model_4210" : "MPC");
+      initial_walking_mode == ControlMode::WalkRl ? rl_model_name.c_str() : "MPC");
 
     bool controller_ready = false;
     bool control_active = false;
@@ -485,8 +486,7 @@ void runPhysics(
             ControlMode::WalkRl : ControlMode::Locomotion;
           std::printf(
             "Walking controller selected: %s (takes effect on the next direction command)\n",
-            // 换模型要修改的地方：切换日志模型编号
-            walking_mode == ControlMode::WalkRl ? "RL model_4210" : "MPC");
+            walking_mode == ControlMode::WalkRl ? rl_model_name.c_str() : "MPC");
         } else {
           std::printf(
             "Controller selection ignored while walking; press Stand up first\n");
@@ -753,11 +753,19 @@ void SimulationBridge::setWalkingControllerMode(ControlMode mode)
   }
   if (mode == ControlMode::WalkRl) {
     walking_mode_ = mode;
-    rl_policy_ = std::make_shared<FrozenDwaqPolicy>();
+    rl_policy_ = std::make_shared<FrozenDwaqPolicy>(rl_model_);
     return;
   }
   throw std::invalid_argument(
           "walking controller mode must be ControlMode::Locomotion (MPC) or WalkRl (RL)");
+}
+
+void SimulationBridge::setRlModel(FrozenDwaqModel model)
+{
+  rl_model_ = model;
+  if (walking_mode_ == ControlMode::WalkRl) {
+    rl_policy_ = std::make_shared<FrozenDwaqPolicy>(rl_model_);
+  }
 }
 
 /**

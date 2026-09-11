@@ -185,6 +185,16 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
     return;
   }
   if (desired_state_.mode == mode) {return;}
+  // 只有在机身已经抬到站立高度、姿态和关节速度都稳定后才允许进入步态。
+  // 缺少这个门槛时，BalanceStand 一建立（机身仍接近趴卧高度）就会开始
+  // 迈步，WBC 关节 PD 把折叠的支撑腿瞬间蹬直，机身被弹起并反复触发
+  // Locomotion -> BalanceStand 回退，现场表现就是“走一步停一步”。
+  // RL 走的是下面的 pending 分支，自带的 rlEntryPostureStable() 更严格。
+  if ((mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic) &&
+    !locomotionEntryReady())
+  {
+    return;
+  }
   if (state_estimate_.valid) {
     // 切换站立/行走时只继承不可观测的水平原点和航向。roll/pitch 必须保持
     // 水平目标；若把切换瞬间的倾斜锁存下来，WBC 会主动维持后仰姿态。
@@ -311,6 +321,41 @@ bool RobotRunner::standingReady() const noexcept
   const FSM_StateName state = control_fsm_->currentStateName();
   return state == FSM_StateName::BALANCE_STAND ||
          state == FSM_StateName::LOCOMOTION;
+}
+
+bool RobotRunner::locomotionEntryReady() const noexcept
+{
+  if (!standingReady() || !state_estimate_.valid ||
+    !state_estimate_.rpy.allFinite())
+  {
+    return false;
+  }
+  // 机身必须已经抬到当前站立指令附近。允许 4 cm 的跟踪误差，既能容纳
+  // 真机的柔性下沉，又远高于趴卧高度（约 0.12 m）。
+  const float entry_height_floor = std::clamp(
+    standing_height_target_ - 0.04F,
+    minimumStandingHeight(), maximumStandingHeight());
+  if (measuredBodyHeight() < entry_height_floor) {return false;}
+  // 姿态和关节速度也必须稳定：过渡过程中 WBC 仍在抬升机身，此时起步会
+  // 和抬升轨迹叠加成冲击。
+  constexpr float kMaximumEntryRollPitch = 0.15F;
+  constexpr float kMaximumEntryJointSpeed = 1.0F;
+  if (std::abs(state_estimate_.rpy.x()) > kMaximumEntryRollPitch ||
+    std::abs(state_estimate_.rpy.y()) > kMaximumEntryRollPitch)
+  {
+    return false;
+  }
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    if (!joint_states_[leg].valid) {return false;}
+    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+      if (std::abs(joint_states_[leg].velocity(
+          static_cast<Eigen::Index>(joint))) > kMaximumEntryJointSpeed)
+      {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 bool RobotRunner::rlEntryReady() const noexcept

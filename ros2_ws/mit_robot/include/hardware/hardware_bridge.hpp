@@ -24,8 +24,8 @@ public:
     // --set-zero 维护操作。
     float startup_zero_tolerance_rad = 0.05F;
     float startup_stationary_velocity_rad_s = 0.05F;
-    // Require a short consecutive stable window before writing zeros or
-    // enabling physical output; one good frame is not sufficient on CAN/IMU.
+    // 在写入零位或使能物理输出前，要求连续多个采样周期保持稳定；
+    // 对 CAN/IMU 来说，仅有一个正常帧是不够的。
     int startup_stable_samples = 3;
     bool enable_output = false;
     bool keyboard_control = false;

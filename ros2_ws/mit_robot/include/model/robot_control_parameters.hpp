@@ -80,8 +80,8 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     T(0.30), T(0.42), T(0.04), T(0.12), T(0.08), T(2.0), T(0.00016), T(1.2),
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
     true, Vec3<T>::Zero(),
-    // 所有直接下发给电机的关节 PD 均与 RL 训练配置保持一致：
-    // Kp={100,100,100}、Kd={2,2,2}，并满足达妙 MIT 协议范围。
+    // 初始化、趴卧保持和 RL 直接关节 PD 使用 RL 训练配置：
+    // Kp={100,100,100}、Kd={2,2,2}。
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
     Vec3<T>(T(45), T(45), T(90)), Vec3<T>(T(8), T(8), T(14)),
     Vec3<T>(T(100), T(100), T(40)), Vec3<T>(T(18), T(18), T(8)),
@@ -92,7 +92,10 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
     Vec3<T>(T(220), T(220), T(300)), Vec3<T>(T(12), T(12), T(16)),
     Vec3<T>(T(70), T(70), T(35)), Vec3<T>(T(12), T(12), T(6)),
-    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    // MPC/WBC 行走的位置增益与 RL、BalanceStand 保持一致（Kp=100），
+    // 微分增益取达妙 MIT 协议上限 Kd=5：接触切换和横向扰动下需要这份
+    // 阻尼才不会起振（Kd=2 时一次 120 N 横向扰动就足以让机身被弹起）。
+    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(5), T(5), T(5)),
     T(0.075), T(0.24),
     T(0.02), std::size_t(45), std::size_t(6), T(0.25), T(0.05),
     T(0.15), T(3.0), T(30.0), T(97.0)};

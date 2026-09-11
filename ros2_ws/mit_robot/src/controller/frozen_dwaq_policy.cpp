@@ -5,8 +5,8 @@
 #include <cmath>
 #include <cstddef>
 
-/*换模型要修改的地方：生成头文件名*/
 #include "dm1_policy_4210.hpp"
+#include "dm1_policy_4245.hpp"
 
 namespace
 {
@@ -40,31 +40,79 @@ void applyElu(std::array<float, Size> & values) noexcept
   for (float & value : values) {value = elu(value);}
 }
 
-/*换模型要修改的地方：生成头文件 namespace*/
-const DenseLayer kEncoder0{
-  dm1_policy_4210::k_vae_encoder_encoder_0_weight.data(),
-  dm1_policy_4210::k_vae_encoder_encoder_0_bias.data(), 128, 270};
-const DenseLayer kEncoder2{
-  dm1_policy_4210::k_vae_encoder_encoder_2_weight.data(),
-  dm1_policy_4210::k_vae_encoder_encoder_2_bias.data(), 64, 128};
-const DenseLayer kLatentMu{
-  dm1_policy_4210::k_vae_latent_mu_weight.data(),
-  dm1_policy_4210::k_vae_latent_mu_bias.data(), 16, 64};
-const DenseLayer kVelocityMu{
-  dm1_policy_4210::k_vae_vel_mu_weight.data(),
-  dm1_policy_4210::k_vae_vel_mu_bias.data(), 3, 64};
-const DenseLayer kActor0{
-  dm1_policy_4210::k_actor_0_weight.data(),
-  dm1_policy_4210::k_actor_0_bias.data(), 512, 64};
-const DenseLayer kActor2{
-  dm1_policy_4210::k_actor_2_weight.data(),
-  dm1_policy_4210::k_actor_2_bias.data(), 256, 512};
-const DenseLayer kActor4{
-  dm1_policy_4210::k_actor_4_weight.data(),
-  dm1_policy_4210::k_actor_4_bias.data(), 128, 256};
-const DenseLayer kActor6{
-  dm1_policy_4210::k_actor_6_weight.data(),
-  dm1_policy_4210::k_actor_6_bias.data(), 12, 128};
+struct DwaqWeights
+{
+  DenseLayer encoder0;
+  DenseLayer encoder2;
+  DenseLayer latent_mu;
+  DenseLayer velocity_mu;
+  DenseLayer actor0;
+  DenseLayer actor2;
+  DenseLayer actor4;
+  DenseLayer actor6;
+  const char * model_name;
+  const char * checkpoint_sha256;
+  bool squash_action_mean;
+};
+
+const DwaqWeights kModel4210Weights{
+  {
+    dm1_policy_4210::k_vae_encoder_encoder_0_weight.data(),
+    dm1_policy_4210::k_vae_encoder_encoder_0_bias.data(), 128, 270},
+  {
+    dm1_policy_4210::k_vae_encoder_encoder_2_weight.data(),
+    dm1_policy_4210::k_vae_encoder_encoder_2_bias.data(), 64, 128},
+  {
+    dm1_policy_4210::k_vae_latent_mu_weight.data(),
+    dm1_policy_4210::k_vae_latent_mu_bias.data(), 16, 64},
+  {
+    dm1_policy_4210::k_vae_vel_mu_weight.data(),
+    dm1_policy_4210::k_vae_vel_mu_bias.data(), 3, 64},
+  {
+    dm1_policy_4210::k_actor_0_weight.data(),
+    dm1_policy_4210::k_actor_0_bias.data(), 512, 64},
+  {
+    dm1_policy_4210::k_actor_2_weight.data(),
+    dm1_policy_4210::k_actor_2_bias.data(), 256, 512},
+  {
+    dm1_policy_4210::k_actor_4_weight.data(),
+    dm1_policy_4210::k_actor_4_bias.data(), 128, 256},
+  {
+    dm1_policy_4210::k_actor_6_weight.data(),
+    dm1_policy_4210::k_actor_6_bias.data(), 12, 128},
+  "model_4210", kDm1FlatCheckpointSha256, dm1_policy_4210::kSquashActionMean};
+
+const DwaqWeights kModel4245Weights{
+  {
+    dm1_policy_4245::k_vae_encoder_encoder_0_weight.data(),
+    dm1_policy_4245::k_vae_encoder_encoder_0_bias.data(), 128, 270},
+  {
+    dm1_policy_4245::k_vae_encoder_encoder_2_weight.data(),
+    dm1_policy_4245::k_vae_encoder_encoder_2_bias.data(), 64, 128},
+  {
+    dm1_policy_4245::k_vae_latent_mu_weight.data(),
+    dm1_policy_4245::k_vae_latent_mu_bias.data(), 16, 64},
+  {
+    dm1_policy_4245::k_vae_vel_mu_weight.data(),
+    dm1_policy_4245::k_vae_vel_mu_bias.data(), 3, 64},
+  {
+    dm1_policy_4245::k_actor_0_weight.data(),
+    dm1_policy_4245::k_actor_0_bias.data(), 512, 64},
+  {
+    dm1_policy_4245::k_actor_2_weight.data(),
+    dm1_policy_4245::k_actor_2_bias.data(), 256, 512},
+  {
+    dm1_policy_4245::k_actor_4_weight.data(),
+    dm1_policy_4245::k_actor_4_bias.data(), 128, 256},
+  {
+    dm1_policy_4245::k_actor_6_weight.data(),
+    dm1_policy_4245::k_actor_6_bias.data(), 12, 128},
+  "model_4245", kDm1YawRecoveryCheckpointSha256, dm1_policy_4245::kSquashActionMean};
+
+const DwaqWeights & weightsFor(FrozenDwaqModel model)
+{
+  return model == FrozenDwaqModel::Model4245 ? kModel4245Weights : kModel4210Weights;
+}
 }  // namespace
 
 bool FrozenDwaqPolicy::infer(
@@ -72,6 +120,7 @@ bool FrozenDwaqPolicy::infer(
   const std::array<float, kRlObservationSize * kRlHistoryLength> & history,
   std::array<float, kRlActionSize> & action)
 {
+  const DwaqWeights & weights = weightsFor(model_);
   for (const float value : observation) {
     if (!std::isfinite(value) || std::abs(value) > 100.0F) {return false;}
   }
@@ -101,14 +150,14 @@ bool FrozenDwaqPolicy::infer(
   }
   std::array<float, 128> encoder_hidden{};
   std::array<float, 64> encoded{};
-  dense(kEncoder0, deployment_history.data(), encoder_hidden.data());
+  dense(weights.encoder0, deployment_history.data(), encoder_hidden.data());
   applyElu(encoder_hidden);
-  dense(kEncoder2, encoder_hidden.data(), encoded.data());
+  dense(weights.encoder2, encoder_hidden.data(), encoded.data());
 
   std::array<float, 16> latent_mu{};
   std::array<float, 3> velocity_mu{};
-  dense(kLatentMu, encoded.data(), latent_mu.data());
-  dense(kVelocityMu, encoded.data(), velocity_mu.data());
+  dense(weights.latent_mu, encoded.data(), latent_mu.data());
+  dense(weights.velocity_mu, encoded.data(), velocity_mu.data());
   for (float & value : latent_mu) {value = std::clamp(value, -10.0F, 10.0F);}
   for (float & value : velocity_mu) {value = std::clamp(value, -10.0F, 10.0F);}
 
@@ -124,14 +173,14 @@ bool FrozenDwaqPolicy::infer(
   std::array<float, 512> actor_hidden0{};
   std::array<float, 256> actor_hidden2{};
   std::array<float, 128> actor_hidden4{};
-  dense(kActor0, actor_input.data(), actor_hidden0.data());
+  dense(weights.actor0, actor_input.data(), actor_hidden0.data());
   applyElu(actor_hidden0);
-  dense(kActor2, actor_hidden0.data(), actor_hidden2.data());
+  dense(weights.actor2, actor_hidden0.data(), actor_hidden2.data());
   applyElu(actor_hidden2);
-  dense(kActor4, actor_hidden2.data(), actor_hidden4.data());
+  dense(weights.actor4, actor_hidden2.data(), actor_hidden4.data());
   applyElu(actor_hidden4);
-  dense(kActor6, actor_hidden4.data(), action.data());
-  if (dm1_policy_4210::kSquashActionMean) {
+  dense(weights.actor6, actor_hidden4.data(), action.data());
+  if (weights.squash_action_mean) {
     for (float & value : action) {value = std::tanh(value);}
   }
   for (const float value : action) {
@@ -142,7 +191,7 @@ bool FrozenDwaqPolicy::infer(
 
 RlPolicyMetadata FrozenDwaqPolicy::metadata() const
 {
-  /*换模型要修改的地方：模型兼容槽位名；若修改需同步 FSM 校验*/
   return RlPolicyMetadata{
-    "model_4210", kDm1FlatCheckpointSha256, false, true, true};
+    weightsFor(model_).model_name, weightsFor(model_).checkpoint_sha256,
+    false, true, true};
 }

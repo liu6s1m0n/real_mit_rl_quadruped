@@ -35,8 +35,10 @@ EXPECTED = {
     "vae.vel_mu.weight": (3, 64),
     "vae.vel_mu.bias": (3,),
 }
-# 换模型要修改的地方：新 checkpoint 的 SHA256
-EXPECTED_SHA256 = "3f4c65ec73d435b7fb16ad24bb240114c01b79502c6eb1037daa887740a0e06b"
+EXPECTED_SHA256 = {
+    "4210": "3f4c65ec73d435b7fb16ad24bb240114c01b79502c6eb1037daa887740a0e06b",
+    "4245": "65700456169a3d7d17ab279fb0c48b6b306717345f8ae90dbc2218e1384a6f34",
+}
 
 
 def format_array(values: list[float], indent: str = "  ") -> str:
@@ -51,12 +53,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model-id", choices=sorted(EXPECTED_SHA256), default="4210")
+    parser.add_argument("--expected-sha256")
     args = parser.parse_args()
 
     checkpoint_sha256 = hashlib.sha256(args.checkpoint.read_bytes()).hexdigest()
-    if checkpoint_sha256 != EXPECTED_SHA256:
+    expected_sha256 = args.expected_sha256 or EXPECTED_SHA256[args.model_id]
+    if checkpoint_sha256 != expected_sha256:
         raise ValueError(
-            f"unexpected model_4210 SHA256: {checkpoint_sha256} != {EXPECTED_SHA256}"
+            f"unexpected model_{args.model_id} SHA256: "
+            f"{checkpoint_sha256} != {expected_sha256}"
         )
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -79,10 +85,11 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as output:
-        # 换模型要修改的地方：模型编号和生成头文件 namespace
-        output.write("// Generated from model_4210.pt; do not edit.\n")
+        output.write(
+            f"// Generated from model_{args.model_id}.pt; do not edit.\n"
+        )
         output.write("#pragma once\n\n#include <array>\n\n")
-        output.write("namespace dm1_policy_4210 {\n\n")
+        output.write(f"namespace dm1_policy_{args.model_id} {{\n\n")
         output.write("inline constexpr bool kSquashActionMean = false;\n\n")
         for name, shape in EXPECTED.items():
             identifier = "k_" + name.replace(".", "_")
@@ -92,7 +99,7 @@ def main() -> None:
             )
             output.write(format_array(values))
             output.write("\n}};\n\n")
-        output.write("}  // namespace dm1_policy_4210\n")
+        output.write(f"}}  // namespace dm1_policy_{args.model_id}\n")
 
 
 if __name__ == "__main__":

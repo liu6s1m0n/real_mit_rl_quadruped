@@ -59,6 +59,8 @@ set(MYMIT_RL_PYTHON "/opt/rl-gym/venv/bin/python" CACHE FILEPATH
 # 换模型要修改的地方：checkpoint 路径
 set(MYMIT_DM1_RL_CHECKPOINT_DEFAULT
   "/home/simon/RL_Robot/frozen_models/dm1_trot_directional_hip_refine_model4210/model_4210.pt")
+set(MYMIT_DM1_RL_CHECKPOINT_4245_DEFAULT
+  "/home/simon/RL_Robot/logs/trot/dm1_trot_directional_yaw_recovery_refine_4235/Sep10_17-51-24_directional_yaw_recovery_from4235_10_no_mirror/model_4245.pt")
 # Migrate an existing build cache that still points at the old model, while
 # preserving an explicitly supplied custom checkpoint.
 if(NOT DEFINED MYMIT_DM1_RL_CHECKPOINT OR
@@ -78,9 +80,17 @@ if(NOT EXISTS "${MYMIT_DM1_RL_CHECKPOINT}")
   message(FATAL_ERROR
     "MYMIT_DM1_RL_CHECKPOINT does not exist: ${MYMIT_DM1_RL_CHECKPOINT}")
 endif()
+set(MYMIT_DM1_RL_CHECKPOINT_4245 "${MYMIT_DM1_RL_CHECKPOINT_4245_DEFAULT}"
+  CACHE FILEPATH "Frozen DM1 model_4245 checkpoint")
+if(NOT EXISTS "${MYMIT_DM1_RL_CHECKPOINT_4245}")
+  message(FATAL_ERROR
+    "MYMIT_DM1_RL_CHECKPOINT_4245 does not exist: ${MYMIT_DM1_RL_CHECKPOINT_4245}")
+endif()
 # 换模型要修改的地方：生成头文件名
 set(MYMIT_DM1_RL_HEADER
   "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_4210.hpp")
+set(MYMIT_DM1_RL_HEADER_4245
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_4245.hpp")
 add_custom_command(
   OUTPUT "${MYMIT_DM1_RL_HEADER}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory
@@ -88,6 +98,7 @@ add_custom_command(
   COMMAND "${MYMIT_RL_PYTHON}"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
     --checkpoint "${MYMIT_DM1_RL_CHECKPOINT}"
+    --model-id 4210
     --output "${MYMIT_DM1_RL_HEADER}"
   DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
@@ -95,7 +106,23 @@ add_custom_command(
   COMMENT "Exporting frozen DM1 model_4210 for C++ RL inference"
   VERBATIM
 )
-add_custom_target(mymit_robot_frozen_rl_policy DEPENDS "${MYMIT_DM1_RL_HEADER}")
+add_custom_command(
+  OUTPUT "${MYMIT_DM1_RL_HEADER_4245}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+  COMMAND "${MYMIT_RL_PYTHON}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
+    --checkpoint "${MYMIT_DM1_RL_CHECKPOINT_4245}"
+    --model-id 4245
+    --output "${MYMIT_DM1_RL_HEADER_4245}"
+  DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
+    "${MYMIT_DM1_RL_CHECKPOINT_4245}"
+  COMMENT "Exporting frozen DM1 model_4245 for C++ RL inference"
+  VERBATIM
+)
+add_custom_target(mymit_robot_frozen_rl_policy DEPENDS
+  "${MYMIT_DM1_RL_HEADER}" "${MYMIT_DM1_RL_HEADER_4245}")
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FootContact.msg"

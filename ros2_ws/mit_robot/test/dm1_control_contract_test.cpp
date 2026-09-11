@@ -57,7 +57,7 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
   }
 }
 
-TEST(Dm1Contract, DirectJointPdProfilesMatchRlTrainingGains)
+TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
 {
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
   EXPECT_TRUE(parameters.initialization_kp.isApprox(
@@ -68,6 +68,12 @@ TEST(Dm1Contract, DirectJointPdProfilesMatchRlTrainingGains)
       Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.prone_home_joint_kd.isApprox(
       Vec3<float>(2.0F, 2.0F, 2.0F)));
+  // 机身姿态环属于 BalanceStand 的 WBC 任务增益，与 RL 的直接关节 PD 不同；
+  // 保留 MPC/WBC 已验证的阻尼，避免站立姿态在接触切换时欠阻尼。
+  EXPECT_TRUE(parameters.balance_body_orientation_kp.isApprox(
+      Vec3<float>(100.0F, 100.0F, 40.0F)));
+  EXPECT_TRUE(parameters.balance_body_orientation_kd.isApprox(
+      Vec3<float>(18.0F, 18.0F, 8.0F)));
   EXPECT_TRUE(parameters.balance_joint_kp.isApprox(
       Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.balance_joint_kd.isApprox(
@@ -79,7 +85,42 @@ TEST(Dm1Contract, DirectJointPdProfilesMatchRlTrainingGains)
   EXPECT_TRUE(parameters.locomotion_joint_kp.isApprox(
       Vec3<float>(100.0F, 100.0F, 100.0F)));
   EXPECT_TRUE(parameters.locomotion_joint_kd.isApprox(
-      Vec3<float>(2.0F, 2.0F, 2.0F)));
+      Vec3<float>(5.0F, 5.0F, 5.0F)));
+}
+
+// 所有会被写进 command.kp_joint/kd_joint、最终原样下发给 DM 电机的增益，
+// 都必须落在 MIT 协议 0..500 / 0..5 范围内；越界会让 dm1_mit_interface
+// 的 validateCommands() 直接 fail() 并 disableAll()，真机上等于整车失能。
+TEST(Dm1Contract, MotorFacingJointGainsStayInsideMitProtocolRange)
+{
+  const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
+  // 直接下发给电机的关节 PD：初始化/趴卧保持、BalanceStand、StandUp 收腿、
+  // MPC/WBC 行走（LieDown 折叠复用），以及 RlControlStep() 中写死的 RL 增益。
+  const std::array<Vec3<float>, 5> kp_sets{
+    parameters.prone_home_joint_kp,
+    parameters.balance_joint_kp,
+    parameters.stand_up_joint_kp,
+    parameters.locomotion_joint_kp,
+    Vec3<float>(100.0F, 100.0F, 100.0F)};
+  const std::array<Vec3<float>, 5> kd_sets{
+    parameters.prone_home_joint_kd,
+    parameters.balance_joint_kd,
+    parameters.stand_up_joint_kd,
+    parameters.locomotion_joint_kd,
+    Vec3<float>(2.0F, 2.0F, 2.0F)};
+  for (const auto & set : kp_sets) {
+    EXPECT_TRUE((set.array() >= 0.0F).all());
+    EXPECT_TRUE((set.array() <= dm1_hardware::mit_protocol::kKpMax).all())
+      << "Kp set exceeds the DM MIT protocol limit";
+  }
+  for (const auto & set : kd_sets) {
+    EXPECT_TRUE((set.array() >= 0.0F).all());
+    EXPECT_TRUE((set.array() <= dm1_hardware::mit_protocol::kKdMax).all())
+      << "Kd set exceeds the DM MIT protocol limit";
+  }
+  // 行走的位置增益必须与 RL/BalanceStand 一致，切换时只有阻尼不同。
+  EXPECT_TRUE(parameters.locomotion_joint_kp.isApprox(
+      parameters.balance_joint_kp));
 }
 
 TEST(Dm1Contract, AnalyticKinematicsIsFiniteAtHome)
@@ -139,6 +180,27 @@ TEST(Dm1Contract, FrozenModel4210AdapterProducesFiniteActions)
   const RlPolicyMetadata metadata = policy.metadata();
   EXPECT_EQ(metadata.name, "model_4210");
   EXPECT_EQ(metadata.checkpoint_sha256, kDm1FlatCheckpointSha256);
+  EXPECT_TRUE(metadata.frozen);
+  EXPECT_TRUE(metadata.uses_vae_posterior_mean);
+  EXPECT_FALSE(metadata.supports_stairs);
+
+  std::array<float, kRlObservationSize> observation{};
+  std::array<float, kRlObservationSize * kRlHistoryLength> history{};
+  std::array<float, kRlActionSize> action{};
+  EXPECT_TRUE(policy.infer(observation, history, action));
+  EXPECT_TRUE(
+    std::all_of(
+      action.begin(), action.end(), [](float value) {
+        return std::isfinite(value);
+      }));
+}
+
+TEST(Dm1Contract, FrozenModel4245AdapterProducesFiniteActions)
+{
+  FrozenDwaqPolicy policy(FrozenDwaqModel::Model4245);
+  const RlPolicyMetadata metadata = policy.metadata();
+  EXPECT_EQ(metadata.name, "model_4245");
+  EXPECT_EQ(metadata.checkpoint_sha256, kDm1YawRecoveryCheckpointSha256);
   EXPECT_TRUE(metadata.frozen);
   EXPECT_TRUE(metadata.uses_vae_posterior_mean);
   EXPECT_FALSE(metadata.supports_stairs);

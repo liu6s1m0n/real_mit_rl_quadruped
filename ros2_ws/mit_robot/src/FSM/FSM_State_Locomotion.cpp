@@ -434,9 +434,11 @@ void FSM_State_Locomotion<T>::RlControlStep()
   const bool expected_checkpoint =
     (active_mode_ == ControlMode::StairsRl && metadata.name == "model_4700" &&
     metadata.checkpoint_sha256 == kDm1StairsCheckpointSha256) ||
-    /*换模型要修改的地方：RL 模型兼容槽位名；需与 metadata() 保持一致*/
-    (active_mode_ == ControlMode::WalkRl && metadata.name == "model_4210" &&
-    metadata.checkpoint_sha256 == kDm1FlatCheckpointSha256);
+    (active_mode_ == ControlMode::WalkRl &&
+    ((metadata.name == "model_4210" &&
+      metadata.checkpoint_sha256 == kDm1FlatCheckpointSha256) ||
+    (metadata.name == "model_4245" &&
+      metadata.checkpoint_sha256 == kDm1YawRecoveryCheckpointSha256)));
   if (!expected_checkpoint || !metadata.frozen ||
     !metadata.uses_vae_posterior_mean ||
     (active_mode_ == ControlMode::StairsRl && !metadata.supports_stairs))

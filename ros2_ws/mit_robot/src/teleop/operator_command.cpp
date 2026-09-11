@@ -7,9 +7,9 @@ std::optional<OperatorCommand> decodeKey(int key)
 {
   OperatorCommand command;
   command.received_at = std::chrono::steady_clock::now();
-  // Keep this dispatch as an explicit decision tree. Besides making the
-  // terminal mapping easy to audit, it avoids a position-dependent jump-table
-  // ABI hazard when CommandType entries are inserted between existing values.
+  // 保持这个分支为显式决策树。这样既便于审查终端按键映射，
+  // 也可以避免在现有枚举值之间插入 CommandType 成员时，
+  // 产生依赖位置的跳转表 ABI 风险。
   if (key == 'u' || key == 'U') {
     command.type = CommandType::EnableMotors;
   } else if (key == '0') {
@@ -79,10 +79,9 @@ void OperatorCommandArbiter::apply(const OperatorCommand & command) noexcept
       lock();
       return;
     case CommandType::KeyboardFailure:
-      // This is an input-source failure, not a motor/controller failure. It
-      // returns the arbiter to the recoverable locked state; the owner may
-      // continue accepting GUI commands or re-enable after the source is
-      // repaired. Physical/hardware faults still use markFault().
+      // 这是输入源故障，不是电机或控制器故障。它会让仲裁器回到可恢复的锁定状态；
+      // 拥有该仲裁器的模块仍可以继续接受 GUI 命令，或在输入源修复后重新使能。
+      // 物理/硬件故障仍然使用 markFault() 处理。
       lock();
       return;
     case CommandType::EnableMotors:

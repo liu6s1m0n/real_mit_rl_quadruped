@@ -1,6 +1,6 @@
 /**
  * @file keyboard_teleop.hpp
- * @brief Non-blocking, RAII-managed terminal keyboard producer.
+ * @brief 由 RAII 管理的非阻塞终端键盘输入生产器。
  */
 #ifndef MYMIT_ROBOT_TELEOP_KEYBOARD_TELEOP_HPP_
 #define MYMIT_ROBOT_TELEOP_KEYBOARD_TELEOP_HPP_
@@ -25,14 +25,14 @@ public:
   KeyboardTeleop(const KeyboardTeleop &) = delete;
   KeyboardTeleop & operator=(const KeyboardTeleop &) = delete;
 
-  /** Start raw terminal capture. Returns false when stdin is not a TTY. */
+  /** 启动原始终端捕获；当标准输入不是 TTY 时返回 false。 */
   bool start();
   void stop() noexcept;
-  /** Inject a key received by the MuJoCo/GLFW window. */
+  /** 注入由 MuJoCo/GLFW 窗口接收到的按键。 */
   void injectKey(int key);
-  /** Consume terminal commands without consuming window commands. */
+  /** 获取终端命令，但不获取窗口命令。 */
   std::vector<OperatorCommand> consume();
-  /** Consume commands produced by the focused MuJoCo/GLFW window. */
+  /** 获取当前聚焦的 MuJoCo/GLFW 窗口产生的命令。 */
   std::vector<OperatorCommand> consumeWindow();
   bool available() const noexcept {return available_;}
   bool healthy() const noexcept {return !available_ || thread_alive_;}

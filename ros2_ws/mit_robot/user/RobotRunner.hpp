@@ -105,6 +105,14 @@ public:
   }
   /** 当前是否已经处在允许行走的站立控制状态。 */
   bool standingReady() const noexcept;
+  /**
+   * @brief MPC/经典行走的入场门槛：机身已经抬到站立指令附近且姿态稳定。
+   *
+   * RL 入场有 rlEntryPostureStable() 的同类约束；如果缺失这个门槛，机身
+   * 还停在趴卧高度时就开始迈步，折叠的支撑腿会被 WBC 关节 PD 瞬间蹬直，
+   * 表现为“走一步停一步”。
+   */
+  bool locomotionEntryReady() const noexcept;
   /** RL 入场姿态是否已经连续满足高度、关节和姿态条件。 */
   bool rlEntryReady() const noexcept;
 private:

@@ -25,8 +25,8 @@ struct RobotSelection
   float standing_height;      ///< 启动后的默认站立高度，m。
   float lateral_speed;        ///< 该机型经过接触回归验证的默认横移速度，m/s。
   const char * render_gpu;    ///< OpenGL 渲染设备策略：auto 或 nvidia。
-  // 换模型要修改的地方：模型编号仅用于参数说明
-  ControlMode walking_mode;   ///< MPC 或 frozen model_4210 RL。
+  ControlMode walking_mode;   ///< MPC 或 frozen RL。
+  FrozenDwaqModel rl_model;   ///< RL 权重版本。
 };
 
 RobotSelection selectRobot(int argc, char ** argv)
@@ -35,6 +35,7 @@ RobotSelection selectRobot(int argc, char ** argv)
   // 选项，遇到 --ros-args 后把剩余参数完整留给 ROS 2。
   const char * render_gpu = "auto";
   ControlMode walking_mode = ControlMode::Locomotion;
+  FrozenDwaqModel rl_model = FrozenDwaqModel::Model4210;
   for (int index = 1; index < argc; ++index) {
     if (std::strcmp(argv[index], "--ros-args") == 0) {break;}
     if (std::strcmp(argv[index], "--render-gpu") == 0) {
@@ -45,7 +46,8 @@ RobotSelection selectRobot(int argc, char ** argv)
     } else if (std::strcmp(argv[index], "--walk-mode") == 0) {
       if (index + 1 >= argc) {
         throw std::invalid_argument(
-                "usage: mymit_robot_user [--walk-mode mpc|rl] [--render-gpu nvidia|auto]");
+                "usage: mymit_robot_user [--walk-mode mpc|rl] "
+                "[--rl-model 4210|4245] [--render-gpu nvidia|auto]");
       }
       const char * mode = argv[++index];
       if (std::strcmp(mode, "mpc") == 0) {
@@ -55,9 +57,22 @@ RobotSelection selectRobot(int argc, char ** argv)
       } else {
         throw std::invalid_argument("walk mode must be mpc or rl");
       }
+    } else if (std::strcmp(argv[index], "--rl-model") == 0) {
+      if (index + 1 >= argc) {
+        throw std::invalid_argument("rl model must be 4210 or 4245");
+      }
+      const char * model = argv[++index];
+      if (std::strcmp(model, "4210") == 0) {
+        rl_model = FrozenDwaqModel::Model4210;
+      } else if (std::strcmp(model, "4245") == 0) {
+        rl_model = FrozenDwaqModel::Model4245;
+      } else {
+        throw std::invalid_argument("rl model must be 4210 or 4245");
+      }
     } else {
       throw std::invalid_argument(
-              "usage: mymit_robot_user [--walk-mode mpc|rl] [--render-gpu nvidia|auto]");
+              "usage: mymit_robot_user [--walk-mode mpc|rl] "
+              "[--rl-model 4210|4245] [--render-gpu nvidia|auto]");
     }
   }
 
@@ -68,7 +83,7 @@ RobotSelection selectRobot(int argc, char ** argv)
   }
   return {
     MYMIT_ROBOT_DM1_SCENE_PATH, 0.39F, kDm1WalkingLateralSpeed, render_gpu,
-    walking_mode};
+    walking_mode, rl_model};
 }
 
 /**
@@ -139,6 +154,7 @@ int main(int argc, char ** argv)
     configureDesktopSession();
     configureGpuRendering(robot.render_gpu);
     SimulationBridge bridge(robot.scene_path, RobotType::DM1);
+    bridge.setRlModel(robot.rl_model);
     bridge.setWalkingControllerMode(robot.walking_mode);
     bridge.setStandingHeight(robot.standing_height);
     bridge.setSlowWalkingForwardSpeed(kSlowWalkingForwardSpeed);
