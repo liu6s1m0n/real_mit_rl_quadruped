@@ -79,7 +79,7 @@ struct Arguments
           message +
           "\n用法: hardware_main --calibration FILE [--can0 can0] [--can1 can1] "
           "[--imu auto|DEVICE] [--control-dt 0.002] "
-          "[--zero-tolerance 0.05]（启动时零位允许误差窗口） "
+          "[--zero-tolerance 0.05]（键盘解锁/零位维护容差） "
           "[--enable-output | --keyboard-control] [--stand-up] [--set-zero] "
           "[--imu-only | --motor-only] "
           "[--poll-feedback BUS CAN_ID] "
@@ -730,9 +730,8 @@ int main(int argc, char ** argv)
     } else if (arguments.enable_output) {
       imu_log::print(
         imu_log::Level::Warning,
-        "DM1 控制启动: 所有关节必须处于 %.3f rad 零位窗口内；"
-        "启动过程不会修改电机参数。\n",
-        arguments.zero_tolerance_rad);
+        "DM1 控制启动: 将先验证 IMU/反馈静止状态；使能后执行平滑回零，"
+        "启动过程不会修改电机参数。\n");
     } else {
       imu_log::print(
         imu_log::Level::Info,

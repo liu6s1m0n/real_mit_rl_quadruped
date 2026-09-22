@@ -449,8 +449,11 @@ colcon test-result --verbose
 
 - 工作模式：FDCAN
 - 仲裁域波特率：1 Mbps
-- 数据域波特率：1 Mbps（Linux 要求不低于仲裁域；DM 电机帧仍使用经典 CAN）
-- 采样点：75%
+- 数据域波特率：5 Mbps
+- 仲裁域采样点：75%；数据域采样点：87.5%
+
+当前 DM 电机驱动仍发送 8 字节经典 CAN 帧；因此实际电机帧使用仲裁域
+1 Mbps，5 Mbps 数据域参数仅在发送带 BRS 的 CAN-FD 帧时生效。
 
 ```bash
 sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh
@@ -462,14 +465,14 @@ sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh
 sudo ip link set can0 down
 sudo ip link set can0 type can \
   bitrate 1000000 sample-point 0.75 \
-  dbitrate 1000000 dsample-point 0.75 \
+  dbitrate 5000000 dsample-point 0.875 \
   fd on loopback off
 sudo ip link set can0 up
 
 sudo ip link set can1 down
 sudo ip link set can1 type can \
   bitrate 1000000 sample-point 0.75 \
-  dbitrate 1000000 dsample-point 0.75 \
+  dbitrate 5000000 dsample-point 0.875 \
   fd on loopback off
 sudo ip link set can1 up
 ```

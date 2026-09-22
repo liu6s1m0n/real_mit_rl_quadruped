@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 #include <utility>
 
@@ -645,6 +646,7 @@ bool RobotRunner::run()
     gait_scheduler_.gait_data.estimatorContactProbabilities());
   /*运行状态估计器。如果失败：*/
   if (!state_estimator_->run()) {
+    std::fprintf(stderr, "RobotRunner 失败：状态估计器未产生有效状态。\n");
     disableCommands();
     return false;
   }
@@ -653,10 +655,15 @@ bool RobotRunner::run()
   state_estimate_ = state_estimator_->result();
   joint_states_ = state_estimator_->orientationEstimator().jointStates();
   bool feedback_valid = true;
-  for (const auto & state : joint_states_) {
-    feedback_valid = leg_controller_.updateData(state) && feedback_valid;
+  for (std::size_t leg = 0; leg < joint_states_.size(); ++leg) {
+    const bool leg_valid = leg_controller_.updateData(joint_states_[leg]);
+    if (!leg_valid) {
+      std::fprintf(stderr, "RobotRunner 失败：第 %zu 条腿的关节反馈无效。\n", leg);
+    }
+    feedback_valid = leg_valid && feedback_valid;
   }
   if (!feedback_valid) {
+    std::fprintf(stderr, "RobotRunner 失败：关节反馈校验未通过。\n");
     disableCommands();
     return false;
   }
@@ -664,7 +671,11 @@ bool RobotRunner::run()
   // 3. 刚启动或 Reset 后先把关节平滑带到名义姿态，再启用全身控制。
   if (!jointInitializationComplete()) {
     prepareJointInitialization();
-    return collectJointCommands();
+    const bool commands_valid = collectJointCommands();
+    if (!commands_valid) {
+      std::fprintf(stderr, "RobotRunner 失败：关节初始化控制命令无效。\n");
+    }
+    return commands_valid;
   }
 
   // Stand, not motor unlock, starts this path. Keep the measured posture while
@@ -681,7 +692,11 @@ bool RobotRunner::run()
       motion_start_hold_active_ = false;
       motion_start_hold_release_pending_ = false;
     }
-    return collectJointCommands();
+    const bool commands_valid = collectJointCommands();
+    if (!commands_valid) {
+      std::fprintf(stderr, "RobotRunner 失败：运动启动保持控制命令无效。\n");
+    }
+    return commands_valid;
   }
 
   // 4. 首次进入闭环时从当前水平位置和航向建立参考。初始化期间产生的
@@ -734,5 +749,9 @@ bool RobotRunner::run()
     rl_entry_posture_latched_ = true;
     control_fsm_->setRlEntryPostureActive(false);
   }
-  return collectJointCommands();
+  const bool commands_valid = collectJointCommands();
+  if (!commands_valid) {
+    std::fprintf(stderr, "RobotRunner 失败：FSM 控制命令无效。\n");
+  }
+  return commands_valid;
 }

@@ -1,5 +1,7 @@
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <cmath>
 
 #include <gtest/gtest.h>
 
@@ -32,7 +34,8 @@ public:
       auto & motor = sample.motors[index];
       motor.bus = static_cast<std::uint8_t>(index / 6);
       motor.can_id = static_cast<std::uint16_t>(index % 6 + 1);
-      motor.position = zeroed ? 0.0F : startup_offset;
+      motor.position = zeroed ? 0.0F :
+        (seen_positions[index] ? last_positions[index] : startup_offset);
       motor.velocity = read_count == transient_sample ? transient_velocity : 0.0F;
       motor.sequence =
         (repeat_sequence || (zeroed && repeat_after_zero)) ? 1U :
@@ -52,10 +55,39 @@ public:
     return true;
   }
 
-  bool sendMit(const dm1_hardware::MitFrame &) override {return true;}
+  bool sendMit(const dm1_hardware::MitFrame & frame) override
+  {
+    ++send_count;
+    const auto index = static_cast<std::size_t>(frame.bus) * 6 + frame.can_id - 1;
+    if (index < last_positions.size()) {
+      if (!seen_positions[index]) {
+        first_positions[index] = frame.position;
+        seen_positions[index] = true;
+      }
+      last_positions[index] = frame.position;
+    }
+    if (stop_after_send_count > 0 && send_count >= stop_after_send_count) {
+      stop_requested_.store(true);
+    }
+    return true;
+  }
+  bool readImu(ImuData<float> & sample, double now_s) override
+  {
+    dm1_hardware::HardwareSample combined;
+    const bool result = read(combined, now_s);
+    sample = combined.imu;
+    ++imu_read_count;
+    if (stop_after_imu_reads > 0 && imu_read_count >= stop_after_imu_reads) {
+      stop_requested_.store(true);
+    }
+    return result;
+  }
   bool pollMotors() override
   {
     ++poll_count;
+    if (stop_after_poll > 0 && poll_count >= stop_after_poll) {
+      stop_requested_.store(true);
+    }
     ++action_sequence;
     if (first_poll_sequence == 0) {first_poll_sequence = action_sequence;}
     return true;
@@ -79,6 +111,8 @@ public:
   int disable_count = 0;
   int close_count = 0;
   int poll_count = 0;
+  int send_count = 0;
+  int imu_read_count = 0;
   int enable_count = 0;
   int action_sequence = 0;
   int first_disable_sequence = 0;
@@ -89,9 +123,15 @@ public:
   int transient_sample = 0;
   float transient_velocity = 0.0F;
   int transient_tilt_sample = 0;
+  int stop_after_poll = 0;
+  int stop_after_send_count = 0;
+  int stop_after_imu_reads = 0;
   bool repeat_sequence = false;
   bool repeat_after_zero = false;
   float startup_offset = 0.1F;
+  std::array<float, kNumJoints> first_positions{};
+  std::array<float, kNumJoints> last_positions{};
+  std::array<bool, kNumJoints> seen_positions{};
 
 private:
   std::atomic_bool & stop_requested_;
@@ -114,12 +154,14 @@ TEST(HardwareBridgeTest, ReadOnlyStartupDoesNotResetMotorZeros)
 {
   std::atomic_bool stop_requested{false};
   StartupZeroHardware hardware(stop_requested);
+  hardware.stop_after_imu_reads = 1;
   HardwareBridge::Options options;
   options.control_time_step = 0.002F;
+  options.startup_stable_samples = 1;
   options.startup_zero_tolerance_rad = 0.05F;
   HardwareBridge bridge(hardware, calibration(), options);
 
-  EXPECT_EQ(bridge.run(stop_requested), 7);
+  EXPECT_EQ(bridge.run(stop_requested), 0);
   EXPECT_FALSE(hardware.zeroed);
   EXPECT_EQ(hardware.zero_count, 0);
   EXPECT_GE(hardware.disable_count, 1);
@@ -144,8 +186,8 @@ TEST(HardwareBridgeTest, SetZeroExplicitlyResetsAllMotorZeros)
   EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
   EXPECT_GE(hardware.disable_count, 2);
   EXPECT_EQ(hardware.close_count, 1);
-  EXPECT_EQ(hardware.read_count, 4);
-  EXPECT_EQ(hardware.poll_count, 4);
+  EXPECT_EQ(hardware.read_count, 2);
+  EXPECT_EQ(hardware.poll_count, 2);
 }
 
 TEST(HardwareBridgeTest, SmallOffsetEnablesWithoutWritingMotorZeros)
@@ -265,26 +307,40 @@ TEST(HardwareBridgeTest, SetZeroRejectsStalePostWriteFeedback)
   StartupZeroHardware hardware(stop_requested);
   hardware.startup_offset = 0.01F;
   hardware.repeat_after_zero = true;
+  hardware.stop_after_poll = 3;
   HardwareBridge::Options options;
   options.set_zero = true;
   HardwareBridge bridge(hardware, calibration(), options);
 
   EXPECT_EQ(bridge.run(stop_requested), 7);
   EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
-  EXPECT_GT(hardware.read_count, 3);
+  EXPECT_EQ(hardware.read_count, 3);
 }
 
 TEST(HardwareBridgeTest, LargeOffsetRejectsOutputStartup)
 {
   std::atomic_bool stop_requested{false};
   StartupZeroHardware hardware(stop_requested);
-  hardware.startup_offset = 0.05F;
+  hardware.startup_offset = 0.1F;
   HardwareBridge::Options options;
   options.enable_output = true;
   HardwareBridge bridge(hardware, calibration(), options);
 
   EXPECT_EQ(bridge.run(stop_requested), 7);
   EXPECT_EQ(hardware.zero_count, 0);
+  EXPECT_EQ(hardware.enable_count, 0);
+}
+
+TEST(HardwareBridgeTest, KeyboardStartupAcceptsSingleFeedbackRound)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  HardwareBridge::Options options;
+  options.keyboard_control = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 9);
+  EXPECT_EQ(hardware.poll_count, 1);
   EXPECT_EQ(hardware.enable_count, 0);
 }
 

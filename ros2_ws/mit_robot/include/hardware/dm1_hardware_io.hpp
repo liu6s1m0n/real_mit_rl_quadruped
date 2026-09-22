@@ -25,6 +25,17 @@ public:
   virtual bool open() = 0;
   /** 一次读取同步的 IMU 与 12 路电机反馈。 */
   virtual bool read(HardwareSample & sample, double now_s) = 0;
+  /**
+   * 持续读取 IMU，不要求电机再次主动返回反馈。
+   * 默认实现兼容旧的测试硬件；真实驱动可直接读取 IMU 串口。
+   */
+  virtual bool readImu(ImuData<float> & sample, double now_s)
+  {
+    HardwareSample combined;
+    if (!read(combined, now_s)) {return false;}
+    sample = combined.imu;
+    return true;
+  }
   /** 将指定电机的当前位置写为输出轴零位。 */
   virtual bool setMotorZero(const MotorAddress & address) = 0;
   /** Poll all motor feedback without enabling output. */

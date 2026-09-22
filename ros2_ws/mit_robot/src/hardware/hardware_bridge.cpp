@@ -24,6 +24,7 @@ constexpr std::array<const char *, kNumJoints> kJointNames{
   "RR_hip", "RR_thigh", "RR_calf",
   "RL_hip", "RL_thigh", "RL_calf"};
 constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(100);
+constexpr float kInitialHardwareTorqueLimit = 45.0F;
 }
 
 // 构造硬件桥：绑定底层设备、关节标定和 RobotRunner，随后校验运行参数。
@@ -33,7 +34,8 @@ HardwareBridge::HardwareBridge(
   const Options & options)
 : hardware_(hardware), calibration_(calibration), options_(options),
   runner_(options.control_time_step),
-  mit_(hardware, calibration, options.feedback_timeout_s, false)
+  // 先使用受控的 45 N*m 上限，不直接放开到电机 97 N*m 峰值。
+  mit_(hardware, calibration, options.feedback_timeout_s, false, kInitialHardwareTorqueLimit)
 {
   if (!std::isfinite(options_.control_time_step) ||
     options_.control_time_step <= 0.0F)
@@ -235,7 +237,16 @@ int HardwareBridge::runKeyboardControl(
     sample.imu.timestamp = timestamp;
     const bool feedback_valid = !control_active || runner_.updateHardwareFeedback(
       sample.imu, mit_.jointStates(timestamp), timestamp);
-    const bool control_valid = feedback_valid && (!control_active || runner_.run());
+    if (control_active && !feedback_valid) {
+      imu_log::print(
+        imu_log::Level::Error,
+        "键盘控制反馈/状态估计输入无效；电机已失能。\n");
+      hardware_.disableAll();
+      result = 4;
+      break;
+    }
+
+    const bool control_valid = !control_active || runner_.run();
     if (control_active && control_valid && stand_up_pending && runner_.requestStandUp()) {
       stand_up_pending = false;
       imu_log::print(imu_log::Level::Info, "站立请求已接受。\n");
@@ -274,12 +285,14 @@ int HardwareBridge::runKeyboardControl(
         static_cast<int>(cycle_overruns.size()) >= options_.max_cycle_overruns_in_window)
       {
         imu_log::print(
-          imu_log::Level::Error,
-          "DM1 键盘控制循环超时策略已触发；电机已失能。\n");
-        hardware_.disableAll();
-        result = 6;
-        break;
+          imu_log::Level::Warning,
+          "DM1 键盘控制周期超过截止时间；已重新同步周期，键盘无新输入不视为故障。\n");
+        consecutive_cycle_overruns = 0;
+        cycle_overruns.clear();
       }
+      // 周期性硬件控制不依赖键盘事件；一次较慢的控制周期不能让后续周期
+      // 永远落后于时间表，否则会连续忙循环并再次放大 CAN/USB 调度压力。
+      next_cycle = finished;
     } else {
       consecutive_cycle_overruns = 0;
     }
@@ -414,11 +427,18 @@ bool HardwareBridge::stationaryLevelSample(
   return std::all_of(seen.begin(), seen.end(), [](bool value) {return value;});
 }
 
-// 执行启动采样；普通启动只验证零位，--set-zero 则在验证通过后写入并复核零位。
+// 执行启动采样；普通启动验证硬件稳定性，--set-zero 额外验证并复核零位。
 bool HardwareBridge::performStartupZeroCalibration(
   const std::chrono::steady_clock::time_point & start,
   const std::atomic_bool & stop_requested)
 {
+  const bool read_only_diagnostic =
+    !options_.enable_output && !options_.keyboard_control && !options_.set_zero;
+  const bool single_feedback_round =
+    read_only_diagnostic || options_.keyboard_control || options_.set_zero;
+  const int required_stable_samples = single_feedback_round ? 1 : options_.startup_stable_samples;
+  const auto sequence_timeout = single_feedback_round ?
+    std::chrono::milliseconds(500) : kStartupSequenceTimeout;
   auto readSample = [&](dm1_hardware::HardwareSample & sample) {
       const double now_s = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - start).count();
@@ -431,7 +451,7 @@ bool HardwareBridge::performStartupZeroCalibration(
   dm1_hardware::HardwareSample previous;
   bool have_previous = false;
   int stable_samples = 0;
-  const auto sequence_deadline = std::chrono::steady_clock::now() + kStartupSequenceTimeout;
+  const auto sequence_deadline = std::chrono::steady_clock::now() + sequence_timeout;
   auto sequencesAdvanced = [&](const dm1_hardware::HardwareSample & sample) {
       if (sample.imu.sequence == 0 ||
         (have_previous && sample.imu.sequence <= previous.imu.sequence))
@@ -469,12 +489,18 @@ bool HardwareBridge::performStartupZeroCalibration(
       }
       return std::all_of(seen.begin(), seen.end(), [](bool value) {return value;});
     };
-  while (stable_samples < options_.startup_stable_samples) {
+  while (stable_samples < required_stable_samples) {
     if (stop_requested.load() || std::chrono::steady_clock::now() >= sequence_deadline) {
-      imu_log::print(
-        imu_log::Level::Error,
-        "启动检查被拒绝：在 %d ms 内未收到连续更新的 IMU/电机反馈。\n",
-        static_cast<int>(kStartupSequenceTimeout.count()));
+      if (single_feedback_round) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "启动检查被拒绝：未收到 IMU 和 12 个电机的完整首轮反馈。\n");
+      } else {
+        imu_log::print(
+          imu_log::Level::Error,
+          "启动检查被拒绝：在 %d ms 内未收到连续更新的 IMU/电机反馈。\n",
+          static_cast<int>(sequence_timeout.count()));
+      }
       return false;
     }
     dm1_hardware::HardwareSample sample;
@@ -492,10 +518,10 @@ bool HardwareBridge::performStartupZeroCalibration(
         options_.set_zero ?
         "启动零位检查被拒绝：--set-zero 要求连续 %d 帧静止、水平且健康的反馈。\n" :
         "启动检查被拒绝：机器人必须连续 %d 帧静止、水平，且反馈健康。\n",
-        options_.startup_stable_samples);
+        required_stable_samples);
       return false;
     }
-    if (!options_.set_zero &&
+    if (options_.enable_output &&
       !motorPositionsWithin(sample, options_.startup_zero_tolerance_rad))
     {
       imu_log::print(
@@ -510,16 +536,29 @@ bool HardwareBridge::performStartupZeroCalibration(
     ++stable_samples;
   }
 
-  imu_log::print(
-    imu_log::Level::Info,
-    "DM1 启动稳定窗口通过：连续 %d 帧静止、水平且反馈健康。\n",
-    options_.startup_stable_samples);
+  if (read_only_diagnostic) {
+    imu_log::print(
+      imu_log::Level::Info,
+      "DM1 12 路电机首轮反馈通过；将持续监测 IMU，电机不再要求连续上报。\n");
+  } else if (options_.set_zero) {
+    imu_log::print(
+      imu_log::Level::Info,
+      "DM1 零位维护首轮反馈通过；开始写入并复核 12 路电机零位。\n");
+  } else if (options_.keyboard_control) {
+    imu_log::print(
+      imu_log::Level::Info,
+      "DM1 键盘控制首轮反馈通过；等待 Shift+U 解锁。\n");
+  } else {
+    imu_log::print(
+      imu_log::Level::Info,
+      "DM1 启动稳定窗口通过：连续 %d 帧静止、水平且反馈健康。\n",
+      required_stable_samples);
+  }
 
   if (!options_.set_zero) {
     imu_log::print(
       imu_log::Level::Info,
-      "DM1 启动检查通过，位置误差在 %.3f rad 以内；未修改电机参数。\n",
-      options_.startup_zero_tolerance_rad);
+      "DM1 启动稳定性检查通过；使能后将执行平滑回零，未修改电机参数。\n");
     return true;
   }
 
@@ -545,15 +584,21 @@ bool HardwareBridge::performStartupZeroCalibration(
   if (stop_requested.load()) {return false;}
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
   const auto verification_deadline =
-    std::chrono::steady_clock::now() + kStartupSequenceTimeout;
+    std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  dm1_hardware::HardwareSample last_verification;
+  bool have_verification_sample = false;
   while (!stop_requested.load() && std::chrono::steady_clock::now() < verification_deadline) {
     dm1_hardware::HardwareSample verification;
     if (readSample(verification) && sequencesAdvanced(verification)) {
       // Advance the baseline even when this fresh sample is otherwise unsafe;
       // a repeated copy of that unsafe frame must not pass on the next try.
       previous = verification;
-      if (stationaryLevelSample(verification) &&
-        motorPositionsWithin(verification, options_.startup_zero_tolerance_rad))
+      last_verification = verification;
+      have_verification_sample = true;
+      const bool stationary = stationaryLevelSample(verification);
+      const bool positions_within =
+        motorPositionsWithin(verification, options_.startup_zero_tolerance_rad);
+      if (stationary && positions_within)
       {
         if (options_.set_zero) {
           imu_log::print(
@@ -564,6 +609,22 @@ bool HardwareBridge::performStartupZeroCalibration(
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (have_verification_sample) {
+    if (!motorPositionsWithin(last_verification, options_.startup_zero_tolerance_rad)) {
+      imu_log::print(
+        imu_log::Level::Error,
+        "DM1 零位复核失败：以下电机位置仍超出允许范围。\n");
+      reportInvalidMotorPositions(last_verification, options_.startup_zero_tolerance_rad);
+    } else {
+      imu_log::print(
+        imu_log::Level::Error,
+        "DM1 零位复核失败：电机位置已在允许范围内，但 IMU 或电机静止检查未通过。\n");
+    }
+  } else {
+    imu_log::print(
+      imu_log::Level::Error,
+      "DM1 零位复核失败：2 秒内未收到完整的新反馈。\n");
   }
   imu_log::print(
     imu_log::Level::Error,
@@ -602,6 +663,28 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       hardware_.close();
       throw;
     }
+  }
+  if (!options_.enable_output) {
+    auto next_cycle = std::chrono::steady_clock::now();
+    const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(options_.control_time_step));
+    while (!stop_requested.load()) {
+      next_cycle += period;
+      const double now_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - start).count();
+      ImuData<float> imu_sample;
+      if (!hardware_.readImu(imu_sample, now_s)) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 IMU 实时读取失败；电机保持失能。\n");
+        hardware_.disableAll();
+        hardware_.close();
+        return 3;
+      }
+      std::this_thread::sleep_until(next_cycle);
+    }
+    hardware_.close();
+    return 0;
   }
   auto next_cycle = std::chrono::steady_clock::now();
   const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -721,6 +804,9 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
         imu_log::Level::Warning,
         "DM1 控制周期超过截止时间（连续 %d 次，时间窗口内 %zu 次）。\n",
         consecutive_cycle_overruns, cycle_overruns.size());
+      // 丢弃已经错过的旧截止时间，避免一次较慢的 WBC 周期让后续周期
+      // 永远落后并被连续计为超时；真正持续超过周期仍由下面的阈值保护。
+      next_cycle = finished;
       if (consecutive_cycle_overruns >= options_.max_consecutive_cycle_overruns ||
         static_cast<int>(cycle_overruns.size()) >= options_.max_cycle_overruns_in_window)
       {

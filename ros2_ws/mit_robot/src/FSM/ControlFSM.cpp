@@ -38,6 +38,9 @@ public:
   {
     this->nextStateName = this->stateName;
     this->transitionData.zero();
+    // Passive 的 transition() 会先关闭腿部输出；进入 JointPd 时立即
+    // 生成一帧有效命令，避免状态切换帧被外层误判为控制命令无效。
+    run();
   }
 
   void run() override

@@ -46,6 +46,9 @@ void FSM_State_BalanceStand<T>::onEnter()
   // 进入状态时锁定当前水平位置和姿态，避免突然跳到世界原点。
   //这样子就到导致了步行时刻突然切换站立直接翻到
   initial_body_position_ = this->_data->state_estimate->position_world;
+  // 高度限速必须从真实趴卧高度开始；否则下面的有效低高度会被替换成
+  // 标称站立高度，导致首个 WBC 周期的高度目标发生跳变。
+  last_height_command_ = initial_body_position_.z();
   //如果估计的机身高度低于20厘米，就认为高度估计不可靠，强行设置为30厘米。
   if (this->_data->control_parameters->start_in_prone_home &&
     initial_body_position_.z() <
@@ -53,8 +56,6 @@ void FSM_State_BalanceStand<T>::onEnter()
   {
     initial_body_position_.z() = this->_data->quadruped->nominalBodyHeight();
   }
-  //后续高度限制以这个高度为起点
-  last_height_command_ = initial_body_position_.z();
   // 世界航向沿用进入状态时的实测值，但站立目标始终保持机身水平。不能把
   // 切换瞬间的 roll/pitch 锁存为目标，否则已有倾斜会被 WBC 永久维持。
   initial_body_rpy_ << T(0), T(0), this->_data->state_estimate->rpy.z();

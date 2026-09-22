@@ -185,11 +185,21 @@ TEST(Dm1MitInterfaceTest, AcceptsProtocolFeedbackWithoutBusVoltage)
 TEST(Dm1MitInterfaceTest, RejectsFeedbackAfterItsTimeout)
 {
   MockTransport transport;
-  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.05);
+  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.10);
   const auto first = feedback(1.0);
   ASSERT_TRUE(interface.updateFeedback(first, 1.0));
-  EXPECT_FALSE(interface.updateFeedback(first, 1.06));
+  EXPECT_FALSE(interface.updateFeedback(first, 1.11));
   EXPECT_GT(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, AllowsShortFeedbackDelayWithinRelaxedTimeout)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.10);
+  const auto first = feedback(1.0);
+  ASSERT_TRUE(interface.updateFeedback(first, 1.0));
+  EXPECT_TRUE(interface.updateFeedback(first, 1.06));
+  EXPECT_EQ(transport.disable_count, 0);
 }
 
 TEST(Dm1MitInterfaceTest, RejectsFeedbackWithoutAReceiverSequence)

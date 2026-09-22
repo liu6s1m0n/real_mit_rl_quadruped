@@ -19,7 +19,7 @@ public:
   struct Options
   {
     float control_time_step = 0.002F;
-    double feedback_timeout_s = 0.05;
+    double feedback_timeout_s = 0.10;
     // 普通启动只检查当前位置是否落在该窗口内；写入电机零位必须显式使用
     // --set-zero 维护操作。
     float startup_zero_tolerance_rad = 0.05F;

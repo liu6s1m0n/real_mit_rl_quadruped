@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include "common/console_log.hpp"
 #include "model/robot_types.hpp"
 
 namespace dm1_hardware
@@ -113,13 +114,20 @@ public:
   // 构造接口并校验超时参数、CAN 地址、方向和地址唯一性。
   Dm1MitInterface(
     MitTransport & transport, const CalibrationArray & calibration,
-    double feedback_timeout_s = 0.05, bool allow_peak_torque = false)
+    double feedback_timeout_s = 0.05, bool allow_peak_torque = false,
+    float torque_limit_override = 0.0F)
   : transport_(transport), calibration_(calibration),
-    feedback_timeout_s_(feedback_timeout_s), allow_peak_torque_(allow_peak_torque)
+    feedback_timeout_s_(feedback_timeout_s), allow_peak_torque_(allow_peak_torque),
+    torque_limit_override_(torque_limit_override)
   {
     // 反馈超时必须是有限的正数，否则无法进行安全的时间检查。
     if (!std::isfinite(feedback_timeout_s_) || feedback_timeout_s_ <= 0.0) {
       throw std::invalid_argument("DM1 feedback timeout must be positive and finite");
+    }
+    if (!std::isfinite(torque_limit_override_) || torque_limit_override_ < 0.0F ||
+      torque_limit_override_ > 97.0F)
+    {
+      throw std::invalid_argument("DM1 torque limit override must be in [0,97] Nm");
     }
 
     // 逐个校验电机地址和方向，并检查同一总线上的地址不能重复。
@@ -221,24 +229,56 @@ public:
    */
   bool validateCommands(const CommandArray & commands, double now_s) const noexcept
   {
-    if (!feedback_valid_ || !std::isfinite(now_s) || now_s < latest_feedback_time_ ||
-      now_s - latest_feedback_time_ > feedback_timeout_s_)
-    {
-      return false;
-    }
+    const auto reject = [](
+      const char * scope, std::size_t leg, std::size_t joint, const char * field,
+      double actual, double lower, double upper) noexcept -> bool {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 MIT command rejected: scope=%s leg=%zu joint=%zu field=%s "
+          "actual=%.9g allowed=[%.9g,%.9g]\n",
+          scope, leg, joint, field, actual, lower, upper);
+        return false;
+      };
+    const auto rejectText = [](
+      std::size_t leg, const char * field, const char * actual,
+      const char * allowed) noexcept -> bool {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 MIT command rejected: scope=command leg=%zu joint=all field=%s "
+          "actual=%s allowed=%s\n",
+          leg, field, actual, allowed);
+        return false;
+      };
 
-    const float torque_limit = allow_peak_torque_ ? 97.0F : 30.0F;
+    if (!feedback_valid_) return reject("header", kNumLegs, kJointsPerLeg,
+      "feedback_valid", 0.0, 1.0, 1.0);
+    if (!std::isfinite(now_s)) return reject("header", kNumLegs, kJointsPerLeg,
+      "now_s", now_s, -HUGE_VAL, HUGE_VAL);
+    if (now_s < latest_feedback_time_) return reject("header", kNumLegs, kJointsPerLeg,
+      "now_s", now_s, latest_feedback_time_, HUGE_VAL);
+    const double feedback_age = now_s - latest_feedback_time_;
+    if (feedback_age > feedback_timeout_s_) return reject("header", kNumLegs, kJointsPerLeg,
+      "feedback_age_s", feedback_age, 0.0, feedback_timeout_s_);
+
+    const float torque_limit = torque_limit_override_ > 0.0F ? torque_limit_override_ :
+      (allow_peak_torque_ ? 97.0F : 30.0F);
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       const auto & command = commands[leg];
-      if (command.leg != static_cast<LegId>(leg) || !command.enabled ||
-        !command.position_desired.allFinite() || !command.velocity_desired.allFinite() ||
-        !command.kp.allFinite() || !command.kd.allFinite() ||
-        !command.torque_feedforward.allFinite() || !std::isfinite(command.timestamp) ||
-        static_cast<double>(command.timestamp) > now_s + 1.0e-6 ||
-        now_s - static_cast<double>(command.timestamp) > feedback_timeout_s_)
-      {
-        return false;
-      }
+      if (command.leg != static_cast<LegId>(leg)) return reject("command", leg, kJointsPerLeg,
+        "leg_id", static_cast<double>(command.leg), static_cast<double>(leg), static_cast<double>(leg));
+      if (!command.enabled) return reject("command", leg, kJointsPerLeg, "enabled", 0.0, 1.0, 1.0);
+      if (!command.position_desired.allFinite()) return rejectText(leg, "position_desired", "non-finite", "finite");
+      if (!command.velocity_desired.allFinite()) return rejectText(leg, "velocity_desired", "non-finite", "finite");
+      if (!command.kp.allFinite()) return rejectText(leg, "kp", "non-finite", "finite");
+      if (!command.kd.allFinite()) return rejectText(leg, "kd", "non-finite", "finite");
+      if (!command.torque_feedforward.allFinite()) return rejectText(leg, "torque_feedforward", "non-finite", "finite");
+      if (!std::isfinite(command.timestamp)) return reject("command", leg, kJointsPerLeg,
+        "timestamp", command.timestamp, 0.0, now_s);
+      if (static_cast<double>(command.timestamp) > now_s + 1.0e-6) return reject("command", leg,
+        kJointsPerLeg, "timestamp", command.timestamp, -HUGE_VAL, now_s + 1.0e-6);
+      const double command_age = now_s - static_cast<double>(command.timestamp);
+      if (command_age > feedback_timeout_s_) return reject("command", leg, kJointsPerLeg,
+        "command_age_s", command_age, 0.0, feedback_timeout_s_);
       for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
         const float q = command.position_desired[static_cast<Eigen::Index>(joint)];
         const float dq = command.velocity_desired[static_cast<Eigen::Index>(joint)];
@@ -251,17 +291,21 @@ public:
         const float motor_position =
           calibration_[leg * kJointsPerLeg + joint].direction * q +
           calibration_[leg * kJointsPerLeg + joint].zero_position;
-        if (q < kLowerLimit[joint] || q > kUpperLimit[joint] ||
-          std::abs(dq) > kVelocityLimit || kp<0.0F || kp> mit_protocol::kKpMax ||
-          kd<0.0F || kd> mit_protocol::kKdMax ||
-          std::abs(tau) > torque_limit ||
-          motor_position<-mit_protocol::kPositionMax ||
-          motor_position> mit_protocol::kPositionMax ||
-          !std::isfinite(motor_position) || !std::isfinite(total_torque) ||
-          std::abs(total_torque) > torque_limit)
-        {
-          return false;
-        }
+        if (q < kLowerLimit[joint] || q > kUpperLimit[joint]) return reject("command", leg, joint,
+          "position_desired", q, kLowerLimit[joint], kUpperLimit[joint]);
+        if (std::abs(dq) > kVelocityLimit) return reject("command", leg, joint,
+          "velocity_desired", dq, -kVelocityLimit, kVelocityLimit);
+        if (kp < 0.0F || kp > mit_protocol::kKpMax) return reject("command", leg, joint,
+          "kp", kp, 0.0, mit_protocol::kKpMax);
+        if (kd < 0.0F || kd > mit_protocol::kKdMax) return reject("command", leg, joint,
+          "kd", kd, 0.0, mit_protocol::kKdMax);
+        if (std::abs(tau) > torque_limit) return reject("command", leg, joint,
+          "torque_feedforward", tau, -torque_limit, torque_limit);
+        if (!std::isfinite(motor_position) || motor_position < -mit_protocol::kPositionMax ||
+          motor_position > mit_protocol::kPositionMax) return reject("command", leg, joint,
+            "motor_position", motor_position, -mit_protocol::kPositionMax, mit_protocol::kPositionMax);
+        if (!std::isfinite(total_torque) || std::abs(total_torque) > torque_limit) return reject("command", leg, joint,
+          "total_torque", total_torque, -torque_limit, torque_limit);
       }
     }
     return true;
@@ -270,15 +314,7 @@ public:
   // 校验反馈新鲜度和全部关节命令，通过后逐帧发送 MIT 控制数据。
   bool send(const CommandArray & commands, double now_s) noexcept
   {
-    // 没有有效反馈、时间倒退或反馈过期时，禁止继续发送控制命令。
-    if (!feedback_valid_ || !std::isfinite(now_s) || now_s < latest_feedback_time_ ||
-      now_s - latest_feedback_time_ > feedback_timeout_s_)
-    {
-      transport_.disableAll();
-      return false;
-    }
-
-    // 先复用无副作用校验，确保不会由首帧发送才发现协议边界错误。
+    // 统一复用带诊断信息的校验，避免发送路径吞掉反馈/时间失败原因。
     if (!validateCommands(commands, now_s)) {return fail();}
 
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
@@ -360,6 +396,7 @@ private:
   double feedback_timeout_s_;  // 反馈允许的最大时间间隔，s。
   double latest_feedback_time_ = 0.0;  // 最近一次完整有效反馈的时间戳，s。
   bool allow_peak_torque_ = false;  // 是否允许使用 97 N*m 峰值力矩限制。
+  float torque_limit_override_ = 0.0F;  // 非零时使用的受控临时力矩上限，N*m。
   bool feedback_valid_ = false;  // 当前反馈是否完整、有效且未超时。
 };
 

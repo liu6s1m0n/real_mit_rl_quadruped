@@ -2,8 +2,9 @@
 set -euo pipefail
 
 readonly ARBITRATION_BITRATE=1000000
-readonly DATA_BITRATE=1000000
+readonly DATA_BITRATE=5000000
 readonly SAMPLE_POINT=0.75
+readonly DATA_SAMPLE_POINT=0.875
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "请使用 sudo 运行：sudo $0" >&2
@@ -29,11 +30,11 @@ for interface in "${interfaces[@]}"; do
   ip link set dev "${interface}" down
   ip link set dev "${interface}" type can \
     bitrate "${ARBITRATION_BITRATE}" sample-point "${SAMPLE_POINT}" \
-    dbitrate "${DATA_BITRATE}" dsample-point "${SAMPLE_POINT}" \
+    dbitrate "${DATA_BITRATE}" dsample-point "${DATA_SAMPLE_POINT}" \
     fd on loopback off
   ip link set dev "${interface}" txqueuelen 100
   ip link set dev "${interface}" up
 
-  echo "${interface}: FDCAN 已启动（仲裁域 1 Mbps，数据域 1 Mbps，采样点 75%）"
+  echo "${interface}: FDCAN 已启动（仲裁域 1 Mbps/75%，数据域 5 Mbps/87.5%）"
   ip -details link show dev "${interface}"
 done

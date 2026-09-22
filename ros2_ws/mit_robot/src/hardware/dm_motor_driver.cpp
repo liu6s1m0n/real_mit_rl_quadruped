@@ -17,7 +17,7 @@ constexpr float kVelocityMax = dm1_hardware::mit_protocol::kVelocityMax;  // 速
 constexpr float kTorqueMax = dm1_hardware::mit_protocol::kTorqueMax;  // 力矩上限。
 constexpr float kKpMax = dm1_hardware::mit_protocol::kKpMax;  // kp 上限。
 constexpr float kKdMax = dm1_hardware::mit_protocol::kKdMax;  // kd 上限。
-constexpr double kFeedbackTimeout = 0.05;  // 驱动层允许的反馈最大年龄，s。
+constexpr double kFeedbackTimeout = 0.10;  // 驱动层允许的反馈最大年龄，s。
 constexpr auto kEnableConfirmationTimeout = std::chrono::milliseconds(100);  // 使能确认超时。
 constexpr int kDisableAttempts = 3;  // 禁用命令的最大重试次数。
 
