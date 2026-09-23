@@ -2,6 +2,7 @@
 #include "FSM/ControlFSM.h"
 
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <stdexcept>
 
@@ -189,7 +190,16 @@ template<typename T>
 FSM_OperatingMode ControlFSM<T>::safetyPreCheck()
 {
   // 如果状态估计：无效；姿态包含 NaN；姿态包含 Inf；直接急停。
-  if (!data.state_estimate->valid || !data.state_estimate->rpy.allFinite()) {
+  if (!data.state_estimate->valid) {
+    std::fprintf(stderr,
+      "[FSM] 失能前判断：safetyPreCheck 状态估计 valid=false，当前状态=%d。\n",
+      static_cast<int>(currentStateName()));
+    return FSM_OperatingMode::ESTOP;
+  }
+  if (!data.state_estimate->rpy.allFinite()) {
+    std::fprintf(stderr,
+      "[FSM] 失能前判断：safetyPreCheck 姿态 rpy 非有限值，当前状态=%d。\n",
+      static_cast<int>(currentStateName()));
     return FSM_OperatingMode::ESTOP;
   }
   /*如果当前状态要求检查姿态，则调用安全检查器。不是所有状态都一定检查安全姿态。
@@ -197,6 +207,9 @@ FSM_OperatingMode ControlFSM<T>::safetyPreCheck()
   if (currentState->checkSafeOrientation &&
     !safety_checker_->checkSafeOrientation())
   {
+    std::fprintf(stderr,
+      "[FSM] 失能前判断：safetyPreCheck 安全姿态检查失败，当前状态=%d。\n",
+      static_cast<int>(currentStateName()));
     return FSM_OperatingMode::ESTOP;
   }
   return operating_mode_;
@@ -207,16 +220,28 @@ template<typename T>
 FSM_OperatingMode ControlFSM<T>::safetyPostCheck()
 {
   // 后置检查保护执行器：只要任一条腿出现 NaN/Inf，就关闭所有腿而不是部分输出。
-  for (const auto & command : data.leg_controller->commands) {
-    if (!command.position_desired.allFinite() ||
-      !command.velocity_desired.allFinite() ||
-      !command.torque_feedforward.allFinite() ||
-      !command.force_feedforward.allFinite() ||
-      !command.foot_position_desired.allFinite() ||
-      !command.foot_velocity_desired.allFinite() ||
-      !command.kp_joint.allFinite() || !command.kd_joint.allFinite() ||
-      !command.kp_cartesian.allFinite() || !command.kd_cartesian.allFinite())
+  for (std::size_t leg = 0; leg < data.leg_controller->commands.size(); ++leg) {
+    const auto & command = data.leg_controller->commands[leg];
+    const char * invalid_field = nullptr;
+    if (!command.position_desired.allFinite()) {invalid_field = "position_desired";}
+    else if (!command.velocity_desired.allFinite()) {invalid_field = "velocity_desired";}
+    else if (!command.torque_feedforward.allFinite()) {
+      invalid_field = "torque_feedforward";
+    } else if (!command.force_feedforward.allFinite()) {
+      invalid_field = "force_feedforward";
+    } else if (!command.foot_position_desired.allFinite()) {
+      invalid_field = "foot_position_desired";
+    } else if (!command.foot_velocity_desired.allFinite()) {
+      invalid_field = "foot_velocity_desired";
+    } else if (!command.kp_joint.allFinite()) {invalid_field = "kp_joint";}
+    else if (!command.kd_joint.allFinite()) {invalid_field = "kd_joint";}
+    else if (!command.kp_cartesian.allFinite()) {invalid_field = "kp_cartesian";}
+    else if (!command.kd_cartesian.allFinite()) {invalid_field = "kd_cartesian";}
+    if (invalid_field != nullptr)
     {
+      std::fprintf(stderr,
+        "[FSM] 失能前判断：safetyPostCheck 第%zu条腿的 %s 非有限值。\n",
+        leg, invalid_field);
       data.leg_controller->zeroCommand();
       data.leg_controller->setEnabled(false);
       operating_mode_ = FSM_OperatingMode::ESTOP;

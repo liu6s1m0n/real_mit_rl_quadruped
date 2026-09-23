@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 #include "model/floating_base_model_factory.hpp"
@@ -98,6 +99,8 @@ void FSM_State_LieDown<T>::runMpcLowering()
   const auto result = mpc_->run(
     *this->_data->state_estimate, *this->_data->desired_state, feet_world);
   if (!result.valid) {
+    std::fprintf(stderr,
+      "[FSM][LIE_DOWN] 失能前判断：MPC result.valid=false。\n");
     this->_data->leg_controller->zeroCommand();
     this->_data->leg_controller->setEnabled(false);
     return;
@@ -133,6 +136,8 @@ void FSM_State_LieDown<T>::runMpcLowering()
       &wbc_data_, *this->_data->state_estimate, *this->_data->joint_states,
       *this->_data->leg_controller))
   {
+    std::fprintf(stderr,
+      "[FSM][LIE_DOWN] 失能前判断：WBC runAndApply 失败。\n");
     this->_data->leg_controller->zeroCommand();
     this->_data->leg_controller->setEnabled(false);
     return;

@@ -40,6 +40,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <fcntl.h>
 #include <iostream>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -63,6 +64,7 @@ SocketCAN::~SocketCAN()
 
 void SocketCAN::logThrottledError() const
 {
+  const int error = errno;
   const auto now = std::chrono::duration_cast<std::chrono::seconds>(
     std::chrono::steady_clock::now().time_since_epoch()).count();
   auto previous = last_error_log_s_.load(std::memory_order_relaxed);
@@ -71,6 +73,7 @@ void SocketCAN::logThrottledError() const
   {
     std::cerr << terminalColor(TerminalColor::Yellow, stderr)
               << "Unable to write CAN frame on " << interface_request_.ifr_name
+              << " errno=" << error << " (" << std::strerror(error) << ")"
               << terminalColorReset(stderr) << std::endl;
   }
 }
@@ -128,6 +131,16 @@ bool SocketCAN::open(
     sock_fd_ = -1;
     return false;
   }
+  // 防止 CAN 发送队列拥塞时阻塞控制线程；write() 直接返回真实的队列错误。
+  const int flags = fcntl(sock_fd_, F_GETFL, 0);
+  if (flags == -1 || fcntl(sock_fd_, F_SETFL, flags | O_NONBLOCK) == -1) {
+    std::cerr << terminalColor(TerminalColor::Red, stderr) <<
+      "[ERROR] Unable to make CAN socket non-blocking on " << interface <<
+      terminalColorReset(stderr) << std::endl;
+    ::close(sock_fd_);
+    sock_fd_ = -1;
+    return false;
+  }
   // 启动独立的事件驱动线程，用于接收数据帧。
   if (startReceiverThread(thread_priority)) {return true;}
   ::close(sock_fd_);
@@ -156,34 +169,32 @@ bool SocketCAN::isOpen() const
 
 bool SocketCAN::write(const can_frame * frame) const
 {
-  if (!isOpen()) {
+  if (!isOpen() || frame == nullptr) {
     // 套接字未打开，无法发送 CAN 数据帧。
+    errno = isOpen() ? EINVAL : EBADF;
     logThrottledError();
     return false;
   }
   const ssize_t written = ::write(sock_fd_, frame, sizeof(can_frame));
-  if (written != static_cast<ssize_t>(sizeof(can_frame))) {
-    // 数据帧未完整写入，发送缓冲区可能已满。
-    logThrottledError();
-    return false;
-  }
-  return true;
+  if (written == static_cast<ssize_t>(sizeof(can_frame))) {return true;}
+  if (written >= 0) {errno = EIO;}
+  logThrottledError();
+  return false;
 }
 
 bool SocketCAN::write2(const canfd_frame * frame) const
 {
-  if (!isOpen()) {
+  if (!isOpen() || frame == nullptr) {
     // 套接字未打开，无法发送 CAN FD 数据帧。
+    errno = isOpen() ? EINVAL : EBADF;
     logThrottledError();
     return false;
   }
   const ssize_t written = ::write(sock_fd_, frame, sizeof(canfd_frame));
-  if (written != static_cast<ssize_t>(sizeof(canfd_frame))) {
-    // 数据帧未完整写入，发送缓冲区可能已满。
-    logThrottledError();
-    return false;
-  }
-  return true;
+  if (written == static_cast<ssize_t>(sizeof(canfd_frame))) {return true;}
+  if (written >= 0) {errno = EIO;}
+  logThrottledError();
+  return false;
 }
 
 void * SocketCAN::receiverThread(void * instance) noexcept

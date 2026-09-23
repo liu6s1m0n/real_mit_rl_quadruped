@@ -9,6 +9,8 @@
 
 #include <linux/can.h>
 
+#include "common/console_log.hpp"
+
 namespace
 {
 // ---------- DM MIT 协议范围和驱动时序参数 ----------
@@ -17,7 +19,6 @@ constexpr float kVelocityMax = dm1_hardware::mit_protocol::kVelocityMax;  // 速
 constexpr float kTorqueMax = dm1_hardware::mit_protocol::kTorqueMax;  // 力矩上限。
 constexpr float kKpMax = dm1_hardware::mit_protocol::kKpMax;  // kp 上限。
 constexpr float kKdMax = dm1_hardware::mit_protocol::kKdMax;  // kd 上限。
-constexpr double kFeedbackTimeout = 0.10;  // 驱动层允许的反馈最大年龄，s。
 constexpr auto kEnableConfirmationTimeout = std::chrono::milliseconds(100);  // 使能确认超时。
 constexpr int kDisableAttempts = 3;  // 禁用命令的最大重试次数。
 
@@ -244,10 +245,22 @@ bool DmMotorDriver::pollAll()
 bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
 {
   // 读取接口保持非阻塞：这里只复制接收线程已经缓存的数据。
-  if (!opened_.load() || !std::isfinite(now_s)) {return false;}
-  const auto now = std::chrono::steady_clock::now();
+  if (!opened_.load() || !std::isfinite(now_s)) {
+    static robot_log::Throttle closed_throttle(1000);
+    if (closed_throttle.ready()) {
+      imu_log::print(
+        imu_log::Level::Warning,
+        "DM1 电机快照不可用：CAN 总线 opened_=%s，now_s=%s。\n",
+        opened_.load() ? "true" : "false",
+        std::isfinite(now_s) ? "finite" : "非有限");
+    }
+    return false;
+  }
   bool valid = true;
   std::lock_guard<std::mutex> lock(mutex_);
+  // 必须在拿到快照锁之后读取当前时间，避免接收线程刚更新
+  // received_at 就让 age 短暂变成负数，进而生成超前时间戳。
+  const auto now = std::chrono::steady_clock::now();
 
   // 按标定顺序逐个生成反馈，并检查在线状态、反馈年龄和电机健康状态。
   for (std::size_t i = 0; i < snapshots_.size(); ++i) {
@@ -271,14 +284,32 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
       std::numeric_limits<double>::infinity();
     sample.timestamp = std::max(0.0, now_s - age);
     sample.health_valid = snapshot.online && isHealthyStatus(snapshot.status) &&
-      snapshot.mos_temperature_c >= -20.0F && snapshot.mos_temperature_c <= 100.0F &&
-      snapshot.rotor_temperature_c >= -20.0F && snapshot.rotor_temperature_c <= 100.0F;
+      snapshot.mos_temperature_c >= -20.0F && snapshot.mos_temperature_c <= 120.0F &&
+      snapshot.rotor_temperature_c >= -20.0F && snapshot.rotor_temperature_c <= 120.0F;
 
-    // 任意一个电机离线、反馈过期或状态/温度异常，整批反馈都判定为无效。
-    if (!snapshot.online || !std::isfinite(age) || age > kFeedbackTimeout ||
-      !sample.health_valid)
+    // 驱动层只判断快照是否存在以及电机自身健康状态；反馈新鲜度由上层
+    // Dm1MitInterface 使用统一、可配置的超时判断，避免重复的硬编码门槛。
+    if (!snapshot.online || !std::isfinite(age) || !sample.health_valid)
     {
       valid = false;
+      // 关键诊断：说清是哪台电机、什么原因不可用。否则上层只看到
+      // "读取电机快照失败"，无法区分掉线/超时/驱动器故障/过温。
+      static robot_log::Throttle feedback_reason_log(1000);
+      if (feedback_reason_log.ready()) {
+        const char * reason = !snapshot.online ? "offline（从未收到匹配反馈）" :
+          (!std::isfinite(age) ? "age 非有限" :
+          (!isHealthyStatus(snapshot.status) ? "驱动器状态故障" : "温度超范围"));
+        imu_log::print(
+          imu_log::Level::Warning,
+          "DM1 电机反馈不可用：joint=%zu bus=%u can_id=0x%02x reason=%s "
+          "age=%.4f s status=0x%02x mos=%.1f℃ rotor=%.1f℃ sequence=%llu\n",
+          i, static_cast<unsigned int>(address.bus),
+          static_cast<unsigned int>(address.can_id), reason, age,
+          static_cast<unsigned int>(snapshot.status),
+          static_cast<double>(snapshot.mos_temperature_c),
+          static_cast<double>(snapshot.rotor_temperature_c),
+          static_cast<unsigned long long>(snapshot.sequence));
+      }
     }
   }
   return valid;
@@ -291,8 +322,8 @@ bool DmMotorDriver::latestOne(
   if (!opened_.load() || !std::isfinite(now_s)) {return false;}
   const std::size_t index = indexFor(address);
   if (index >= kNumJoints) {return false;}
-  const auto now = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(mutex_);
+  const auto now = std::chrono::steady_clock::now();
   const auto & configured = calibration_[index].address;
   const auto & snapshot = snapshots_[index];
   feedback = {};
@@ -310,10 +341,9 @@ bool DmMotorDriver::latestOne(
     std::numeric_limits<double>::infinity();
   feedback.timestamp = std::max(0.0, now_s - age);
   feedback.health_valid = snapshot.online && isHealthyStatus(snapshot.status) &&
-    snapshot.mos_temperature_c >= -20.0F && snapshot.mos_temperature_c <= 100.0F &&
-    snapshot.rotor_temperature_c >= -20.0F && snapshot.rotor_temperature_c <= 100.0F;
-  return snapshot.online && std::isfinite(age) && age <= kFeedbackTimeout &&
-         feedback.health_valid;
+    snapshot.mos_temperature_c >= -20.0F && snapshot.mos_temperature_c <= 120.0F &&
+    snapshot.rotor_temperature_c >= -20.0F && snapshot.rotor_temperature_c <= 120.0F;
+  return snapshot.online && std::isfinite(age) && feedback.health_valid;
 }
 
 bool DmMotorDriver::isEnabled(const dm1_hardware::MotorAddress & address) const noexcept
@@ -323,7 +353,7 @@ bool DmMotorDriver::isEnabled(const dm1_hardware::MotorAddress & address) const 
   std::lock_guard<std::mutex> lock(mutex_);
   const auto & snapshot = snapshots_[index];
   return snapshot.online &&
-    snapshot.status == static_cast<std::uint8_t>(MotorStatus::Enabled);
+         snapshot.status == static_cast<std::uint8_t>(MotorStatus::Enabled);
 }
 
 // 接收回调：验证 CAN 帧、匹配电机地址，并更新对应电机的最新快照。
@@ -394,7 +424,8 @@ bool DmMotorDriver::sendCommand(
 {
   // 目标地址必须属于已打开的驱动器和已登记的标定表。
   if (!opened_.load() || address.bus > 1 || !active_buses_[address.bus] ||
-    address.can_id > CAN_SFF_MASK) {
+    address.can_id > CAN_SFF_MASK)
+  {
     return false;
   }
   const auto index = indexFor(address);
@@ -460,7 +491,14 @@ bool DmMotorDriver::enableAll()
   bool result = true;
   // 先向每台电机发送使能命令；任意发送失败都会触发整体失败。
   for (const auto & item : calibration_) {
-    result = sendCommand(item.address, 0xFC) && result;
+    if (!sendCommand(item.address, 0xFC)) {
+      imu_log::print(
+        imu_log::Level::Error,
+        "DM1 自动失能原因：使能帧发送失败 bus=%u can_id=0x%03x。\n",
+        static_cast<unsigned int>(item.address.bus),
+        static_cast<unsigned int>(item.address.can_id));
+      result = false;
+    }
   }
   if (!result) {
     // 使能命令未能完整发出时，立即回到禁用状态。
@@ -473,6 +511,9 @@ bool DmMotorDriver::enableAll()
   while (std::chrono::steady_clock::now() < deadline) {
     if (!pollAll()) {
       // 轮询失败时禁止继续等待并关闭全部输出。
+      imu_log::print(
+        imu_log::Level::Error,
+        "DM1 自动失能原因：使能确认阶段 pollAll() 失败。\n");
       disableAll();
       return false;
     }
@@ -482,6 +523,10 @@ bool DmMotorDriver::enableAll()
   }
 
   // 超时仍未确认全部电机使能，执行安全禁用。
+  imu_log::print(
+    imu_log::Level::Error,
+    "DM1 自动失能原因：%lld ms 内未确认全部电机已使能。\n",
+    static_cast<long long>(kEnableConfirmationTimeout.count()));
   disableAll();
   return false;
 }
@@ -538,6 +583,10 @@ void DmMotorDriver::disableAll() noexcept
       output_disabled_.store(true);
       return;
     }
+    imu_log::print(
+      imu_log::Level::Warning,
+      "DM1 失能帧发送未完整成功，正在重试（第 %d/%d 次）。\n",
+      attempt + 1, kDisableAttempts);
   }
 }
 

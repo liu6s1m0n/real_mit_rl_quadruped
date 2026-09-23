@@ -37,6 +37,9 @@ private:
   HardwareImu imu_reader_;
   DmMotorDriver motor_driver_;
   bool opened_ = false;
+  // IMU 串口掉线（USB 重新枚举/瞬断）后自动重连用的时间基准，单位 s。
+  double last_imu_ok_time_s_ = 0.0;
+  double last_imu_recovery_time_s_ = -1.0e9;
 };
 
 #endif  // MYMIT_ROBOT_HARDWARE_DM1_HARDWARE_DRIVER_HPP_

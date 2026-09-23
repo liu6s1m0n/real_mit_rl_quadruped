@@ -1,6 +1,7 @@
 #include "WBC/WBC_Ctrl/WBC_Ctrl.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 #include <utility>
 
@@ -104,12 +105,17 @@ bool WBC_Ctrl<T>::updateModel(
     gravity_ = model_.getGravityForce(); //获取广义重力力
     coriolis_ = model_.getCoriolisForce(); //获取广义科氏力
     if (!mass_matrix_.allFinite() || !gravity_.allFinite() || !coriolis_.allFinite()) {
+      std::fprintf(stderr, "[WBC] 失败阶段=updateModel：动力学矩阵/重力/科氏力出现非有限值。\n");
       return false;
     }
     /*它会被 KinWBC 或 WBIC 的加权伪逆使用*/
     mass_matrix_inverse_ = mass_matrix_.inverse();
-    if (!mass_matrix_inverse_.allFinite()) {return false;}
-  } catch (const std::exception &) {
+    if (!mass_matrix_inverse_.allFinite()) {
+      std::fprintf(stderr, "[WBC] 失败阶段=updateModel：质量矩阵求逆结果出现非有限值。\n");
+      return false;
+    }
+  } catch (const std::exception & error) {
+    std::fprintf(stderr, "[WBC] 失败阶段=updateModel：动力学模型异常：%s\n", error.what());
     return false;
   }
   estimate_ = estimate;
@@ -124,13 +130,24 @@ bool WBC_Ctrl<T>::updateModel(
 template<typename T>
 bool WBC_Ctrl<T>::compute()
 {
-  for (const auto * task : tasks_) {
-    if (task == nullptr || !task->IsTaskSet()) {return false;}
+  for (std::size_t index = 0; index < tasks_.size(); ++index) {
+    const auto * task = tasks_[index];
+    if (task == nullptr) {
+      std::fprintf(stderr, "[WBC] 失败阶段=compute：第 %zu 个任务为空。\n", index);
+      return false;
+    }
+    if (!task->IsTaskSet()) {
+      std::fprintf(stderr, "[WBC] 失败阶段=compute：第 %zu 个任务未成功更新。\n", index);
+      return false;
+    }
   }
   //所有支撑接触反力的总维度
   std::size_t reaction_force_dimension = 0;
   for (const auto * contact : contacts_) {
-    if (contact == nullptr) {return false;}
+    if (contact == nullptr) {
+      std::fprintf(stderr, "[WBC] 失败阶段=compute：接触约束为空。\n");
+      return false;
+    }
     reaction_force_dimension += contact->getDim();
   }
   /*浮动基座标+接触反力维度*/
@@ -144,18 +161,25 @@ bool WBC_Ctrl<T>::compute()
   if (!kin_wbc_->findConfiguration(
       state_.q, tasks_, contacts_, result_.joint_position, result_.joint_velocity))
   {
+    std::fprintf(stderr, "[WBC] 失败阶段=KinWBC：findConfiguration() 求解失败。\n");
     return false;
   }
   /*更新 WBIC 动力学参数*/
   wbic_->UpdateSetting(
     mass_matrix_, mass_matrix_inverse_, coriolis_, gravity_);
   // WBIC 再加入完整动力学和接触力约束，生成关节前馈力矩。
-  if (!wbic_->makeTorque(result_.joint_torque, wbic_data_)) {return false;}
+  if (!wbic_->makeTorque(result_.joint_torque, wbic_data_)) {
+    std::fprintf(stderr, "[WBC] 失败阶段=WBIC：makeTorque() 求解失败。\n");
+    return false;
+  }
 
   result_.generalized_acceleration = wbic_data_._qddot;
   result_.reaction_force = wbic_data_._Fr;
   result_.valid = result_.joint_position.allFinite() &&
     result_.joint_velocity.allFinite() && result_.joint_torque.allFinite();
+  if (!result_.valid) {
+    std::fprintf(stderr, "[WBC] 失败阶段=compute：关节位置/速度/力矩结果出现非有限值。\n");
+  }
   return result_.valid;
 }
 
@@ -177,7 +201,10 @@ bool WBC_Ctrl<T>::run(
   tasks_.clear();
   contacts_.clear();
   if (!updateModel(estimate, joint_states)) {return false;}
-  if (!prepareTasksAndContacts(input)) {return false;}
+  if (!prepareTasksAndContacts(input)) {
+    std::fprintf(stderr, "[WBC] 失败阶段=prepareTasksAndContacts：任务或接触约束构造失败。\n");
+    return false;
+  }
   return compute();
 }
 

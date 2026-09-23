@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 #include "model/floating_base_model_factory.hpp"
@@ -192,7 +193,12 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
     &wbc_data_, *this->_data->state_estimate, *this->_data->joint_states,
     *this->_data->leg_controller);
 
-  if (!wbc_valid) {return;}
+  if (!wbc_valid) {
+    std::fprintf(stderr,
+      "[FSM][BALANCE_STAND] 失能前判断：WBC runAndApply 失败，iteration=%zu target_height=%.4f。\n",
+      iteration_, static_cast<double>(wbc_data_.pBody_des.z()));
+    return;
+  }
 
   // 机身任务和四足接触不能唯一确定 12 个关节角，KinWBC 仍存在姿态零空间。
   // 因此根据目标高度构造对称腿姿，并用较弱关节阻抗抑制零空间漂移；

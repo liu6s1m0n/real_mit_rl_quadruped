@@ -5,7 +5,9 @@
 #ifndef MYMIT_ROBOT_COMMON_CONSOLE_LOG_HPP_
 #define MYMIT_ROBOT_COMMON_CONSOLE_LOG_HPP_
 
+#include <chrono>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -56,6 +58,38 @@ inline void print(Level level, const char * format, ...) noexcept
   std::fputs(suffix(), stderr);
   std::fflush(stderr);
 }
+
+/**
+ * @brief 时间节流器：把高频循环里的同类日志压到每 interval_ms 最多一条。
+ *
+ * 500 Hz 控制回路里每帧写终端会拖慢循环，进而让 CAN 发送排队、反馈变旧，
+ * 形成"越打印越坏"的正反馈。热路径日志必须经过本类。
+ * 典型用法：函数内 `static robot_log::Throttle throttle(1000);`。
+ */
+class Throttle
+{
+public:
+  explicit Throttle(std::int64_t interval_ms = 1000) noexcept
+  : interval_ms_(interval_ms) {}
+
+  /** 距上次放行已超过间隔时返回 true，并刷新计时；否则返回 false。 */
+  bool ready() noexcept
+  {
+    const auto now = std::chrono::steady_clock::now();
+    if (last_.time_since_epoch().count() != 0 &&
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - last_).count() <
+      interval_ms_)
+    {
+      return false;
+    }
+    last_ = now;
+    return true;
+  }
+
+private:
+  std::int64_t interval_ms_;
+  std::chrono::steady_clock::time_point last_{};
+};
 
 }  // namespace robot_log
 

@@ -147,6 +147,15 @@ public:
   void close() noexcept;
 
   /**
+   * @brief 串口掉线（USB 重新枚举/瞬断）后重新打开并重建启动基准。
+   *
+   * 会先彻底关掉旧的 fd 和接收线程，再用同一设备路径重新 open()；
+   * open() 内含静止标定，因此机器人不在静止状态时重连会失败并稍后重试。
+   * @return 重新可用时返回 true。
+   */
+  bool tryRecover();
+
+  /**
    * @brief 从串口接收并转换一帧 DM IMU 数据。
    * @param sample 输出的控制层 IMU 数据。
    * @param timestamp 控制循环使用的单调时间戳，单位秒。

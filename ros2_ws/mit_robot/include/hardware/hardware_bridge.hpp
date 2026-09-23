@@ -23,6 +23,8 @@ public:
     // 普通启动只检查当前位置是否落在该窗口内；写入电机零位必须显式使用
     // --set-zero 维护操作。
     float startup_zero_tolerance_rad = 0.05F;
+    // 站立/行走力矩上限；连续额定 30 Nm、峰值 97 Nm，默认受控值 45 Nm。
+    float torque_limit_nm = 45.0F;
     float startup_stationary_velocity_rad_s = 0.05F;
     // 在写入零位或使能物理输出前，要求连续多个采样周期保持稳定；
     // 对 CAN/IMU 来说，仅有一个正常帧是不够的。

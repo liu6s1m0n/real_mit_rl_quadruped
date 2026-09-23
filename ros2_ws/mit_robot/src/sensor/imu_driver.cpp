@@ -13,6 +13,7 @@
 #include <poll.h>
 #include <termios.h>
 #include <utility>
+#include <vector>
 #include <unistd.h>
 
 #include "dm_imu/bsp_crc.h"
@@ -96,17 +97,34 @@ bool decodePacket(
   return true;
 }
 
-bool readUntil(
-  int fd, std::uint8_t * data, std::size_t size,
-  const std::chrono::steady_clock::time_point & deadline,
-  std::size_t & bytes_seen)
+bool readPacket(
+  int fd, DmImuRawSample & sample, std::size_t & bytes_seen,
+  std::vector<std::uint8_t> & stream)
 {
-  std::size_t received = 0;
-  while (received < size) {
+  const auto deadline = std::chrono::steady_clock::now() +
+    std::chrono::milliseconds(kReadTimeoutMs);
+  for (;; ) {
+    while (stream.size() >= kPacketSize) {
+      const auto header = std::find(stream.begin(), stream.end(), kFrameHeader);
+      if (header == stream.end()) {
+        stream.clear();
+        break;
+      }
+      if (header != stream.begin()) {stream.erase(stream.begin(), header);}
+      if (stream.size() < kPacketSize) {break;}
+
+      ImuDriver::Frame packet{};
+      std::copy_n(stream.begin(), packet.size(), packet.begin());
+      if (decodePacket(packet, sample)) {
+        stream.erase(stream.begin(), stream.begin() + packet.size());
+        return true;
+      }
+      stream.erase(stream.begin());
+    }
+
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
       deadline - std::chrono::steady_clock::now()).count();
     if (remaining <= 0) {return false;}
-
     pollfd descriptor{fd, POLLIN, 0};
     const int poll_result = ::poll(&descriptor, 1, static_cast<int>(remaining));
     if (poll_result <= 0 ||
@@ -114,43 +132,15 @@ bool readUntil(
     {
       return false;
     }
-    const ssize_t result = ::read(fd, data + received, size - received);
+
+    std::array<std::uint8_t, 4096> chunk{};
+    const ssize_t result = ::read(fd, chunk.data(), chunk.size());
     if (result > 0) {
-      received += static_cast<std::size_t>(result);
-      bytes_seen += static_cast<std::size_t>(result);
+      const auto size = static_cast<std::size_t>(result);
+      stream.insert(stream.end(), chunk.begin(), chunk.begin() + size);
+      bytes_seen += size;
     } else if (result < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
       return false;
-    }
-  }
-  return true;
-}
-
-bool readPacket(int fd, DmImuRawSample & sample, std::size_t & bytes_seen)
-{
-  ImuDriver::Frame packet{};
-  const auto deadline = std::chrono::steady_clock::now() +
-    std::chrono::milliseconds(kReadTimeoutMs);
-  std::size_t candidate_size = 0;
-  for (;; ) {
-    if (!readUntil(fd, packet.data() + candidate_size, 1, deadline, bytes_seen)) {
-      return false;
-    }
-    if (candidate_size == 0 && packet[0] != kFrameHeader) {continue;}
-    ++candidate_size;
-    if (candidate_size < packet.size()) {continue;}
-    if (decodePacket(packet, sample)) {return true;}
-
-    // Preserve a possible frame header inside a corrupted candidate. Without
-    // this one-byte resynchronization, a valid frame immediately following a
-    // bad frame would be discarded together with the bad candidate.
-    const auto header = std::find(
-      packet.begin() + 1, packet.end(), kFrameHeader);
-    if (header == packet.end()) {
-      candidate_size = 0;
-    } else {
-      const auto shift = static_cast<std::size_t>(header - packet.begin());
-      std::memmove(packet.data(), packet.data() + shift, packet.size() - shift);
-      candidate_size = packet.size() - shift;
     }
   }
 }
@@ -269,33 +259,30 @@ void ImuDriver::receiveLoop() noexcept
 {
   std::uint64_t frame_count = 0;
   const auto start_time = std::chrono::steady_clock::now();
-  auto last_data_log = start_time;
-  std::uint64_t last_logged_sequence = 0;
+  auto last_valid_frame = start_time;
   auto last_wait_log = start_time;
   std::size_t invalid_window_bytes = 0;
+  std::vector<std::uint8_t> stream;
+  stream.reserve(4096);
   while (running_.load()) {
     DmImuRawSample sample;
     std::size_t bytes_seen = 0;
-    if (readPacket(serial_fd_, sample, bytes_seen)) {
+    if (readPacket(serial_fd_, sample, bytes_seen, stream)) {
       const auto received_at = std::chrono::steady_clock::now();
+      last_valid_frame = received_at;
+      invalid_window_bytes = 0;
       sample.received_at = received_at;
       sample.sequence = ++frame_count;
-      if (frame_count == 1 || received_at - last_data_log >= std::chrono::milliseconds(100)) {
-        const double report_seconds = std::max(
-          0.0, std::chrono::duration<double>(received_at - last_data_log).count());
-        const std::uint64_t sequence_delta = frame_count - last_logged_sequence;
+      // 接收线程只报告首帧；周期性终端输出会阻塞串口热路径。
+      if (frame_count == 1) {
         imu_log::print(
           imu_log::Level::Info,
-          "[DM IMU] status=UPDATING seq=%llu (+%llu/%.2fs) | acc=(%.3f, %.3f, %.3f) "
+          "[DM IMU] status=UPDATING seq=1 | acc=(%.3f, %.3f, %.3f) "
           "gyro=(%.3f, %.3f, %.3f) rpy_deg=(%.3f, %.3f, %.3f)\n",
-          static_cast<unsigned long long>(frame_count),
-          static_cast<unsigned long long>(sequence_delta), report_seconds,
           sample.acceleration[0], sample.acceleration[1], sample.acceleration[2],
           sample.angular_velocity[0], sample.angular_velocity[1],
           sample.angular_velocity[2], sample.rpy_degrees[0], sample.rpy_degrees[1],
           sample.rpy_degrees[2]);
-        last_data_log = received_at;
-        last_logged_sequence = frame_count;
       }
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -305,7 +292,9 @@ void ImuDriver::receiveLoop() noexcept
     } else if (running_.load()) {
       invalid_window_bytes += bytes_seen;
       const auto now = std::chrono::steady_clock::now();
-      if (now - last_wait_log >= std::chrono::seconds(1)) {
+      if (now - last_valid_frame >= std::chrono::seconds(1) &&
+        now - last_wait_log >= std::chrono::seconds(1))
+      {
         if (invalid_window_bytes == 0) {
           imu_log::print(
             imu_log::Level::Warning,

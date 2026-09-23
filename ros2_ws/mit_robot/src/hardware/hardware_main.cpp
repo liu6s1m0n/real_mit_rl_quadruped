@@ -52,6 +52,8 @@ struct Arguments
   // 控制周期和启动零位允许误差，单位分别为 s 和 rad。
   float control_time_step = 0.002F;
   float zero_tolerance_rad = 0.05F;
+  // 电机力矩上限；连续额定 30 Nm、峰值 97 Nm，默认沿用 45 Nm 的受控值。
+  float torque_limit_nm = 45.0F;
   // 运行模式开关。
   bool enable_output = false;
   bool keyboard_control = false;
@@ -80,6 +82,7 @@ struct Arguments
           "\n用法: hardware_main --calibration FILE [--can0 can0] [--can1 can1] "
           "[--imu auto|DEVICE] [--control-dt 0.002] "
           "[--zero-tolerance 0.05]（键盘解锁/零位维护容差） "
+          "[--torque-limit 45]（0~97 Nm，站立/行走力矩上限） "
           "[--enable-output | --keyboard-control] [--stand-up] [--set-zero] "
           "[--imu-only | --motor-only] "
           "[--poll-feedback BUS CAN_ID] "
@@ -142,40 +145,43 @@ Arguments parseArguments(int argc, char ** argv)
     // 标定文件路径。
     if (argument == "--calibration") {
       result.calibration_path = requireValue("--calibration");
-    // --can 是旧参数名，保留它作为 --can0 的兼容别名。
+      // --can 是旧参数名，保留它作为 --can0 的兼容别名。
     } else if (argument == "--can0" || argument == "--can") {
       result.can0 = requireValue(argument.c_str());
-    // 第二条 CAN 总线名称。
+      // 第二条 CAN 总线名称。
     } else if (argument == "--can1") {
       result.can1 = requireValue("--can1");
-    // IMU 设备路径或 auto。
+      // IMU 设备路径或 auto。
     } else if (argument == "--imu") {
       result.imu_device = requireValue("--imu");
-    // 控制周期，使用 stof 将命令行字符串转换为 float。
+      // 控制周期，使用 stof 将命令行字符串转换为 float。
     } else if (argument == "--control-dt") {
       result.control_time_step = std::stof(requireValue("--control-dt"));
-    // 启动时电机位置允许偏离标定零位的窗口。
+      // 启动时电机位置允许偏离标定零位的窗口。
     } else if (argument == "--zero-tolerance") {
       result.zero_tolerance_rad = std::stof(requireValue("--zero-tolerance"));
-    // 允许完整控制模式真正向电机输出命令。
+      // 电机力矩上限；站立吃力时可在 0~97 Nm 内临时放宽。
+    } else if (argument == "--torque-limit") {
+      result.torque_limit_nm = std::stof(requireValue("--torque-limit"));
+      // 允许完整控制模式真正向电机输出命令。
     } else if (argument == "--enable-output") {
       result.enable_output = true;
-    // 使用键盘命令控制电机解锁、站立和运动。
+      // 使用键盘命令控制电机解锁、站立和运动。
     } else if (argument == "--keyboard-control") {
       result.keyboard_control = true;
-    // 完整控制模式启动后自动请求站立。
+      // 完整控制模式启动后自动请求站立。
     } else if (argument == "--stand-up") {
       result.stand_up = true;
-    // 维护模式：将当前电机位置写入驱动器零位参数。
+      // 维护模式：将当前电机位置写入驱动器零位参数。
     } else if (argument == "--set-zero") {
       result.set_zero = true;
-    // 只打开并读取 IMU，不需要标定文件，也不打开电机 CAN。
+      // 只打开并读取 IMU，不需要标定文件，也不打开电机 CAN。
     } else if (argument == "--imu-only") {
       result.imu_only = true;
-    // 只打开并诊断电机 CAN，不启动 IMU 和 RobotRunner。
+      // 只打开并诊断电机 CAN，不启动 IMU 和 RobotRunner。
     } else if (argument == "--motor-only") {
       result.motor_only = true;
-    // 读取 --poll-feedback 后面的总线名称和物理 CAN ID。
+      // 读取 --poll-feedback 后面的总线名称和物理 CAN ID。
     } else if (argument == "--poll-feedback") {
       const std::string bus_name = requireValue("--poll-feedback BUS");
       const std::string can_id_text = requireValue("--poll-feedback CAN_ID");
@@ -276,6 +282,12 @@ Arguments parseArguments(int argc, char ** argv)
     }
   } else if (result.slow_move_test) {
     usageError("--slow-move-test 必须与 --single-motor 一起使用");
+  }
+  // 力矩上限必须落在 DM1 允许的 0~97 Nm 区间。
+  if (!std::isfinite(result.torque_limit_nm) || result.torque_limit_nm < 0.0F ||
+    result.torque_limit_nm > 97.0F)
+  {
+    usageError("--torque-limit 必须在 [0, 97] Nm 范围内");
   }
   // 站立会生成实际关节命令，因此必须允许输出。
   if (result.stand_up && !result.enable_output) {
@@ -544,7 +556,8 @@ int runSingleMotor(
       "禁用帧发送成功: bus=%u CAN_ID=0x%03x DLC=%u data="
       "[%02x %02x %02x %02x %02x %02x %02x %02x]\n",
       static_cast<unsigned int>(address.bus), static_cast<unsigned int>(disable_frame.can_id),
-      static_cast<unsigned int>(disable_frame.can_dlc), disable_frame.data[0], disable_frame.data[1],
+      static_cast<unsigned int>(disable_frame.can_dlc), disable_frame.data[0],
+      disable_frame.data[1],
       disable_frame.data[2], disable_frame.data[3], disable_frame.data[4], disable_frame.data[5],
       disable_frame.data[6], disable_frame.data[7]);
   } else {
@@ -710,6 +723,7 @@ int main(int argc, char ** argv)
     // 将命令行参数转换成控制桥使用的运行配置。
     options.control_time_step = arguments.control_time_step;
     options.startup_zero_tolerance_rad = arguments.zero_tolerance_rad;
+    options.torque_limit_nm = arguments.torque_limit_nm;
     options.enable_output = arguments.enable_output;
     options.keyboard_control = arguments.keyboard_control;
     options.request_stand_up = arguments.stand_up;
@@ -738,6 +752,10 @@ int main(int argc, char ** argv)
         "DM1 硬件桥接在启动时为只读模式；不会写入电机参数。"
         "使用 --set-zero 进入维护模式，或使用 --enable-output 启动控制。\n");
     }
+    imu_log::print(
+      imu_log::Level::Info,
+      "DM1 电机力矩上限=%.1f Nm（连续额定 30、峰值 97；可用 --torque-limit 调整）。\n",
+      static_cast<double>(arguments.torque_limit_nm));
     // 进入完整硬件桥：打开设备、执行启动检查，然后运行控制循环。
     const int result = bridge.run(g_stop_requested);
     return result;

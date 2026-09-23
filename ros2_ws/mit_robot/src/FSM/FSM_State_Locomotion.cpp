@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 #include "model/floating_base_model_factory.hpp"
@@ -301,6 +302,8 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   const auto result = mpc_->run(
     *this->_data->state_estimate, *this->_data->desired_state, feet_world);
   if (!result.valid) {
+    std::fprintf(stderr,
+      "[FSM][LOCOMOTION] 失能前判断：MPC result.valid=false。\n");
     this->_data->leg_controller->zeroCommand();
     this->_data->leg_controller->setEnabled(false);
     return;
@@ -348,6 +351,10 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
     const bool wbc_valid = wbc_ctrl_->runAndApply(
       &wbc_data_, *this->_data->state_estimate, *this->_data->joint_states,
       *this->_data->leg_controller);
+    if (!wbc_valid) {
+      std::fprintf(stderr,
+        "[FSM][LOCOMOTION] 失能前判断：WBC runAndApply 失败。\n");
+    }
     if (wbc_valid) {
       // 直接提高摆动腿电机期望关节转速；支撑腿保持KinWBC原始速度。
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
@@ -427,6 +434,8 @@ void FSM_State_Locomotion<T>::RlControlStep()
   const auto policy = this->_data->rl_policy;
   if (!policy) {
     // 没有注入已冻结的推理器时必须拒绝输出，禁止“保持上一帧动作”。
+    std::fprintf(stderr,
+      "[FSM][LOCOMOTION] 失能前判断：RL policy 为空。\n");
     controller.setEnabled(false);
     return;
   }
@@ -443,6 +452,10 @@ void FSM_State_Locomotion<T>::RlControlStep()
     !metadata.uses_vae_posterior_mean ||
     (active_mode_ == ControlMode::StairsRl && !metadata.supports_stairs))
   {
+    std::fprintf(stderr,
+      "[FSM][LOCOMOTION] 失能前判断：RL policy 元数据校验失败，name=%s frozen=%d vae_mean=%d stairs=%d。\n",
+      metadata.name.c_str(), metadata.frozen, metadata.uses_vae_posterior_mean,
+      metadata.supports_stairs);
     controller.setEnabled(false);
     return;
   }
@@ -454,6 +467,8 @@ void FSM_State_Locomotion<T>::RlControlStep()
   if (rl_policy_counter_ == 0) {
     std::array<float, kRlObservationSize> observation{};
     if (!buildRlObservation(observation)) {
+      std::fprintf(stderr,
+        "[FSM][LOCOMOTION] 失能前判断：RL observation 构造失败。\n");
       controller.setEnabled(false);
       return;
     }
@@ -473,11 +488,15 @@ void FSM_State_Locomotion<T>::RlControlStep()
     // at the previous observation, while the actor receives this observation.
     std::array<float, kRlActionSize> action{};
     if (!policy->infer(observation, rl_history_, action)) {
+      std::fprintf(stderr,
+        "[FSM][LOCOMOTION] 失能前判断：RL policy infer 失败。\n");
       controller.setEnabled(false);
       return;
     }
     for (const float value : action) {
       if (!std::isfinite(value)) {
+        std::fprintf(stderr,
+          "[FSM][LOCOMOTION] 失能前判断：RL action 出现非有限值。\n");
         controller.setEnabled(false);
         return;
       }

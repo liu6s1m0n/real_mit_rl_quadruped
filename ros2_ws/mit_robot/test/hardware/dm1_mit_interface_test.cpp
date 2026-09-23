@@ -110,6 +110,82 @@ TEST(Dm1MitInterfaceTest, ValidatesCommandLimitsBeforeSending)
   EXPECT_EQ(transport.disable_count, 0);
 }
 
+// 站立收腿的大腿 PD 峰值本来就在 30 Nm 连续上限附近；容差内的瞬时超调必须
+// 被接受，否则整帧被丢弃会让电机等不到新帧而超时失能。
+TEST(Dm1MitInterfaceTest, ToleratesSmallTorqueOvershootBeforeRejecting)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  auto commands = validCommands(1.0F);
+  commands[0].kp[1] = 100.0F;
+  commands[0].position_desired[1] = 0.32F;  // 32 Nm：超过 30 Nm，但在 25% 容差内
+  EXPECT_TRUE(interface.validateCommands(commands, 1.0));
+
+  commands[0].position_desired[1] = 0.5F;   // 50 Nm：超过硬上限，必须拒绝
+  EXPECT_FALSE(interface.validateCommands(commands, 1.0));
+  EXPECT_EQ(transport.disable_count, 0);
+}
+
+// 指令速度只是前馈目标，放宽到电机空载 60 rpm；超过才拒绝。
+TEST(Dm1MitInterfaceTest, UsesNoLoadVelocityLimit)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  auto commands = validCommands(1.0F);
+  commands[0].velocity_desired[0] = 5.0F;
+  EXPECT_TRUE(interface.validateCommands(commands, 1.0));
+
+  commands[0].velocity_desired[0] = 7.0F;
+  EXPECT_FALSE(interface.validateCommands(commands, 1.0));
+}
+
+// 软件温度上限放到 120 摄氏度；100~120 度是警告区，不再直接失能。
+TEST(Dm1MitInterfaceTest, ToleratesMotorsUpTo120c)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+
+  auto hot = feedback(1.0);
+  for (auto & sample : hot) {
+    sample.temperature_c = 110.0F;
+  }
+  EXPECT_TRUE(interface.updateFeedback(hot, 1.0));
+
+  auto too_hot = feedback(1.1);
+  for (auto & sample : too_hot) {
+    sample.temperature_c = 125.0F;
+  }
+  EXPECT_FALSE(interface.updateFeedback(too_hot, 1.1));
+}
+
+// 反馈/CAN 暂时不可用时，"保持上一帧"通道必须放行，否则电机收不到帧会按
+// 自己的超时失能，整条腿瞬间瘫掉。物理边界仍然照常检查。
+TEST(Dm1MitInterfaceTest, HoldingLastCommandSkipsFeedbackFreshnessButKeepsBounds)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+  auto commands = validCommands(1.0F);
+
+  // 5 s 后反馈已过期：严格通道拒绝，保持通道放行。
+  EXPECT_FALSE(interface.validateCommands(commands, 5.0));
+  EXPECT_TRUE(interface.validateCommands(commands, 5.0, false));
+
+  for (auto & command : commands) {
+    command.timestamp = 5.0F;
+  }
+  EXPECT_TRUE(interface.send(commands, 5.0, false));
+  EXPECT_EQ(transport.frames.size(), kNumJoints);
+
+  // 保持通道不是免检通道：几何越界依旧拒绝。
+  commands[0].position_desired[0] = 2.0F;
+  EXPECT_FALSE(interface.validateCommands(commands, 5.0, false));
+}
+
 TEST(Dm1MitInterfaceTest, RejectsProtocolGainBoundsBeforeEnable)
 {
   MockTransport transport;
@@ -150,12 +226,12 @@ TEST(Dm1MitInterfaceTest, RejectsNonFiniteCalibrationZero)
     dm1_hardware::Dm1MitInterface(transport, invalid), std::invalid_argument);
 }
 
-TEST(Dm1MitInterfaceTest, RejectsStaleFeedbackAndDisablesAllMotors)
+TEST(Dm1MitInterfaceTest, RejectsStaleFeedbackWithoutDisablingMotors)
 {
   MockTransport transport;
   dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.05);
   EXPECT_FALSE(interface.updateFeedback(feedback(1.0), 1.1));
-  EXPECT_GT(transport.disable_count, 0);
+  EXPECT_EQ(transport.disable_count, 0);
 }
 
 TEST(Dm1MitInterfaceTest, AllowsARepeatedSequenceWhileFeedbackIsFresh)
@@ -182,14 +258,34 @@ TEST(Dm1MitInterfaceTest, AcceptsProtocolFeedbackWithoutBusVoltage)
   EXPECT_EQ(transport.disable_count, 0);
 }
 
-TEST(Dm1MitInterfaceTest, RejectsFeedbackAfterItsTimeout)
+TEST(Dm1MitInterfaceTest, RejectsFeedbackAfterItsTimeoutWithoutDisabling)
 {
   MockTransport transport;
   dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.10);
   const auto first = feedback(1.0);
   ASSERT_TRUE(interface.updateFeedback(first, 1.0));
   EXPECT_FALSE(interface.updateFeedback(first, 1.11));
-  EXPECT_GT(transport.disable_count, 0);
+  EXPECT_EQ(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, IgnoresOnlyBus0Motors04And05FeedbackTimeout)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.10);
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  auto samples = feedback(1.2);
+  samples[3].timestamp = 1.0;  // calibration() 中 index 3 为 bus0/CAN 0x04
+  samples[4].timestamp = 1.0;  // calibration() 中 index 4 为 bus0/CAN 0x05
+  EXPECT_TRUE(interface.updateFeedback(samples, 1.2));
+  EXPECT_TRUE(interface.feedbackValid());
+
+  samples = feedback(1.3);
+  samples[3].timestamp = 1.0;  // 0x04、0x05 继续超时仍被临时忽略
+  samples[4].timestamp = 1.0;
+  samples[5].timestamp = 1.0;  // bus0/CAN 0x06 超时仍必须拒绝
+  EXPECT_FALSE(interface.updateFeedback(samples, 1.3));
+  EXPECT_EQ(transport.disable_count, 0);
 }
 
 TEST(Dm1MitInterfaceTest, AllowsShortFeedbackDelayWithinRelaxedTimeout)
@@ -202,7 +298,7 @@ TEST(Dm1MitInterfaceTest, AllowsShortFeedbackDelayWithinRelaxedTimeout)
   EXPECT_EQ(transport.disable_count, 0);
 }
 
-TEST(Dm1MitInterfaceTest, RejectsFeedbackWithoutAReceiverSequence)
+TEST(Dm1MitInterfaceTest, RejectsFeedbackWithoutDisablingOnMissingSequence)
 {
   MockTransport transport;
   dm1_hardware::Dm1MitInterface interface(transport, calibration());
@@ -210,7 +306,7 @@ TEST(Dm1MitInterfaceTest, RejectsFeedbackWithoutAReceiverSequence)
   invalid[5].sequence = 0;
   EXPECT_FALSE(interface.updateFeedback(invalid, 1.0));
   EXPECT_FALSE(interface.feedbackValid());
-  EXPECT_GT(transport.disable_count, 0);
+  EXPECT_EQ(transport.disable_count, 0);
 }
 
 TEST(Dm1MitInterfaceTest, RejectsUnsupportedCanBus)

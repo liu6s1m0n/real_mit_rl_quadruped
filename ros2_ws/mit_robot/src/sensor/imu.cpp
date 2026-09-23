@@ -270,6 +270,42 @@ void HardwareImu::close() noexcept
   startup_orientation_ = Eigen::Quaternionf::Identity();
 }
 
+bool HardwareImu::tryRecover()
+{
+  if (serial_device_.empty()) {return false;}
+  const Vec3<float> previous_gravity = startup_gravity_body_;
+  const bool had_baseline = startup_baseline_valid_;
+  // close() 会停止接收线程并清掉基准；open() 再用同一路径重开并重新标定。
+  close();
+  if (!open()) {
+    static robot_log::Throttle retry_log(2000);
+    if (retry_log.ready()) {
+      imu_log::print(
+        imu_log::Level::Warning,
+        "DM1 IMU 重连失败：设备 '%s' 仍不可用，或未通过启动静止标定；稍后重试。\n",
+        serial_device_.c_str());
+    }
+    return false;
+  }
+  if (had_baseline) {
+    const float dot = previous_gravity.normalized().dot(
+      startup_gravity_body_.normalized());
+    const float angle_deg =
+      std::acos(std::clamp(dot, -1.0F, 1.0F)) * 57.29577951308232F;
+    if (angle_deg > 8.0F) {
+      imu_log::print(
+        imu_log::Level::Warning,
+        "DM1 IMU 重连后重力基准偏差 %.1f°（机器人可能已移动）；"
+        "姿态参考已按当前姿态重建，请确认机器人水平静止。\n",
+        static_cast<double>(angle_deg));
+    }
+  }
+  imu_log::print(
+    imu_log::Level::Info,
+    "DM1 IMU 重连成功：'%s' 已重新打开并重建启动基准。\n", serial_device_.c_str());
+  return true;
+}
+
 bool HardwareImu::calibrateStartupBaseline()
 {
   if (driver_ == nullptr) {return false;}
@@ -385,12 +421,46 @@ bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
   sample = ImuData<float>{};
   if (!std::isfinite(timestamp) || serial_device_.empty()) {
     imu = sample;
+    static robot_log::Throttle throttle(1000);
+    if (throttle.ready()) {
+      imu_log::print(
+        imu_log::Level::Warning,
+        "DM1 IMU 不可用：timestamp 非有限或串口路径为空（device='%s'）。\n",
+        serial_device_.c_str());
+    }
+    return false;
+  }
+  // 逐个条件给出原因：上层只会看到"读取 IMU 或电机快照失败"，
+  // 不区分清楚就无法判断是没做过静止标定、串口掉了还是线程停了。
+  if (!startup_baseline_valid_) {
+    imu = sample;
+    static robot_log::Throttle baseline_throttle(1000);
+    if (baseline_throttle.ready()) {
+      imu_log::print(
+        imu_log::Level::Warning,
+        "DM1 IMU 不可用：启动静止基准无效（标定未完成或已 close()）。\n");
+    }
+    return false;
+  }
+  if (driver_ == nullptr) {
+    imu = sample;
+    static robot_log::Throttle driver_throttle(1000);
+    if (driver_throttle.ready()) {
+      imu_log::print(
+        imu_log::Level::Warning, "DM1 IMU 不可用：串口驱动未创建。\n");
+    }
     return false;
   }
   DmImuRawSample raw_sample;
-  if (!startup_baseline_valid_ || driver_ == nullptr || !driver_->latest(raw_sample)) {
-    imu = ImuData<float>{};
-    sample = imu;
+  if (!driver_->latest(raw_sample)) {
+    imu = sample;
+    static robot_log::Throttle stale_throttle(1000);
+    if (stale_throttle.ready()) {
+      imu_log::print(
+        imu_log::Level::Warning,
+        "DM1 IMU 不可用：没有新鲜帧（>50 ms 或接收线程已停止）；"
+        "看上方 [DM IMU] status=NO_DATA / INVALID_FRAME 提示。\n");
+    }
     return false;
   }
   const Vec3<float> current_rpy_degrees(
