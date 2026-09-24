@@ -131,6 +131,10 @@ private:
   T floating_base_weight_ = T(0.1);   ///< 浮动基修正项在 WBIC 代价中的权重。
   T reaction_force_weight_ = T(1);     ///< 接触反力修正项在 WBIC 代价中的权重。
   std::size_t iteration_ = 0;          ///< 已执行的 WBC 周期数。
+  std::size_t timing_window_samples_ = 0;  ///< 当前 WBC 耗时统计窗口样本数。
+  std::size_t timing_window_overruns_ = 0; ///< 当前窗口超过 2 ms 的样本数。
+  double timing_window_total_ms_ = 0.0;    ///< 当前窗口累计耗时，ms。
+  double timing_window_max_ms_ = 0.0;      ///< 当前窗口最大耗时，ms。
 };
 
 extern template class WBC_Ctrl<float>;

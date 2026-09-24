@@ -7,6 +7,7 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <poll.h>
 #include <termios.h>
 #include <unistd.h>
@@ -142,6 +143,9 @@ void KeyboardTeleop::enqueue(
 // 后台读取循环：轮询标准输入，解码有效按键并放入终端命令队列。
 void KeyboardTeleop::readLoop() noexcept
 {
+  const char * exit_reason = "程序请求停止";
+  int exit_error = 0;
+  short exit_revents = 0;
   while (!stopping_.load()) {
     // 使用有限超时轮询，使线程既不会永久阻塞，也能及时响应停止请求。
     pollfd descriptor{STDIN_FILENO, POLLIN, 0};
@@ -151,6 +155,8 @@ void KeyboardTeleop::readLoop() noexcept
     if (result < 0) {
       // 被信号中断时继续读取；其他轮询错误会结束线程。
       if (errno == EINTR) {continue;}
+      exit_reason = "poll() 失败";
+      exit_error = errno;
       break;
     }
     // 超时但没有输入时，回到循环顶部检查 stopping_。
@@ -158,6 +164,8 @@ void KeyboardTeleop::readLoop() noexcept
 
     // 输入描述符发生错误、挂起或失效时，结束读取线程。
     if ((descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      exit_reason = "终端描述符错误、挂断或失效";
+      exit_revents = descriptor.revents;
       break;
     }
 
@@ -166,11 +174,14 @@ void KeyboardTeleop::readLoop() noexcept
     const ssize_t count = ::read(STDIN_FILENO, &byte, sizeof(byte));
     if (count == 0) {
       // 返回 0 表示标准输入已到达 EOF。
+      exit_reason = "read() 返回 EOF";
       break;
     }
     if (count < 0) {
       // 可重试的读取错误继续循环，其他错误结束线程。
       if (errno == EINTR || errno == EAGAIN) {continue;}
+      exit_reason = "read() 失败";
+      exit_error = errno;
       break;
     }
 
@@ -179,6 +190,13 @@ void KeyboardTeleop::readLoop() noexcept
     if (command.has_value()) {enqueue(terminal_commands_, *command);}
   }
 
+  if (!stopping_.load()) {
+    std::fprintf(
+      stderr,
+      "键盘输入线程异常停止：reason=%s errno=%d(%s) revents=0x%x。\n",
+      exit_reason, exit_error, exit_error == 0 ? "none" : std::strerror(exit_error),
+      static_cast<unsigned int>(exit_revents));
+  }
   // 线程退出前发布存活状态，供外部检测键盘输入故障。
   thread_alive_.store(false);
 }

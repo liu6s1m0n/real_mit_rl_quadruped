@@ -1,5 +1,6 @@
 #include "WBC/WBC_Ctrl/WBC_Ctrl.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -241,8 +242,39 @@ bool WBC_Ctrl<T>::runAndApply(
   const std::array<JointState<T>, kNumLegs> & joint_states,
   LegController<T> & leg_controller)
 {
+  constexpr double kControlCycleBudgetMs = 2.0;
+  const auto timing_start = std::chrono::steady_clock::now();
   const bool success = run(input, estimate, joint_states);
   applyResult(leg_controller);
+  const double elapsed_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - timing_start).count();
+  ++timing_window_samples_;
+  timing_window_total_ms_ += elapsed_ms;
+  if (elapsed_ms > timing_window_max_ms_) {timing_window_max_ms_ = elapsed_ms;}
+  const bool overrun = elapsed_ms > kControlCycleBudgetMs;
+  if (overrun) {++timing_window_overruns_;}
+
+  if (iteration_ <= 10 || (overrun && timing_window_overruns_ == 1)) {
+    std::fprintf(
+      stderr,
+      "[WBC][TIMING] iteration=%zu elapsed_ms=%.6f budget_ms=%.3f "
+      "overrun=%s success=%s tasks=%zu contacts=%zu。\n",
+      iteration_, elapsed_ms, kControlCycleBudgetMs, overrun ? "true" : "false",
+      success ? "true" : "false", tasks_.size(), contacts_.size());
+  }
+  if (timing_window_samples_ >= 500) {
+    std::fprintf(
+      stderr,
+      "[WBC][TIMING][SUMMARY] end_iteration=%zu samples=%zu avg_ms=%.6f "
+      "max_ms=%.6f budget_ms=%.3f overruns=%zu。\n",
+      iteration_, timing_window_samples_,
+      timing_window_total_ms_ / static_cast<double>(timing_window_samples_),
+      timing_window_max_ms_, kControlCycleBudgetMs, timing_window_overruns_);
+    timing_window_samples_ = 0;
+    timing_window_overruns_ = 0;
+    timing_window_total_ms_ = 0.0;
+    timing_window_max_ms_ = 0.0;
+  }
   return success;
 }
 

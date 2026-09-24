@@ -27,6 +27,20 @@ constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(100);
 // 状态估计/控制保持 500 Hz，MIT 命令与未使能反馈轮询按 125 Hz 下发。
 // 每条总线 6 台电机的命令+反馈约 1500 帧/s，把经典 CAN 占用控制在约 20%。
 constexpr std::uint32_t kMotorFrameDivider = 4;
+
+const char * fsmStateLabel(FSM_StateName state) noexcept
+{
+  switch (state) {
+    case FSM_StateName::PASSIVE: return "PASSIVE";
+    case FSM_StateName::JOINT_PD: return "JOINT_PD";
+    case FSM_StateName::STAND_UP: return "STAND_UP";
+    case FSM_StateName::RECOVERY_STAND: return "RECOVERY_STAND";
+    case FSM_StateName::BALANCE_STAND: return "BALANCE_STAND";
+    case FSM_StateName::LOCOMOTION: return "LOCOMOTION";
+    case FSM_StateName::LIE_DOWN: return "LIE_DOWN";
+    default: return "INVALID";
+  }
+}
 }
 
 // 构造硬件桥：绑定底层设备、关节标定和 RobotRunner，随后校验运行参数。
@@ -115,7 +129,10 @@ int HardwareBridge::runKeyboardControl(
       if (failure_log.ready()) {
         imu_log::print(
           imu_log::Level::Warning,
-          "DM1 控制帧已跳过：%s；不补发旧帧，等待下一次正常周期。\n", reason);
+          "DM1 控制帧已跳过：stage=%s fsm=%s output_enabled=%s；"
+          "不补发旧帧，等待下一次正常周期。\n",
+          reason, fsmStateLabel(runner_.currentStateName()),
+          output_enabled ? "true" : "false");
       }
     };
   imu_log::print(
@@ -163,20 +180,19 @@ int HardwareBridge::runKeyboardControl(
     dm1_hardware::HardwareSample sample;
     // 电机尚未解锁时，只发送驱动器的零增益反馈轮询，不生成
     // RobotRunner/MIT-PD 控制命令。
-    bool feedback_cycle_valid = true;
     const bool send_motor_frame = (motor_frame_phase++ % kMotorFrameDivider) == 0;
     if (!control_active && send_motor_frame && !hardware_.pollMotors()) {
-      feedback_cycle_valid = false;
+      report_control_failure("pollMotors");
+      std::this_thread::sleep_until(next_cycle);
+      continue;
     }
-    if (feedback_cycle_valid && !hardware_.read(sample, now_s)) {
-      feedback_cycle_valid = false;
+    if (!hardware_.read(sample, now_s)) {
+      report_control_failure("hardware.read(IMU/电机快照)");
+      std::this_thread::sleep_until(next_cycle);
+      continue;
     }
-    if (feedback_cycle_valid && !mit_.updateFeedback(sample.motors, now_s)) {
-      feedback_cycle_valid = false;
-    }
-    if (!feedback_cycle_valid) {
-      // 反馈不可用时丢弃本周期，不向已经拥塞的 CAN 队列补发旧命令。
-      report_control_failure("读取或校验 DM1 反馈失败");
+    if (!mit_.updateFeedback(sample.motors, now_s)) {
+      report_control_failure("mit.updateFeedback(12路反馈校验)");
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
@@ -185,15 +201,11 @@ int HardwareBridge::runKeyboardControl(
       arbiter.takeEnableRequest();
     if (enable_requested) {
       const bool safe_to_enable = stationaryLevelSample(sample) &&
-        motorPositionsWithin(sample, options_.startup_zero_tolerance_rad) &&
         mit_.feedbackValid();
       if (!safe_to_enable || !hardware_.enableAll()) {
-        if (!motorPositionsWithin(sample, options_.startup_zero_tolerance_rad)) {
-          reportInvalidMotorPositions(sample, options_.startup_zero_tolerance_rad);
-        }
         imu_log::print(
           imu_log::Level::Error,
-          "键盘解锁被拒绝：反馈、IMU、水平/静止状态或零位窗口检查失败；"
+          "键盘解锁被拒绝：反馈、IMU、水平/静止状态或硬件使能检查失败；"
           "电机零位未改变。\n");
         arbiter.markFault();
         hardware_.disableAll();
@@ -281,7 +293,9 @@ int HardwareBridge::runKeyboardControl(
         if (send_failure_log.ready()) {
           imu_log::print(
             imu_log::Level::Warning,
-            "DM1 CAN 发送失败；已丢弃当前帧，不补发。\n");
+            "DM1 CAN 发送失败：fsm=%s now=%.6f send_motor_frame=true；"
+            "已丢弃当前帧，不补发。\n",
+            fsmStateLabel(runner_.currentStateName()), now_s);
         }
       }
     }
@@ -300,7 +314,12 @@ int HardwareBridge::runKeyboardControl(
       {
         imu_log::print(
           imu_log::Level::Warning,
-          "DM1 键盘控制周期超过截止时间；已重新同步周期，键盘无新输入不视为故障。\n");
+          "DM1 键盘控制周期超过截止时间：fsm=%s elapsed_ms=%.3f late_ms=%.3f "
+          "send_motor_frame=%s；已重新同步周期。\n",
+          fsmStateLabel(runner_.currentStateName()),
+          std::chrono::duration<double, std::milli>(finished - cycle_start).count(),
+          std::chrono::duration<double, std::milli>(finished - next_cycle).count(),
+          send_motor_frame ? "true" : "false");
         consecutive_cycle_overruns = 0;
         cycle_overruns.clear();
       }
@@ -725,17 +744,20 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       result = 3;
       break;
     }
-    if (!hardware_.read(sample, now_s) ||
-      !mit_.updateFeedback(sample.motors, now_s))
-    {
+    const bool hardware_read_valid = hardware_.read(sample, now_s);
+    const bool motor_feedback_valid = hardware_read_valid &&
+      mit_.updateFeedback(sample.motors, now_s);
+    if (!motor_feedback_valid) {
       ++consecutive_output_failures;
       if (consecutive_output_failures == 1 ||
         (consecutive_output_failures % 500) == 0)
       {
         imu_log::print(
           imu_log::Level::Warning,
-          "DM1 反馈读取或校验失败（连续 %zu 帧）；不补发旧帧。\n",
-          consecutive_output_failures);
+          "DM1 输入失败：stage=%s fsm=%s now=%.6f consecutive=%zu；不补发旧帧。\n",
+          hardware_read_valid ? "mit.updateFeedback(12路反馈校验)" :
+          "hardware.read(IMU/电机快照)", fsmStateLabel(runner_.currentStateName()),
+          now_s, consecutive_output_failures);
       }
       if (consecutive_output_failures >= kMaximumConsecutiveOutputFailures) {
         imu_log::print(
@@ -753,16 +775,20 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
     // updateFeedback() 中用于检查驱动器是否确实返回了新帧。
     sample.imu.timestamp = timestamp;
     const auto joints = mit_.jointStates(timestamp);
-    if (!runner_.updateHardwareFeedback(sample.imu, joints, timestamp) ||
-      !runner_.run())
-    {
+    const bool runner_feedback_valid =
+      runner_.updateHardwareFeedback(sample.imu, joints, timestamp);
+    const bool runner_control_valid = runner_feedback_valid && runner_.run();
+    if (!runner_control_valid) {
       ++consecutive_output_failures;
       if (consecutive_output_failures == 1 ||
         (consecutive_output_failures % 500) == 0)
       {
         imu_log::print(
           imu_log::Level::Warning,
-          "DM1 状态估计器/控制器拒绝了硬件数据帧（连续 %zu 帧）；不补发旧帧。\n",
+          "DM1 控制链失败：stage=%s fsm=%s now=%.6f consecutive=%zu；"
+          "不补发旧帧。\n",
+          runner_feedback_valid ? "RobotRunner.run" : "updateHardwareFeedback",
+          fsmStateLabel(runner_.currentStateName()), now_s,
           consecutive_output_failures);
       }
       if (consecutive_output_failures >= kMaximumConsecutiveOutputFailures) {
@@ -864,7 +890,9 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
           if (send_failure_log.ready()) {
             imu_log::print(
               imu_log::Level::Warning,
-              "DM1 CAN 发送失败；已丢弃当前帧，不补发。\n");
+              "DM1 CAN 发送失败：fsm=%s now=%.6f send_motor_frame=true；"
+              "已丢弃当前帧，不补发。\n",
+              fsmStateLabel(runner_.currentStateName()), now_s);
           }
         }
       }
@@ -882,8 +910,13 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       }
       imu_log::print(
         imu_log::Level::Warning,
-        "DM1 控制周期超过截止时间（连续 %d 次，时间窗口内 %zu 次）。\n",
-        consecutive_cycle_overruns, cycle_overruns.size());
+        "DM1 控制周期超过截止时间：fsm=%s elapsed_ms=%.3f late_ms=%.3f "
+        "send_motor_frame=%s consecutive=%d window=%zu。\n",
+        fsmStateLabel(runner_.currentStateName()),
+        std::chrono::duration<double, std::milli>(finished - cycle_start).count(),
+        std::chrono::duration<double, std::milli>(finished - next_cycle).count(),
+        send_motor_frame ? "true" : "false", consecutive_cycle_overruns,
+        cycle_overruns.size());
       // 丢弃已经错过的旧截止时间，避免一次较慢的 WBC 周期让后续周期
       // 永远落后并被连续计为超时；真正持续超过周期仍由下面的阈值保护。
       next_cycle = finished;

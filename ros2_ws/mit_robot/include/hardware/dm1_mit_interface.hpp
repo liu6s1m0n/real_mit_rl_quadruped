@@ -477,6 +477,17 @@ public:
 
         // 任意一帧发送失败都进入失效状态并关闭全部电机。
         if (!transport_.sendMit(frame)) {
+          static robot_log::Throttle transport_failure_log(1000);
+          if (transport_failure_log.ready()) {
+            imu_log::print(
+              imu_log::Level::Warning,
+              "DM1 MIT 底层发送失败：leg=%zu joint=%zu bus=%u can_id=0x%02x "
+              "master_id=0x%03x q=%.6g dq=%.6g kp=%.6g kd=%.6g tau_ff=%.6g。\n",
+              leg, joint, static_cast<unsigned int>(frame.bus),
+              static_cast<unsigned int>(frame.can_id),
+              static_cast<unsigned int>(frame.master_id), frame.position,
+              frame.velocity, frame.kp, frame.kd, frame.torque);
+          }
           return fail();
         }
       }

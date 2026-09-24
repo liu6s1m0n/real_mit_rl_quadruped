@@ -200,6 +200,25 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
     return;
   }
 
+  // 实机从趴卧支撑区抬升时需要额外克服静摩擦和模型质量误差；保持 WBC
+  // 各关节力矩之间的动力学比例，只统一放大前馈项。最终总力矩仍由硬件层
+  // 的力矩上限校验，不改变关节 PD 增益或位置目标。
+  constexpr T kBalanceFeedforwardScale = T(1.3);
+  T maximum_feedforward_torque = T(0);
+  for (auto & command : this->_data->leg_controller->commands) {
+    command.torque_feedforward *= kBalanceFeedforwardScale;
+    maximum_feedforward_torque = std::max(
+      maximum_feedforward_torque,
+      command.torque_feedforward.cwiseAbs().maxCoeff());
+  }
+  if (posture_ramp_iteration_ == 0) {
+    std::fprintf(
+      stderr,
+      "[FSM][BALANCE_STAND] 前馈力矩持续放大：scale=%.2f first_frame_max_tau=%.3f Nm。\n",
+      static_cast<double>(kBalanceFeedforwardScale),
+      static_cast<double>(maximum_feedforward_torque));
+  }
+
   // 机身任务和四足接触不能唯一确定 12 个关节角，KinWBC 仍存在姿态零空间。
   // 因此根据目标高度构造对称腿姿，并用较弱关节阻抗抑制零空间漂移；
   // WBIC 计算的全身前馈力矩和地面反力仍然保留。
