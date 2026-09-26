@@ -96,10 +96,10 @@ public:
 // ---------- DM1 真机 MIT 接口 ----------
 
 /**
- * @brief 将统一关节命令转换为 DM1 MIT 帧，并在异常时关闭全部输出。
+ * @brief 将统一关节命令转换为 DM1 MIT 帧，并拒绝不安全的输入。
  *
- * 反馈必须包含 12 个唯一电机 ID，且在超时时间内同时有效；温度、序号、
- * 驱动器故障码以及位置/速度/力矩中的非有限值都会触发安全停机。只有当
+ * 反馈必须包含 12 个唯一电机 ID；温度、序号、驱动器故障码或
+ * 位置/速度/力矩非法时拒绝该反馈，是否失能由上层硬件桥决定。只有当
  * 底层协议明确提供电压时才校验电压。默认只允许 30 N*m 连续力矩，97 N*m
  * 峰值力矩必须由调用方显式启用。
  */
@@ -158,7 +158,7 @@ public:
 
   bool updateFeedback(const FeedbackArray & feedback, double now_s) noexcept
   {
-    // 当前时间无效时，立即使反馈失效并关闭所有电机输出。
+    // 当前时间无效时，拒绝该反馈并由上层决定是否失能。
     if (!std::isfinite(now_s)) {
       imu_log::print(
         imu_log::Level::Error,
@@ -190,10 +190,6 @@ public:
         reason = "timestamp 非有限";
       } else if (sample.timestamp > now_s) {
         reason = "timestamp 超前";
-      } else if (feedback_age > feedback_timeout_s_ &&
-        !ignoresFeedbackTimeout(sample.bus, sample.can_id))
-      {
-        reason = "反馈超时";
       } else if (sample.sequence == 0) {
         reason = "sequence 为 0";
       } else if (previous_sequence != 0 && sample.sequence < previous_sequence) {
@@ -270,7 +266,7 @@ public:
     return result;
   }
 
-  /** @brief 返回当前是否存在完整、有效且未超时的电机反馈。 */
+  /** @brief 返回当前是否存在完整、有效的电机反馈。 */
   bool feedbackValid() const noexcept {return feedback_valid_;}
 
   /**
@@ -495,9 +491,6 @@ public:
     return true;
   }
 
-  // 立即标记反馈无效并关闭所有电机输出。
-  void disable() noexcept {feedback_valid_ = false; transport_.disableAll();}
-
 private:
   // 每条腿三个关节的模型位置下限，单位为 rad。
   static constexpr std::array<float, kJointsPerLeg> kLowerLimit{
@@ -516,14 +509,6 @@ private:
   // 丢弃（丢帧会让电机等不到新帧而超时失能）。需要更大范围请用
   // hardware_main 的 --torque-limit（0~97 Nm）显式放宽。
   static constexpr float kTorqueTolerance = 1.10F;
-
-  // 临时隔离逻辑 bus0/CAN 0x04、0x05 的反馈超时。电机仍照常接收控制帧并
-  // 保持使能；这里只允许沿用它们最后一次通过其他校验的反馈。
-  static constexpr bool ignoresFeedbackTimeout(
-    std::uint8_t bus, std::uint16_t can_id) noexcept
-  {
-    return bus == 0U && (can_id == 0x04U || can_id == 0x05U);
-  }
 
   // 根据总线和物理 CAN ID 查找标定数组中的关节索引。
   // 找不到时返回 kNumJoints，供调用方统一判定为无效地址。
@@ -551,14 +536,14 @@ private:
       static_cast<double>(soft_limit));
   }
 
-  // 反馈校验失败时清空有效标志，并以故障闭锁方式关闭所有电机。
+  // 反馈校验失败时只清空有效标志，失能策略由上层硬件桥决定。
   bool invalidate() noexcept
   {
     feedback_valid_ = false;
     return false;
   }
 
-  // 命令校验或发送失败时清空有效标志，并关闭所有电机。
+  // 命令校验或发送失败时只清空有效标志。
   bool fail() noexcept
   {
     feedback_valid_ = false;
@@ -573,7 +558,7 @@ private:
   double latest_feedback_time_ = 0.0;  // 最近一次完整有效反馈的时间戳，s。
   bool allow_peak_torque_ = false;  // 是否允许使用 97 N*m 峰值力矩限制。
   float torque_limit_override_ = 0.0F;  // 非零时使用的受控临时力矩上限，N*m。
-  bool feedback_valid_ = false;  // 当前反馈是否完整、有效且未超时。
+  bool feedback_valid_ = false;  // 当前反馈是否完整、有效。
   mutable std::uint64_t tolerated_torque_frames_ = 0;  // 力矩容差提示节流计数。
 };
 

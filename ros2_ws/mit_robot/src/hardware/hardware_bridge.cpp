@@ -41,6 +41,30 @@ const char * fsmStateLabel(FSM_StateName state) noexcept
     default: return "INVALID";
   }
 }
+
+bool motorDamageRisk(const dm1_hardware::HardwareSample & sample) noexcept
+{
+  return std::any_of(
+    sample.motors.begin(), sample.motors.end(), [](const auto & motor) {
+      return motor.fault_code != 0 || motor.temperature_c > 120.0F ||
+      motor.rotor_temperature_c > 120.0F ||
+      (motor.voltage_valid && motor.voltage_v > 60.0F);
+    });
+}
+
+void sendStandUpHold(
+  dm1_hardware::Dm1MitInterface & mit,
+  const dm1_hardware::Dm1MitInterface::CommandArray & commands,
+  double now_s, bool due, bool available) noexcept
+{
+  if (due && available && !mit.send(commands, now_s, false)) {
+    static robot_log::Throttle log(1000);
+    if (log.ready()) {
+      imu_log::print(
+        imu_log::Level::Error, "DM1 站立保持帧发送失败；不失能，继续重试。\n");
+    }
+  }
+}
 }
 
 // 构造硬件桥：绑定底层设备、关节标定和 RobotRunner，随后校验运行参数。
@@ -114,6 +138,9 @@ int HardwareBridge::runKeyboardControl(
   bool output_enabled = false;
   bool control_active = false;
   bool stand_up_pending = false;
+  bool stand_up_transition = false;
+  bool have_safe_commands = false;
+  dm1_hardware::Dm1MitInterface::CommandArray safe_commands{};
   bool keyboard_fault_reported = false;
   auto next_cycle = std::chrono::steady_clock::now();
   const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -129,10 +156,10 @@ int HardwareBridge::runKeyboardControl(
       if (failure_log.ready()) {
         imu_log::print(
           imu_log::Level::Warning,
-          "DM1 控制帧已跳过：stage=%s fsm=%s output_enabled=%s；"
-          "不补发旧帧，等待下一次正常周期。\n",
+          "DM1 控制帧已跳过：stage=%s fsm=%s output_enabled=%s；%s。\n",
           reason, fsmStateLabel(runner_.currentStateName()),
-          output_enabled ? "true" : "false");
+          output_enabled ? "true" : "false",
+          stand_up_transition ? "保持上一安全帧，不失能" : "等待下一次正常周期");
       }
     };
   imu_log::print(
@@ -175,6 +202,8 @@ int HardwareBridge::runKeyboardControl(
       }
       control_active = false;
       stand_up_pending = false;
+      stand_up_transition = false;
+      have_safe_commands = false;
     }
 
     dm1_hardware::HardwareSample sample;
@@ -188,11 +217,31 @@ int HardwareBridge::runKeyboardControl(
     }
     if (!hardware_.read(sample, now_s)) {
       report_control_failure("hardware.read(IMU/电机快照)");
+      if (stand_up_transition && output_enabled) {
+        if (motorDamageRisk(sample)) {
+          imu_log::print(
+            imu_log::Level::Error, "DM1 站立阶段检测到电机损坏风险；执行失能。\n");
+          hardware_.disableAll();
+          result = 3;
+          break;
+        }
+        sendStandUpHold(mit_, safe_commands, now_s, send_motor_frame, have_safe_commands);
+      }
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
     if (!mit_.updateFeedback(sample.motors, now_s)) {
       report_control_failure("mit.updateFeedback(12路反馈校验)");
+      if (stand_up_transition && output_enabled) {
+        if (motorDamageRisk(sample)) {
+          imu_log::print(
+            imu_log::Level::Error, "DM1 站立阶段检测到电机损坏风险；执行失能。\n");
+          hardware_.disableAll();
+          result = 3;
+          break;
+        }
+        sendStandUpHold(mit_, safe_commands, now_s, send_motor_frame, have_safe_commands);
+      }
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
@@ -243,6 +292,7 @@ int HardwareBridge::runKeyboardControl(
         arbiter.stopMotion();
         runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
         stand_up_pending = false;
+        stand_up_transition = false;
         imu_log::print(
           imu_log::Level::Info,
           "趴下请求已接受：MPC/WBC 下降控制已激活。\n");
@@ -270,6 +320,9 @@ int HardwareBridge::runKeyboardControl(
       sample.imu, mit_.jointStates(timestamp), timestamp);
     if (control_active && !feedback_valid) {
       report_control_failure("状态估计器拒绝硬件反馈");
+      if (stand_up_transition && output_enabled) {
+        sendStandUpHold(mit_, safe_commands, now_s, send_motor_frame, have_safe_commands);
+      }
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
@@ -277,17 +330,24 @@ int HardwareBridge::runKeyboardControl(
     const bool control_valid = !control_active || runner_.run();
     if (control_active && control_valid && stand_up_pending && runner_.requestStandUp()) {
       stand_up_pending = false;
+      stand_up_transition = true;
       imu_log::print(imu_log::Level::Info, "站立请求已接受。\n");
     }
     if (control_active && !control_valid) {
       report_control_failure("RobotRunner 拒绝控制帧");
+      if (stand_up_transition && output_enabled) {
+        sendStandUpHold(mit_, safe_commands, now_s, send_motor_frame, have_safe_commands);
+      }
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
     if (control_active && send_motor_frame &&
       arbiter.state() == teleop::MotorOutputState::Enabled && output_enabled)
     {
-      if (!mit_.send(runner_.jointCommands(), now_s)) {
+      if (mit_.send(runner_.jointCommands(), now_s)) {
+        safe_commands = runner_.jointCommands();
+        have_safe_commands = true;
+      } else {
         // 发送失败只丢弃当前帧，不立即重发；下一正常周期自然覆盖。
         static robot_log::Throttle send_failure_log(1000);
         if (send_failure_log.ready()) {
@@ -297,7 +357,13 @@ int HardwareBridge::runKeyboardControl(
             "已丢弃当前帧，不补发。\n",
             fsmStateLabel(runner_.currentStateName()), now_s);
         }
+        if (stand_up_transition) {
+          sendStandUpHold(mit_, safe_commands, now_s, true, have_safe_commands);
+        }
       }
+    }
+    if (stand_up_transition && runner_.locomotionEntryReady()) {
+      stand_up_transition = false;
     }
     const auto finished = std::chrono::steady_clock::now();
     if (finished > next_cycle) {
@@ -726,7 +792,9 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
   int consecutive_cycle_overruns = 0;
   std::deque<std::chrono::steady_clock::time_point> cycle_overruns;
   bool output_enabled = false;
-  // 连续失败看门狗：短暂失败丢弃当前帧，持续失败才退出。
+  bool stand_up_transition = false;
+  bool have_safe_commands = false;
+  dm1_hardware::Dm1MitInterface::CommandArray safe_commands{};
   constexpr std::size_t kMaximumConsecutiveOutputFailures = 1500;  // 约 3 s @500Hz
   std::size_t consecutive_output_failures = 0;
   std::uint32_t motor_frame_phase = 0;
@@ -737,34 +805,39 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
     dm1_hardware::HardwareSample sample;
     const bool send_motor_frame = (motor_frame_phase++ % kMotorFrameDivider) == 0;
 
-    if (!options_.enable_output && send_motor_frame && !hardware_.pollMotors()) {
-      imu_log::print(
-        imu_log::Level::Error,
-        "DM1 电机反馈轮询失败；电机已失能。\n");
-      result = 3;
-      break;
-    }
     const bool hardware_read_valid = hardware_.read(sample, now_s);
     const bool motor_feedback_valid = hardware_read_valid &&
       mit_.updateFeedback(sample.motors, now_s);
     if (!motor_feedback_valid) {
+      if (stand_up_transition && motorDamageRisk(sample)) {
+        imu_log::print(
+          imu_log::Level::Error, "DM1 站立阶段检测到电机损坏风险；执行失能。\n");
+        result = 3;
+        break;
+      }
       ++consecutive_output_failures;
       if (consecutive_output_failures == 1 ||
         (consecutive_output_failures % 500) == 0)
       {
         imu_log::print(
           imu_log::Level::Warning,
-          "DM1 输入失败：stage=%s fsm=%s now=%.6f consecutive=%zu；不补发旧帧。\n",
+          "DM1 输入失败：stage=%s fsm=%s now=%.6f consecutive=%zu；%s。\n",
           hardware_read_valid ? "mit.updateFeedback(12路反馈校验)" :
           "hardware.read(IMU/电机快照)", fsmStateLabel(runner_.currentStateName()),
-          now_s, consecutive_output_failures);
+          now_s, consecutive_output_failures,
+          stand_up_transition ? "保持上一安全帧，不失能" : "不补发旧帧");
       }
-      if (consecutive_output_failures >= kMaximumConsecutiveOutputFailures) {
+      if (!stand_up_transition &&
+        consecutive_output_failures >= kMaximumConsecutiveOutputFailures)
+      {
         imu_log::print(
           imu_log::Level::Error,
           "DM1 反馈连续失败 %zu 帧；电机失能。\n", consecutive_output_failures);
         result = 3;
         break;
+      }
+      if (stand_up_transition) {
+        sendStandUpHold(mit_, safe_commands, now_s, send_motor_frame, have_safe_commands);
       }
       std::this_thread::sleep_until(next_cycle);
       continue;
@@ -785,18 +858,23 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       {
         imu_log::print(
           imu_log::Level::Warning,
-          "DM1 控制链失败：stage=%s fsm=%s now=%.6f consecutive=%zu；"
-          "不补发旧帧。\n",
+          "DM1 控制链失败：stage=%s fsm=%s now=%.6f consecutive=%zu；%s。\n",
           runner_feedback_valid ? "RobotRunner.run" : "updateHardwareFeedback",
           fsmStateLabel(runner_.currentStateName()), now_s,
-          consecutive_output_failures);
+          consecutive_output_failures,
+          stand_up_transition ? "保持上一安全帧，不失能" : "不补发旧帧");
       }
-      if (consecutive_output_failures >= kMaximumConsecutiveOutputFailures) {
+      if (!stand_up_transition &&
+        consecutive_output_failures >= kMaximumConsecutiveOutputFailures)
+      {
         imu_log::print(
           imu_log::Level::Error,
           "DM1 控制器连续失败 %zu 帧；电机失能。\n", consecutive_output_failures);
         result = 4;
         break;
+      }
+      if (stand_up_transition) {
+        sendStandUpHold(mit_, safe_commands, now_s, send_motor_frame, have_safe_commands);
       }
       std::this_thread::sleep_until(next_cycle);
       continue;
@@ -805,97 +883,101 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
 
     if (options_.request_stand_up && !stand_up_accepted) {
       stand_up_accepted = runner_.requestStandUp();
+      stand_up_transition = stand_up_accepted;
     }
 
-    if (options_.enable_output) {
-      if (!output_enabled) {
-        // 首个控制器帧必须完整且通过协议安全检查后，才能使能物理输出。
-        if (!mit_.validateCommands(runner_.jointCommands(), now_s)) {
-          imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：初始控制指令校验失败。\n");
-          result = 8;
-          break;
-        }
-        if (!hardware_.enableAll()) {
-          imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：首轮硬件使能失败。\n");
-          result = 8;
-          break;
-        }
-        output_enabled = true;
-        // 使能后只发送刷新反馈并重新生成的控制帧，确保首个输出帧开始执行平滑回零轨迹。
+    if (!output_enabled) {
+      // 首个控制器帧必须完整且通过协议安全检查后，才能使能物理输出。
+      if (!mit_.validateCommands(runner_.jointCommands(), now_s)) {
         imu_log::print(
-          imu_log::Level::Info,
-          "DM1 电机已使能；正在将电机平滑回到零位。\n");
+          imu_log::Level::Error,
+          "DM1 自动失能原因：初始控制指令校验失败。\n");
+        result = 8;
+        break;
+      }
+      if (!hardware_.enableAll()) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 自动失能原因：首轮硬件使能失败。\n");
+        result = 8;
+        break;
+      }
+      output_enabled = true;
+      imu_log::print(
+        imu_log::Level::Info,
+        "DM1 电机已使能；正在将电机平滑回到零位。\n");
 
-        // 不发送使能前生成的控制帧；重新读取反馈并再次运行控制器，
-        // 让首个使能后的控制帧基于最新的状态估计。
-        const auto fresh_cycle_start = std::chrono::steady_clock::now();
-        now_s = std::chrono::duration<double>(fresh_cycle_start - start).count();
-        if (!hardware_.pollMotors()) {
+      const auto fresh_cycle_start = std::chrono::steady_clock::now();
+      now_s = std::chrono::duration<double>(fresh_cycle_start - start).count();
+      if (!hardware_.pollMotors()) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 自动失能原因：使能后电机反馈轮询失败。\n");
+        result = 3;
+        break;
+      }
+      if (!hardware_.read(sample, now_s)) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 自动失能原因：使能后读取硬件反馈失败。\n");
+        result = 3;
+        break;
+      }
+      if (!mit_.updateFeedback(sample.motors, now_s)) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 自动失能原因：使能后电机反馈校验失败。\n");
+        result = 3;
+        break;
+      }
+      const float fresh_timestamp = static_cast<float>(now_s);
+      sample.imu.timestamp = fresh_timestamp;
+      if (!runner_.updateHardwareFeedback(
+          sample.imu, mit_.jointStates(fresh_timestamp), fresh_timestamp))
+      {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 自动失能原因：使能后状态估计器拒绝硬件反馈。\n");
+        result = 5;
+        break;
+      }
+      if (!runner_.run()) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 自动失能原因：使能后 RobotRunner 控制失败。\n");
+        result = 5;
+        break;
+      }
+      if (!mit_.validateCommands(runner_.jointCommands(), now_s)) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "DM1 自动失能原因：使能后控制指令校验失败。\n");
+        result = 5;
+        break;
+      }
+    }
+    if (send_motor_frame) {
+      if (mit_.send(runner_.jointCommands(), now_s)) {
+        consecutive_output_failures = 0;
+        safe_commands = runner_.jointCommands();
+        have_safe_commands = true;
+      } else {
+        // 发送失败只丢弃当前帧，不立即重发，也不计入失能看门狗。
+        static robot_log::Throttle send_failure_log(1000);
+        if (send_failure_log.ready()) {
           imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：使能后电机反馈轮询失败。\n");
-          result = 3;
-          break;
+            imu_log::Level::Warning,
+            "DM1 CAN 发送失败：fsm=%s now=%.6f send_motor_frame=true；"
+            "已丢弃当前帧，不补发。\n",
+            fsmStateLabel(runner_.currentStateName()), now_s);
         }
-        if (!hardware_.read(sample, now_s)) {
-          imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：使能后读取硬件反馈失败。\n");
-          result = 3;
-          break;
-        }
-        if (!mit_.updateFeedback(sample.motors, now_s)) {
-          imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：使能后电机反馈校验失败。\n");
-          result = 3;
-          break;
-        }
-        const float fresh_timestamp = static_cast<float>(now_s);
-        sample.imu.timestamp = fresh_timestamp;
-        if (!runner_.updateHardwareFeedback(
-            sample.imu, mit_.jointStates(fresh_timestamp), fresh_timestamp))
-        {
-          imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：使能后状态估计器拒绝硬件反馈。\n");
-          result = 5;
-          break;
-        }
-        if (!runner_.run()) {
-          imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：使能后 RobotRunner 控制失败。\n");
-          result = 5;
-          break;
-        }
-        if (!mit_.validateCommands(runner_.jointCommands(), now_s)) {
-          imu_log::print(
-            imu_log::Level::Error,
-            "DM1 自动失能原因：使能后控制指令校验失败。\n");
-          result = 5;
-          break;
+        if (stand_up_transition) {
+          sendStandUpHold(mit_, safe_commands, now_s, true, have_safe_commands);
         }
       }
-      if (send_motor_frame) {
-        if (mit_.send(runner_.jointCommands(), now_s)) {
-          consecutive_output_failures = 0;
-        } else {
-          // 发送失败只丢弃当前帧，不立即重发，也不计入失能看门狗。
-          static robot_log::Throttle send_failure_log(1000);
-          if (send_failure_log.ready()) {
-            imu_log::print(
-              imu_log::Level::Warning,
-              "DM1 CAN 发送失败：fsm=%s now=%.6f send_motor_frame=true；"
-              "已丢弃当前帧，不补发。\n",
-              fsmStateLabel(runner_.currentStateName()), now_s);
-          }
-        }
-      }
+    }
+    if (stand_up_transition && runner_.locomotionEntryReady()) {
+      stand_up_transition = false;
     }
 
     const auto finished = std::chrono::steady_clock::now();

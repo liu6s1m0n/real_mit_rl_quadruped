@@ -141,7 +141,6 @@ ament_export_include_directories(include)
 install(DIRECTORY include/
   DESTINATION include
   PATTERN "MPC/common_types.h" EXCLUDE
-  PATTERN "MPC/convexMPC_interface.h" EXCLUDE
   PATTERN "WBC/WBC_Ctrl/BodyOriTask.hpp" EXCLUDE
   PATTERN "WBC/WBC_Ctrl/BodyPosTask.hpp" EXCLUDE
   PATTERN "WBC/WBC_Ctrl/BodyPostureTask.hpp" EXCLUDE

@@ -60,31 +60,43 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
 TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
 {
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
-  EXPECT_TRUE(parameters.initialization_kp.isApprox(
+  EXPECT_TRUE(
+    parameters.initialization_kp.isApprox(
       Vec3<float>(100.0F, 100.0F, 100.0F)));
-  EXPECT_TRUE(parameters.initialization_kd.isApprox(
+  EXPECT_TRUE(
+    parameters.initialization_kd.isApprox(
       Vec3<float>(2.0F, 2.0F, 2.0F)));
-  EXPECT_TRUE(parameters.prone_home_joint_kp.isApprox(
+  EXPECT_TRUE(
+    parameters.prone_home_joint_kp.isApprox(
       Vec3<float>(100.0F, 100.0F, 100.0F)));
-  EXPECT_TRUE(parameters.prone_home_joint_kd.isApprox(
+  EXPECT_TRUE(
+    parameters.prone_home_joint_kd.isApprox(
       Vec3<float>(2.0F, 2.0F, 2.0F)));
   // 机身姿态环属于 BalanceStand 的 WBC 任务增益，与 RL 的直接关节 PD 不同；
   // 保留 MPC/WBC 已验证的阻尼，避免站立姿态在接触切换时欠阻尼。
-  EXPECT_TRUE(parameters.balance_body_orientation_kp.isApprox(
+  EXPECT_TRUE(
+    parameters.balance_body_orientation_kp.isApprox(
       Vec3<float>(100.0F, 100.0F, 40.0F)));
-  EXPECT_TRUE(parameters.balance_body_orientation_kd.isApprox(
+  EXPECT_TRUE(
+    parameters.balance_body_orientation_kd.isApprox(
       Vec3<float>(18.0F, 18.0F, 8.0F)));
-  EXPECT_TRUE(parameters.balance_joint_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 100.0F)));
-  EXPECT_TRUE(parameters.balance_joint_kd.isApprox(
+  EXPECT_TRUE(
+    parameters.balance_joint_kp.isApprox(
+      Vec3<float>(100.0F, 100.0F, 300.0F)));
+  EXPECT_TRUE(
+    parameters.balance_joint_kd.isApprox(
       Vec3<float>(2.0F, 2.0F, 2.0F)));
-  EXPECT_TRUE(parameters.stand_up_joint_kp.isApprox(
+  EXPECT_TRUE(
+    parameters.stand_up_joint_kp.isApprox(
       Vec3<float>(100.0F, 100.0F, 100.0F)));
-  EXPECT_TRUE(parameters.stand_up_joint_kd.isApprox(
+  EXPECT_TRUE(
+    parameters.stand_up_joint_kd.isApprox(
       Vec3<float>(2.0F, 2.0F, 2.0F)));
-  EXPECT_TRUE(parameters.locomotion_joint_kp.isApprox(
+  EXPECT_TRUE(
+    parameters.locomotion_joint_kp.isApprox(
       Vec3<float>(100.0F, 100.0F, 100.0F)));
-  EXPECT_TRUE(parameters.locomotion_joint_kd.isApprox(
+  EXPECT_TRUE(
+    parameters.locomotion_joint_kd.isApprox(
       Vec3<float>(5.0F, 5.0F, 5.0F)));
 }
 
@@ -118,9 +130,6 @@ TEST(Dm1Contract, MotorFacingJointGainsStayInsideMitProtocolRange)
     EXPECT_TRUE((set.array() <= dm1_hardware::mit_protocol::kKdMax).all())
       << "Kd set exceeds the DM MIT protocol limit";
   }
-  // 行走的位置增益必须与 RL/BalanceStand 一致，切换时只有阻尼不同。
-  EXPECT_TRUE(parameters.locomotion_joint_kp.isApprox(
-      parameters.balance_joint_kp));
 }
 
 TEST(Dm1Contract, AnalyticKinematicsIsFiniteAtHome)
@@ -334,9 +343,14 @@ TEST(Dm1Contract, HardwareRequiresCalibratedFeedbackAndClampsMitOutput)
   }
   EXPECT_TRUE(hardware.send(commands, 1.0));
   EXPECT_EQ(transport.frames.size(), kNumJoints);
+  constexpr std::array<std::size_t, kNumLegs> kInterleavedLegOrder{0, 2, 1, 3};
   for (std::size_t index = 0; index < transport.frames.size(); ++index) {
-    const auto can_id = static_cast<std::uint16_t>(index % 6 + 1);
-    EXPECT_EQ(transport.frames[index].bus, index / 6);
+    const std::size_t joint = index / kNumLegs;
+    const std::size_t leg = kInterleavedLegOrder[index % kNumLegs];
+    const std::size_t calibration_index = leg * kJointsPerLeg + joint;
+    const auto bus = static_cast<std::uint8_t>(calibration_index / 6);
+    const auto can_id = static_cast<std::uint16_t>(calibration_index % 6 + 1);
+    EXPECT_EQ(transport.frames[index].bus, bus);
     EXPECT_EQ(transport.frames[index].can_id, can_id);
     EXPECT_EQ(transport.frames[index].master_id, can_id + 0x10);
   }

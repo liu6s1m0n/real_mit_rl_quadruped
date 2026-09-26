@@ -289,8 +289,7 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
 
     // 驱动层只判断快照是否存在以及电机自身健康状态；反馈新鲜度由上层
     // Dm1MitInterface 使用统一、可配置的超时判断，避免重复的硬编码门槛。
-    if (!snapshot.online || !std::isfinite(age) || !sample.health_valid)
-    {
+    if (!snapshot.online || !std::isfinite(age) || !sample.health_valid) {
       valid = false;
       // 关键诊断：说清是哪台电机、什么原因不可用。否则上层只看到
       // "读取电机快照失败"，无法区分掉线/超时/驱动器故障/过温。

@@ -45,6 +45,14 @@ public:
       motor.health_valid = true;
       motor.timestamp = now_s;
     }
+    if (fail_read_after > 0 && read_count >= fail_read_after) {
+      if (failed_read_count++ == 0) {send_count_at_first_failed_read = send_count;}
+      if (damage_on_failed_read) {sample.motors[0].fault_code = 1;}
+      if (stop_after_failed_reads > 0 && failed_read_count >= stop_after_failed_reads) {
+        stop_requested_.store(true);
+      }
+      return false;
+    }
     return true;
   }
 
@@ -114,6 +122,10 @@ public:
   int send_count = 0;
   int imu_read_count = 0;
   int enable_count = 0;
+  int fail_read_after = 0;
+  int failed_read_count = 0;
+  int stop_after_failed_reads = 0;
+  int send_count_at_first_failed_read = 0;
   int action_sequence = 0;
   int first_disable_sequence = 0;
   int first_poll_sequence = 0;
@@ -128,6 +140,7 @@ public:
   int stop_after_imu_reads = 0;
   bool repeat_sequence = false;
   bool repeat_after_zero = false;
+  bool damage_on_failed_read = false;
   float startup_offset = 0.1F;
   std::array<float, kNumJoints> first_positions{};
   std::array<float, kNumJoints> last_positions{};
@@ -358,4 +371,40 @@ TEST(HardwareBridgeTest, UsesRawStartupGravityInsteadOfRelativeQuaternion)
   EXPECT_EQ(bridge.run(stop_requested), 7);
   EXPECT_EQ(hardware.zero_count, 0);
   EXPECT_EQ(hardware.close_count, 1);
+}
+
+TEST(HardwareBridgeTest, StandUpKeepsSendingLastSafeCommandOnReadFailure)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.fail_read_after = 70;
+  hardware.stop_after_failed_reads = 12;
+  HardwareBridge::Options options;
+  options.control_time_step = 0.02F;
+  options.startup_stable_samples = 1;
+  options.enable_output = true;
+  options.request_stand_up = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 0);
+  EXPECT_GT(hardware.send_count, hardware.send_count_at_first_failed_read);
+}
+
+TEST(HardwareBridgeTest, StandUpDisablesForReportedMotorFault)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.fail_read_after = 70;
+  hardware.damage_on_failed_read = true;
+  HardwareBridge::Options options;
+  options.control_time_step = 0.02F;
+  options.startup_stable_samples = 1;
+  options.enable_output = true;
+  options.request_stand_up = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+
+  EXPECT_EQ(bridge.run(stop_requested), 3);
+  EXPECT_GE(hardware.disable_count, 2);
 }

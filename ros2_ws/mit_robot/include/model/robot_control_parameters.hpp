@@ -77,26 +77,35 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
   // 换站立速度要修改的地方：站立速度由这两个共享参数控制。
   // standing_height_rate 限制支撑后抬升速度，stand_up_duration 限制趴地展开速度。
   return {
+    // 站立高度范围、抬升速度、趴卧高度、趴下速度/折叠时间、单周期高度步长、初始化时长。
     T(0.30), T(0.42), T(0.04), T(0.12), T(0.08), T(2.0), T(0.00016), T(1.2),
+    // 电机刚使能后的关节初始化 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    // 从机械趴卧零位启动；模型零位对应三个电机角全零。
     true, Vec3<T>::Zero(),
-    // 初始化、趴卧保持和 RL 直接关节 PD 使用 RL 训练配置：
-    // Kp={100,100,100}、Kd={2,2,2}。
+    // 趴卧保持关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    // BalanceStand 机身位置 WBC 增益：[x, y, z] 的 Kp、Kd；不是电机 MIT-PD。
     Vec3<T>(T(45), T(45), T(90)), Vec3<T>(T(8), T(8), T(14)),
+    // BalanceStand 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd；不是电机 MIT-PD。
     Vec3<T>(T(100), T(100), T(40)), Vec3<T>(T(18), T(18), T(8)),
-    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    // BalanceStand 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
+    Vec3<T>(T(100), T(100), T(300)), Vec3<T>(T(2), T(2), T(2)),
+    // WBC浮动基权重、反力权重、单脚最大法向力、模型支撑质量。
     T(300), T(1), T(150), T(14.705035),
-    // 趴卧展开阶段：适当放慢大腿/小腿轨迹，仿真与实机共用。
+    // StandUp 趴卧展开时长、大腿速度比例、机械关节目标姿态。
     T(3.2), T(0.75), Vec3<T>(T(0), T(0.1), T(-2.15)),
+    // StandUp 第一阶段直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    // StandUp 非趴卧路径的足端笛卡尔 PD：[x, y, z] 的 Kp、Kd。
     Vec3<T>(T(220), T(220), T(300)), Vec3<T>(T(12), T(12), T(16)),
+    // Locomotion 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd。
     Vec3<T>(T(70), T(70), T(35)), Vec3<T>(T(12), T(12), T(6)),
-    // MPC/WBC 行走的位置增益与 RL、BalanceStand 保持一致（Kp=100），
-    // 微分增益取达妙 MIT 协议上限 Kd=5：接触切换和横向扰动下需要这份
-    // 阻尼才不会起振（Kd=2 时一次 120 N 横向扰动就足以让机身被弹起）。
+    // Locomotion 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(5), T(5), T(5)),
+    // 摆腿高度、足端最大横向偏移。
     T(0.075), T(0.24),
+    // RL周期、观测维数、历史长度、动作比例、滤波常数、单步变化、速度和力矩限制。
     T(0.02), std::size_t(45), std::size_t(6), T(0.25), T(0.05),
     T(0.15), T(3.0), T(30.0), T(97.0)};
 }

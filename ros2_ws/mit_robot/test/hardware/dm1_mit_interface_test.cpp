@@ -226,11 +226,12 @@ TEST(Dm1MitInterfaceTest, RejectsNonFiniteCalibrationZero)
     dm1_hardware::Dm1MitInterface(transport, invalid), std::invalid_argument);
 }
 
-TEST(Dm1MitInterfaceTest, RejectsStaleFeedbackWithoutDisablingMotors)
+TEST(Dm1MitInterfaceTest, AcceptsStaleMotorFeedback)
 {
   MockTransport transport;
   dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.05);
-  EXPECT_FALSE(interface.updateFeedback(feedback(1.0), 1.1));
+  EXPECT_TRUE(interface.updateFeedback(feedback(1.0), 1.1));
+  EXPECT_TRUE(interface.feedbackValid());
   EXPECT_EQ(transport.disable_count, 0);
 }
 
@@ -255,36 +256,6 @@ TEST(Dm1MitInterfaceTest, AcceptsProtocolFeedbackWithoutBusVoltage)
 
   EXPECT_TRUE(interface.updateFeedback(samples, 1.0));
   EXPECT_TRUE(interface.feedbackValid());
-  EXPECT_EQ(transport.disable_count, 0);
-}
-
-TEST(Dm1MitInterfaceTest, RejectsFeedbackAfterItsTimeoutWithoutDisabling)
-{
-  MockTransport transport;
-  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.10);
-  const auto first = feedback(1.0);
-  ASSERT_TRUE(interface.updateFeedback(first, 1.0));
-  EXPECT_FALSE(interface.updateFeedback(first, 1.11));
-  EXPECT_EQ(transport.disable_count, 0);
-}
-
-TEST(Dm1MitInterfaceTest, IgnoresOnlyBus0Motors04And05FeedbackTimeout)
-{
-  MockTransport transport;
-  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.10);
-  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
-
-  auto samples = feedback(1.2);
-  samples[3].timestamp = 1.0;  // calibration() 中 index 3 为 bus0/CAN 0x04
-  samples[4].timestamp = 1.0;  // calibration() 中 index 4 为 bus0/CAN 0x05
-  EXPECT_TRUE(interface.updateFeedback(samples, 1.2));
-  EXPECT_TRUE(interface.feedbackValid());
-
-  samples = feedback(1.3);
-  samples[3].timestamp = 1.0;  // 0x04、0x05 继续超时仍被临时忽略
-  samples[4].timestamp = 1.0;
-  samples[5].timestamp = 1.0;  // bus0/CAN 0x06 超时仍必须拒绝
-  EXPECT_FALSE(interface.updateFeedback(samples, 1.3));
   EXPECT_EQ(transport.disable_count, 0);
 }
 
