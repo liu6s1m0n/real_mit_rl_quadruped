@@ -28,8 +28,10 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
   wbc_ctrl_->setBodyOrientationGains(
     parameters.balance_body_orientation_kp,
     parameters.balance_body_orientation_kd);
+  Vec3<T> trial_joint_kp = parameters.balance_joint_kp;
+  trial_joint_kp.z() = T(100);
   wbc_ctrl_->setJointGains(
-    parameters.balance_joint_kp, parameters.balance_joint_kd);
+    trial_joint_kp, parameters.balance_joint_kd);
   wbc_ctrl_->setFloatingBaseWeight(parameters.balance_floating_base_weight);
   wbc_ctrl_->setReactionForceWeight(parameters.balance_reaction_force_weight);
   wbc_ctrl_->setMaxNormalForce(parameters.maximum_normal_force);
