@@ -191,8 +191,8 @@ private:
   float joint_initialization_duration_ = 0.4F;
   /*当前实际发送给控制器的高度。
     它会逐渐逼近目标值。*/
-  float standing_height_target_ = 0.27F;
-  float standing_height_command_ = 0.27F;
+  float standing_height_target_ = 0.32F;
+  float standing_height_command_ = 0.32F;
   /*高度变化速率限制为：*/
   // 换站立速度要修改的地方：初始化默认值，构造时会由控制参数覆盖。
   float standing_height_rate_limit_ = 0.04F;

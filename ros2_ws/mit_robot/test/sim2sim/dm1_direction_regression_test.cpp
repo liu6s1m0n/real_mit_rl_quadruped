@@ -22,10 +22,10 @@ using ModelPointer = std::unique_ptr<mjModel, decltype(&mj_deleteModel)>;
 using DataPointer = std::unique_ptr<mjData, decltype(&mj_deleteData)>;
 
 constexpr float kRlHeight = 0.38F;
-constexpr float kGenericStandHeight = 0.39F;
+constexpr float kGenericStandHeight = 0.32F;
 constexpr double kIsaacPhysicsTimestep = 0.002;
 constexpr std::size_t kStartupStepLimit = 6000;  // startup budget; entry exits earlier.
-// RL entry may spend several seconds moving from the generic 0.39 m stand
+// RL entry may spend several seconds moving from the generic 0.32 m stand
 // target to the 0.38 m training target at the shared height-rate limit. The
 // acceptance clock starts only once LOCOMOTION is active, so leave that
 // transition outside the ten-second measurement horizon.
@@ -122,7 +122,7 @@ FootTraceSnapshot readFootTrace(const mjModel * model, const mjData * data)
 bool genericStandStable(const mjModel * model, const mjData * data)
 {
   const int trunk = mj_name2id(model, mjOBJ_BODY, "trunk");
-  if (trunk < 0 || std::abs(data->xpos[3 * trunk + 2] - 0.39) > 0.015) {
+  if (trunk < 0 || std::abs(data->xpos[3 * trunk + 2] - 0.32) > 0.015) {
     return false;
   }
   for (int dof = 6; dof < model->nv; ++dof) {
@@ -411,7 +411,7 @@ TEST(Dm1Sim2Sim, RlEntryCannotBypassWhenHeightAlreadyMatches)
   // The production loop reapplies the selected mode while motion is latched.
   // Repeating the same RL request must preserve the entry stability clock and
   // allow the posture contract to complete.
-  for (std::size_t index = 0; index < 200; ++index) {
+  for (std::size_t index = 0; index < 1000; ++index) {
     runner.setControlMode(ControlMode::WalkRl);
     ASSERT_TRUE(step(
         model.get(), data.get(), runner, actuator_writer, diagnostics,

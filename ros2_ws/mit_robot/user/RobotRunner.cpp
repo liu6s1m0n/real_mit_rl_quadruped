@@ -118,7 +118,7 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
     ControlMode::JointPd : ControlMode::BalanceStand;
   desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
   desired_state_.valid = true;
-  standing_height_target_ = quadruped_.nominalBodyHeight();
+  standing_height_target_ = 0.32F;
   standing_height_command_ = standing_height_target_;
   control_fsm_ = std::make_unique<ControlFSM<float>>(
     quadruped_, state_estimate_, joint_states_, leg_controller_, gait_scheduler_,
@@ -430,7 +430,7 @@ void RobotRunner::setLocomotionVelocityCommand(
 void RobotRunner::setStandingHeight(float height)
 {
   /*不能是 NaN；不能是 Inf；
-    不能低于 0.18 m；不能高于 0.34 m。*/
+    不能低于 0.30 m；不能高于 0.42 m。*/
   if (!std::isfinite(height) || height < minimumStandingHeight() ||
     height > maximumStandingHeight())
   {
@@ -618,7 +618,7 @@ void RobotRunner::setDesiredState(const DesiredState<float> & desired)
     throw std::invalid_argument("desired robot state contains a non-finite value");
   }
   /*如果目标模式是 BalanceStand，则同步更新目标站立高度。
-                     这会触发 0.18～0.34 m 范围检查*/
+                     这会触发 0.30～0.42 m 范围检查*/
   if (desired.mode == ControlMode::BalanceStand) {
     setStandingHeight(desired.body_position_world.z());
   }

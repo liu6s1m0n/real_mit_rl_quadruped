@@ -93,7 +93,7 @@ public:
 private:
   std::string scene_path_;  ///< 要加载的 MuJoCo scene.xml 绝对或相对路径。
   RobotType robot_type_;    ///< 与场景匹配的控制器参数型号。
-  std::atomic<float> standing_height_{0.39F};  ///< GUI/ROS 传给物理线程的目标机身高度，m。
+  std::atomic<float> standing_height_{0.32F};  ///< GUI/ROS 传给物理线程的目标机身高度，m。
   std::atomic<int> pending_motion_command_{-1};  ///< GUI 发出的待消费的一次性运动按钮命令。
   std::atomic_bool pending_disable_command_{false};  ///< 不可被其他 GUI 命令覆盖的失能锁存。
   float slow_walking_forward_speed_ = 0.18F;  ///< 低速前进档速度，m/s。
@@ -101,7 +101,7 @@ private:
   float walking_backward_speed_ = 0.30F;      ///< 后退档速度绝对值，m/s。
   float walking_lateral_speed_ = 0.25F;       ///< 左右平移档速度绝对值，m/s。
   float turning_yaw_rate_ = 0.35F;            ///< 原地自转角速度绝对值，rad/s。
-  double standing_height_slider_ = 0.39;      ///< MuJoCo UI 滑块使用的双精度高度缓存，m。
+  double standing_height_slider_ = 0.32;      ///< MuJoCo UI 滑块使用的双精度高度缓存，m。
   ControlMode walking_mode_ = ControlMode::Locomotion;  ///< MPC 或 frozen RL。
   FrozenDwaqModel rl_model_ = FrozenDwaqModel::Model4210;
   RlPolicyPtr rl_policy_;                    ///< 仅 RL 模式注入，MPC 不触碰。

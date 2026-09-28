@@ -74,7 +74,7 @@ private:
       height > standing_height_ipc::kMaximumHeight)
     {
       response.success = false;
-      response.message = "standing height must be within [0.18, 0.34] m";
+      response.message = "standing height must be within [0.30, 0.42] m";
       return;
     }
 

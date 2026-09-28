@@ -114,7 +114,7 @@ TEST(Dm1ModelLoad, ControllerFactoryUsesDm1Parameters)
   const auto model = makeQuadruped<float>(RobotType::DM1);
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
   EXPECT_EQ(model.robotType(), RobotType::DM1);
-  EXPECT_FLOAT_EQ(model.nominalBodyHeight(), 0.39F);
+  EXPECT_FLOAT_EQ(model.nominalBodyHeight(), 0.32F);
   EXPECT_TRUE(parameters.start_in_prone_home);
   EXPECT_TRUE(model.isValid());
 }

@@ -5,9 +5,9 @@ leg_order: [FR, FL, RR, RL]
 joint_order_per_leg: [hip, thigh, calf]
 motor_zero_position_rad: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 kinematic_joint_offset_rad: [0, -0.203, -2.22]
-stand_joint_position_front_rad: [0, -0.597, 1.432]
-stand_joint_position_rear_rad: [0, -0.597, 1.468]
-nominal_body_height_m: 0.39
+stand_joint_position_front_rad: [0, -0.597, 1.004]
+stand_joint_position_rear_rad: [0, -0.597, 1.004]
+nominal_body_height_m: 0.32
 body_mass_kg: 6.889103
 motor:
   name: DM-J6248P-2EC

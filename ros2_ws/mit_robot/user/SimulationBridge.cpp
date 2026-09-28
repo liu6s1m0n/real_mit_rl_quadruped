@@ -605,7 +605,7 @@ void runPhysics(
       if (simulation_running) {
         // 控制计算使用当前传感器状态，随后写力矩，最后推进一个物理时间步。
         // BalanceStand/MPC follows the external height command. RL walking has
-        // one owner for its training posture: RobotRunner starts the 0.39 ->
+        // one owner for its training posture: RobotRunner starts the 0.32 ->
         // 0.38 m transition and keeps that target after entry, so the GUI
         // height slider cannot overwrite the RL contract every frame.
         if (control_active &&

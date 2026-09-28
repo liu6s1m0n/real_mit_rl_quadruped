@@ -35,10 +35,9 @@ JointModelParameters<T> makeJointParameters(bool is_rear)
   result.damping.setConstant(T(1));
   result.friction_loss.setConstant(T(0.1));
   result.armature.setConstant(T(0.01));
-  // 站姿电机角：前后腿的 KFE 安装/连杆几何略有差异，沿用 my_robot
-  // 的前后腿标定值，四腿横向运动时能保持相同的支撑高度。
+  // 站姿电机角：将膝关节参数设为 0.32 m 调试高度；前后腿使用同一高度。
   result.home_position <<
-    T(0), T(-0.597), is_rear ? T(1.468) : T(1.432);
+    T(0), T(-0.597), T(1.004);
   result.joint_axes.col(0) = Vec3<T>::UnitX();
   result.joint_axes.col(1) = Vec3<T>::UnitY();
   result.joint_axes.col(2) = Vec3<T>::UnitY();
@@ -106,7 +105,7 @@ Quadruped<T> makeModel()
   legs[static_cast<std::size_t>(LegId::FL)] = makeLeg<T>(LegId::FL, true, false);
   legs[static_cast<std::size_t>(LegId::RR)] = makeLeg<T>(LegId::RR, false, true);
   legs[static_cast<std::size_t>(LegId::RL)] = makeLeg<T>(LegId::RL, true, true);
-  return Quadruped<T>(RobotType::DM1, body, legs, T(0.39));
+  return Quadruped<T>(RobotType::DM1, body, legs, T(0.32));
 }
 
 }  // namespace dm1

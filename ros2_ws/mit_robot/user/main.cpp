@@ -82,7 +82,7 @@ RobotSelection selectRobot(int argc, char ** argv)
     throw std::invalid_argument("render GPU must be nvidia or auto");
   }
   return {
-    MYMIT_ROBOT_DM1_SCENE_PATH, 0.39F, kDm1WalkingLateralSpeed, render_gpu,
+    MYMIT_ROBOT_DM1_SCENE_PATH, 0.32F, kDm1WalkingLateralSpeed, render_gpu,
     walking_mode, rl_model};
 }
 

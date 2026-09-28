@@ -36,7 +36,7 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
   const auto model = makeQuadruped<float>(RobotType::DM1);
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
   EXPECT_EQ(model.robotType(), RobotType::DM1);
-  EXPECT_FLOAT_EQ(model.nominalBodyHeight(), 0.39F);
+  EXPECT_FLOAT_EQ(model.nominalBodyHeight(), 0.32F);
   EXPECT_EQ(parameters.rl_observation_size, kRlObservationSize);
   EXPECT_EQ(parameters.rl_history_length, kRlHistoryLength);
   EXPECT_FLOAT_EQ(parameters.rl_policy_period, 0.02F);
@@ -48,10 +48,9 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
   EXPECT_FLOAT_EQ(parameters.rl_peak_torque_limit, 97.0F);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     EXPECT_EQ(static_cast<std::size_t>(model.leg(static_cast<LegId>(leg)).leg), leg);
-    const bool is_rear = leg >= static_cast<std::size_t>(LegId::RR);
     EXPECT_TRUE(
       model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
-        Vec3<float>(0.0F, -0.597F, is_rear ? 1.468F : 1.432F)));
+        Vec3<float>(0.0F, -0.597F, 1.004F)));
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -0.03F);
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 2.72F);
   }

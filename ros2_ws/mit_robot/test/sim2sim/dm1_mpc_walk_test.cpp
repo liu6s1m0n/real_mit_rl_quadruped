@@ -72,7 +72,7 @@ bool startStanding(
       motion_started = true;
       stand_up_pending = true;
     }
-    if (motion_started) {runner.setStandingHeight(0.39F);}
+    if (motion_started) {runner.setStandingHeight(0.32F);}
     if (motion_started) {runner.run();}
     if (stand_up_pending && runner.requestStandUp()) {stand_up_pending = false;}
     writer.write(runner, data, motion_started);
@@ -89,7 +89,7 @@ bool startStanding(
     const double speed = std::sqrt(
       data->qvel[0] * data->qvel[0] + data->qvel[1] * data->qvel[1] +
       data->qvel[2] * data->qvel[2]);
-    if (std::abs(height - 0.39) < 0.02 && speed < 0.05) {
+    if (std::abs(height - 0.32) < 0.02 && speed < 0.05) {
       ++settled_steps;
       if (settled_steps >= 500) {return true;}
     } else {
@@ -255,7 +255,7 @@ TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
       motion_started = true;
       stand_up_pending = true;
     }
-    if (motion_started) {runner.setStandingHeight(0.39F);}
+    if (motion_started) {runner.setStandingHeight(0.32F);}
     if (motion_started) {runner.run();}
     if (stand_up_pending && runner.requestStandUp()) {stand_up_pending = false;}
     // 只要进入 BalanceStand 就立刻请求行走，不等机身抬升完成。
@@ -286,8 +286,8 @@ TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
     minimum_locomotion_height, data->qpos[0] - start_x);
   // 门槛必须挡住趴卧高度（约 0.12 m）的起步请求。
   ASSERT_TRUE(entered_locomotion);
-  EXPECT_GT(height_at_entry, 0.34);
-  EXPECT_GT(minimum_locomotion_height, 0.34);
+  EXPECT_GT(height_at_entry, 0.28);
+  EXPECT_GT(minimum_locomotion_height, 0.28);
   EXPECT_GT(data->qpos[0] - start_x, 0.05);
 }
 }  // namespace
