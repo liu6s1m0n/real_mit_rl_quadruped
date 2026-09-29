@@ -419,6 +419,11 @@ void RobotRunner::setWalkingForwardSpeed(float speed)
   control_fsm_->setLocomotionForwardVelocity(speed);
 }
 
+void RobotRunner::setLocomotionGait(GaitType gait) noexcept
+{
+  control_fsm_->setLocomotionGait(gait);
+}
+
 void RobotRunner::setLocomotionVelocityCommand(
   float forward_velocity, float lateral_velocity, float yaw_rate)
 {

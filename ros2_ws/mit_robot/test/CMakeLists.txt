@@ -95,6 +95,20 @@ target_include_directories(test_dm1_mpc_walk PRIVATE
 target_link_libraries(test_dm1_mpc_walk mymit_robot_model Eigen3::Eigen)
 target_link_libraries(test_dm1_mpc_walk mymit_robot_teleop)
 
+ament_add_gtest(
+  test_dm1_march_in_place
+  sim2sim/dm1_march_in_place_test.cpp
+  ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
+  ${PROJECT_SOURCE_DIR}/user/SimulationActuatorWriter.cpp)
+target_compile_definitions(test_dm1_march_in_place PRIVATE
+  MYMIT_ROBOT_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
+)
+target_include_directories(test_dm1_march_in_place PRIVATE
+  ${PROJECT_SOURCE_DIR}/user
+)
+target_link_libraries(test_dm1_march_in_place mymit_robot_model Eigen3::Eigen)
+target_link_libraries(test_dm1_march_in_place mymit_robot_teleop)
+
 ament_add_gtest(test_hardware_bridge
   hardware/hardware_bridge_test.cpp
 )

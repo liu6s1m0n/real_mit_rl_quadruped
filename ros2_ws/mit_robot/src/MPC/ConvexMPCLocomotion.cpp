@@ -31,11 +31,24 @@ ConvexMPCLocomotion<T>::ConvexMPCLocomotion(
   //构造站立步态
   stand_(settings.horizon, {0, 0, 0, 0},
     {settings.horizon, settings.horizon, settings.horizon, settings.horizon}, "stand"),
-  // 构造 60% 支撑率的 TROT：默认 10 段中支撑 6 段、摆动 4 段。
-  // 当前 FSM 每段接触时序为 50 ms，因此完整摆动时间为 0.20 s。
+  // 构造 50% 支撑率的 TROT：默认 10 段中支撑、摆动各 5 段。
+  // 当前 FSM 每段接触时序为 50 ms，因此完整周期为 0.5 s。
   trot_(settings.horizon, {0, settings.horizon / 2, settings.horizon / 2, 0},
+    {settings.horizon / 2, settings.horizon / 2,
+      settings.horizon / 2, settings.horizon / 2}, "trot"),
+  // 普通方向行走保留已经通过动力学回归的 60% 支撑率。
+  trot_walk_(settings.horizon,
+    {0, settings.horizon / 2, settings.horizon / 2, 0},
     {settings.horizon * 3 / 5, settings.horizon * 3 / 5,
-      settings.horizon * 3 / 5, settings.horizon * 3 / 5}, "trot_walk")
+      settings.horizon * 3 / 5, settings.horizon * 3 / 5}, "trot_walk"),
+  // 每腿一个周期里支撑 4/5 的段数，单腿依次摆动；支撑起始段与 Scheduler 的
+  // STATIC_WALK 相位偏移严格对应（horizon=10 时即 {5,0,2,8}/8）。按 horizon
+  // 缩放，避免测试等使用较小 horizon 时构造越界。摆动顺序按侧向序列
+  // RR -> FR -> RL -> FL 交替前后腿，避免先双后腿再双前腿造成机身前后摇摆。
+  static_walk_(settings.horizon,
+    {settings.horizon / 2, 0, settings.horizon / 5, settings.horizon * 4 / 5},
+    {settings.horizon * 4 / 5, settings.horizon * 4 / 5,
+      settings.horizon * 4 / 5, settings.horizon * 4 / 5}, "static_walk")
 {
   // 对角小跑中 LF+RH 与 RF+LH 分成两组，相位相差半个预测时域。
   if (!std::isfinite(static_cast<double>(control_time_step_)) ||
@@ -169,8 +182,11 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
 template<typename T>
 void ConvexMPCLocomotion<T>::setGait(GaitType gait)
 {
-  if (gait != GaitType::STAND && gait != GaitType::TROT) {
-    throw std::invalid_argument("MPC locomotion currently supports STAND and TROT");
+  if (gait != GaitType::STAND && gait != GaitType::STATIC_WALK &&
+    gait != GaitType::TROT && gait != GaitType::TROT_WALK)
+  {
+    throw std::invalid_argument(
+      "MPC locomotion supports STAND, STATIC_WALK, TROT and TROT_WALK");
   }
   if (gait_type_ != gait) {
     gait_type_ = gait;
@@ -184,7 +200,10 @@ void ConvexMPCLocomotion<T>::setGait(GaitType gait)
 template<typename T>
 OffsetDurationGait & ConvexMPCLocomotion<T>::activeGait() noexcept
 {
-  return gait_type_ == GaitType::STAND ? stand_ : trot_;
+  if (gait_type_ == GaitType::STAND) {return stand_;}
+  if (gait_type_ == GaitType::STATIC_WALK) {return static_walk_;}
+  if (gait_type_ == GaitType::TROT_WALK) {return trot_walk_;}
+  return trot_;
 }
 
 /**

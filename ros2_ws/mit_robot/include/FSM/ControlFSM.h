@@ -85,6 +85,8 @@ public:
   /** 设置 Locomotion 的机身系前后、左右速度和偏航角速度。 */
   void setLocomotionVelocityCommand(
     T forward_velocity, T lateral_velocity, T yaw_rate);
+  /** 设置 Locomotion 使用的步态（TROT、TROT_WALK 或 STATIC_WALK）。 */
+  void setLocomotionGait(GaitType gait) noexcept {data.locomotion_gait = gait;}
   /** 标记 RL 入场姿态过渡，让 BalanceStand 使用 RL 训练参考姿态。 */
   void setRlEntryPostureActive(bool active) noexcept
   {data.rl_entry_posture_active = active;}

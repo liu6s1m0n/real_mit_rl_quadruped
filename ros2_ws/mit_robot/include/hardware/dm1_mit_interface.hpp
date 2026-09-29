@@ -8,6 +8,7 @@
 #ifndef MYMIT_ROBOT_HARDWARE_DM1_MIT_INTERFACE_HPP_
 #define MYMIT_ROBOT_HARDWARE_DM1_MIT_INTERFACE_HPP_
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -317,6 +318,8 @@ public:
         "header", kNumLegs, kJointsPerLeg,
         "now_s", now_s, -HUGE_VAL, HUGE_VAL);
     }
+    // 命令时间戳存储为 float；在同一精度比较，避免同源时间转换的舍入被误判。
+    const float now_as_float = static_cast<float>(now_s);
     // require_fresh_feedback=false 是"保持上一帧"通道：反馈暂时不可用时仍要
     // 继续下发缓存的命令，否则电机等不到新帧会自己超时失能，整条腿瞬间瘫掉。
     if (require_fresh_feedback && now_s < latest_feedback_time_) {
@@ -333,9 +336,7 @@ public:
 
     const float torque_limit = torque_limit_override_ > 0.0F ? torque_limit_override_ :
       (allow_peak_torque_ ? 97.0F : 30.0F);
-    // 软限制用于容忍瞬时超调，硬限制仍执行绝对上界。
-    const float torque_soft_limit = torque_limit;
-    const float torque_hard_limit = torque_limit * kTorqueTolerance;
+    // 超过当前关节力矩上限时，只在发送该关节帧时按比例截断；不丢弃整批命令。
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       const auto & command = commands[leg];
       if (command.leg != static_cast<LegId>(leg)) {
@@ -363,10 +364,11 @@ public:
           "command", leg, kJointsPerLeg,
           "timestamp", command.timestamp, 0.0, now_s);
       }
-      if (static_cast<double>(command.timestamp) > now_s + 1.0e-6) {
+      if (command.timestamp > now_as_float) {
         return reject(
           "command", leg,
-          kJointsPerLeg, "timestamp", command.timestamp, -HUGE_VAL, now_s + 1.0e-6);
+          kJointsPerLeg, "timestamp", command.timestamp, -HUGE_VAL,
+          static_cast<double>(now_as_float));
       }
       const double command_age = now_s - static_cast<double>(command.timestamp);
       // 保持通道允许命令时间戳变旧（上层会用当前时间重新盖章）；
@@ -385,6 +387,9 @@ public:
         const float total_torque =
           kp * (q - feedback_[leg * kJointsPerLeg + joint].position) +
           kd * (dq - feedback_[leg * kJointsPerLeg + joint].velocity) + tau;
+        if (!std::isfinite(total_torque)) {
+          return rejectText(leg, "total_torque", "non-finite", "finite");
+        }
         const float motor_position =
           calibration_[leg * kJointsPerLeg + joint].direction * q +
           calibration_[leg * kJointsPerLeg + joint].zero_position;
@@ -408,14 +413,6 @@ public:
             "command", leg, joint,
             "kd", kd, 0.0, mit_protocol::kKdMax);
         }
-        if (std::abs(tau) > torque_hard_limit) {
-          return reject(
-            "command", leg, joint,
-            "torque_feedforward", tau, -torque_hard_limit, torque_hard_limit);
-        }
-        if (std::abs(tau) > torque_soft_limit) {
-          logToleratedTorque("torque_feedforward", leg, joint, tau, torque_soft_limit);
-        }
         if (!std::isfinite(motor_position) || motor_position < -mit_protocol::kPositionMax ||
           motor_position > mit_protocol::kPositionMax)
         {
@@ -424,13 +421,12 @@ public:
             "motor_position", motor_position, -mit_protocol::kPositionMax,
             mit_protocol::kPositionMax);
         }
-        if (!std::isfinite(total_torque) || std::abs(total_torque) > torque_hard_limit) {
-          return reject(
-            "command", leg, joint,
-            "total_torque", total_torque, -torque_hard_limit, torque_hard_limit);
+        if (std::abs(tau) > mit_protocol::kTorqueMax) {
+          logTorqueClamped(
+            "torque_feedforward_protocol", leg, joint, tau, mit_protocol::kTorqueMax);
         }
-        if (std::abs(total_torque) > torque_soft_limit) {
-          logToleratedTorque("total_torque", leg, joint, total_torque, torque_soft_limit);
+        if (std::abs(total_torque) > torque_limit) {
+          logTorqueClamped("total_torque", leg, joint, total_torque, torque_limit);
         }
       }
     }
@@ -449,6 +445,8 @@ public:
 
     // 两条 CAN 共用同一个双通道 USB 适配器。按关节交错发送前后腿，避免先向
     // can0 连续灌入六帧、再向 can1 连续灌入六帧形成单通道突发。
+    const float torque_limit = torque_limit_override_ > 0.0F ? torque_limit_override_ :
+      (allow_peak_torque_ ? 97.0F : 30.0F);
     static constexpr std::array<std::size_t, kNumLegs> kInterleavedLegOrder{0, 2, 1, 3};
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       for (const std::size_t leg : kInterleavedLegOrder) {
@@ -465,11 +463,17 @@ public:
         frame.bus = calibration.address.bus;
         frame.can_id = calibration.address.can_id;
         frame.master_id = calibration.address.master_id;
+        const float scale = torqueSaturationScale(
+          leg, joint, q, dq, kp, kd, tau, torque_limit);
         frame.position = calibration.direction * q + calibration.zero_position;
         frame.velocity = calibration.direction * dq;
-        frame.kp = kp;
-        frame.kd = kd;
-        frame.torque = calibration.direction * tau;
+        frame.kp = kp * scale;
+        frame.kd = kd * scale;
+        // 缩放因子的浮点舍入可能让结果比上限大 1 ULP，这里显式夹到协议编码范围，
+        // 保证发出的 torque 字段永远落在 [-kTorqueMax, kTorqueMax] 内。
+        frame.torque = std::clamp(
+          calibration.direction * tau * scale,
+          -mit_protocol::kTorqueMax, mit_protocol::kTorqueMax);
 
         // 任意一帧发送失败都进入失效状态并关闭全部电机。
         if (!transport_.sendMit(frame)) {
@@ -504,11 +508,26 @@ private:
   // 电机额定 40 rpm，峰值/空载 60 rpm；指令速度只是前馈目标，电机内部还有
   // 自己的限速，所以这里放宽到空载 60 rpm，避免爬行/摆动起步时被误判。
   static constexpr float kVelocityLimit = 6.2831853F;
-  // 力矩容差：连续 30 Nm 是热限制，瞬时超一点不会立刻损坏驱动器。站立收腿
-  // 这类轨迹的 PD 峰值就在限制附近，给 10% 容差再拒绝，避免正常动作被整帧
-  // 丢弃（丢帧会让电机等不到新帧而超时失能）。需要更大范围请用
-  // hardware_main 的 --torque-limit（0~97 Nm）显式放宽。
-  static constexpr float kTorqueTolerance = 1.10F;
+  // 计算单个关节的发送缩放因子。位置、速度和增益输入先由校验保证合法；
+  // 这里仅缩放 kp/kd/前馈力矩，使预计总力矩和线协议 torque 字段都在范围内。
+  float torqueSaturationScale(
+    std::size_t leg, std::size_t joint, float q, float dq, float kp, float kd,
+    float tau, float torque_limit) const noexcept
+  {
+    const auto & feedback = feedback_[leg * kJointsPerLeg + joint];
+    const float total_torque =
+      kp * (q - feedback.position) + kd * (dq - feedback.velocity) + tau;
+    float scale = 1.0F;
+    if (std::isfinite(total_torque) && torque_limit > 0.0F &&
+      std::abs(total_torque) > torque_limit)
+    {
+      scale = std::min(scale, torque_limit / std::abs(total_torque));
+    }
+    if (std::abs(tau) > mit_protocol::kTorqueMax) {
+      scale = std::min(scale, mit_protocol::kTorqueMax / std::abs(tau));
+    }
+    return std::max(0.0F, std::min(1.0F, scale));
+  }
 
   // 根据总线和物理 CAN ID 查找标定数组中的关节索引。
   // 找不到时返回 kNumJoints，供调用方统一判定为无效地址。
@@ -521,19 +540,17 @@ private:
     return kNumJoints;
   }
 
-  // 力矩落在软/硬限制之间时只提示、不丢弃整帧；每 500 帧（约 1 s）提示一次，
-  // 避免 500 Hz 刷屏。持续超限仍由上层超时看门狗收尾。
-  void logToleratedTorque(
+  // 力矩超限时只记录并在发送帧中截断；每 500 次提示一次，避免热路径刷屏。
+  void logTorqueClamped(
     const char * field, std::size_t leg, std::size_t joint, float actual,
-    float soft_limit) const noexcept
+    float limit) const noexcept
   {
-    if ((tolerated_torque_frames_++ % 500U) != 0U) {return;}
+    if ((torque_clamp_frames_++ % 500U) != 0U) {return;}
     imu_log::print(
       imu_log::Level::Warning,
-      "DM1 MIT 力矩容差提示（未失能）：field=%s leg=%zu joint=%zu actual=%.4g Nm "
-      "soft_limit=%.4g Nm。若持续出现请检查负载、Kp 或站立轨迹。\n",
-      field, leg, joint, static_cast<double>(actual),
-      static_cast<double>(soft_limit));
+      "DM1 MIT 力矩将截断：field=%s leg=%zu joint=%zu actual=%.4g Nm "
+      "limit=%.4g Nm；该关节帧仍会发送。\n",
+      field, leg, joint, static_cast<double>(actual), static_cast<double>(limit));
   }
 
   // 反馈校验失败时只清空有效标志，失能策略由上层硬件桥决定。
@@ -559,7 +576,7 @@ private:
   bool allow_peak_torque_ = false;  // 是否允许使用 97 N*m 峰值力矩限制。
   float torque_limit_override_ = 0.0F;  // 非零时使用的受控临时力矩上限，N*m。
   bool feedback_valid_ = false;  // 当前反馈是否完整、有效。
-  mutable std::uint64_t tolerated_torque_frames_ = 0;  // 力矩容差提示节流计数。
+  mutable std::uint64_t torque_clamp_frames_ = 0;  // 力矩截断提示节流计数。
 };
 
 }  // namespace dm1_hardware

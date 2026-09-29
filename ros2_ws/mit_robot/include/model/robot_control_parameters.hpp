@@ -104,7 +104,7 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     // Locomotion 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(5), T(5), T(5)),
     // 摆腿高度、足端最大横向偏移。
-    T(0.075), T(0.24),
+    T(0.035), T(0.24),
     // RL周期、观测维数、历史长度、动作比例、滤波常数、单步变化、速度和力矩限制。
     T(0.02), std::size_t(45), std::size_t(6), T(0.25), T(0.05),
     T(0.15), T(3.0), T(30.0), T(97.0)};

@@ -30,6 +30,10 @@ struct WalkReport
   std::size_t frames_in_locomotion = 0;
   double net_x = 0.0;
   double net_y = 0.0;
+  double initial_reposition_x = 0.0;
+  double initial_reposition_y = 0.0;
+  double settled_delta_x = 0.0;
+  double settled_delta_y = 0.0;
   double maximum_height = 0.0;
   double minimum_height = 1.0e9;
   double maximum_abs_pitch = 0.0;
@@ -131,6 +135,10 @@ WalkReport runDirection(
       previous = state;
     }
     if (state == FSM_StateName::LOCOMOTION) {++report.frames_in_locomotion;}
+    if (index == steps / 2) {
+      report.initial_reposition_x = data->qpos[0] - start_x;
+      report.initial_reposition_y = data->qpos[1] - start_y;
+    }
     report.maximum_height = std::max(report.maximum_height, data->xpos[3 * trunk + 2]);
     report.minimum_height = std::min(report.minimum_height, data->xpos[3 * trunk + 2]);
     const mjtNum * rotation = data->xmat + 9 * trunk;
@@ -147,6 +155,8 @@ WalkReport runDirection(
   }
   report.net_x = data->qpos[0] - start_x;
   report.net_y = data->qpos[1] - start_y;
+  report.settled_delta_x = report.net_x - report.initial_reposition_x;
+  report.settled_delta_y = report.net_y - report.initial_reposition_y;
   return report;
 }
 
@@ -203,6 +213,83 @@ TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
       EXPECT_LT(report.net_y, -0.10) << item.name;
     }
   }
+}
+
+TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+
+  runner.setLocomotionGait(GaitType::TROT_WALK);
+  const auto report = runDirection(
+    model.get(), data.get(), runner, writer,
+    Vec3<float>(0.0F, 0.0F, 0.0F), 6000);
+  std::printf(
+    "mpc_walk march       entries=%zu fallbacks=%zu frames=%zu net=(%.3f,%.3f) "
+    "z=[%.3f,%.3f] max_pitch=%.3f max_tau=%.1f max_joint_speed=%.2f\n",
+    report.locomotion_entries, report.fallback_count,
+    report.frames_in_locomotion, report.net_x, report.net_y,
+    report.minimum_height, report.maximum_height, report.maximum_abs_pitch,
+    report.maximum_joint_torque, report.maximum_joint_speed);
+  std::printf(
+    "march_windows initial_reposition=(%.3f,%.3f) settled_delta=(%.3f,%.3f)\n",
+    report.initial_reposition_x, report.initial_reposition_y,
+    report.settled_delta_x, report.settled_delta_y);
+
+  EXPECT_EQ(report.fallback_count, 0U);
+  EXPECT_EQ(report.locomotion_entries, 1U);
+  EXPECT_GT(report.frames_in_locomotion, 5500U);
+  EXPECT_GT(report.minimum_height, 0.30);
+  EXPECT_LT(report.maximum_height, 0.45);
+  EXPECT_LT(report.maximum_abs_pitch, 0.35);
+  // The first half captures the one-time nominal-foot recentering; the second
+  // half measures continued drift after that transition has settled.
+  EXPECT_LT(std::abs(report.initial_reposition_x), 0.20);
+  EXPECT_LT(std::abs(report.initial_reposition_y), 0.20);
+  EXPECT_LT(std::abs(report.settled_delta_x), 0.08);
+  EXPECT_LT(std::abs(report.settled_delta_y), 0.08);
+  EXPECT_LT(report.maximum_joint_torque, 97.0);
+}
+
+// 3 号原地静态行走：80% 支撑、四腿依次抬起。这里跑完整的 RobotRunner 栈，
+// 验证换步态后 MPC 接触表与 GaitScheduler 仍同步，不会因错相而摔倒。
+TEST(Dm1MpcWalkDiagnostic, StaticWalkInPlaceStaysBalanced)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+
+  runner.setLocomotionGait(GaitType::STATIC_WALK);
+  const auto report = runDirection(
+    model.get(), data.get(), runner, writer,
+    Vec3<float>(0.0F, 0.0F, 0.0F), 6000);
+  std::printf(
+    "static_walk march    entries=%zu fallbacks=%zu frames=%zu net=(%.3f,%.3f) "
+    "z=[%.3f,%.3f] max_pitch=%.3f max_tau=%.1f max_joint_speed=%.2f\n",
+    report.locomotion_entries, report.fallback_count,
+    report.frames_in_locomotion, report.net_x, report.net_y,
+    report.minimum_height, report.maximum_height, report.maximum_abs_pitch,
+    report.maximum_joint_torque, report.maximum_joint_speed);
+  std::printf(
+    "static_walk_windows  initial_reposition=(%.3f,%.3f) settled_delta=(%.3f,%.3f)\n",
+    report.initial_reposition_x, report.initial_reposition_y,
+    report.settled_delta_x, report.settled_delta_y);
+
+  EXPECT_EQ(report.fallback_count, 0U);
+  EXPECT_EQ(report.locomotion_entries, 1U);
+  EXPECT_GT(report.frames_in_locomotion, 5500U);
+  EXPECT_GT(report.minimum_height, 0.25);
+  EXPECT_LT(report.maximum_abs_pitch, 0.35);
+  EXPECT_LT(report.maximum_joint_torque, 97.0);
+  // 已知不足：80% 支撑下足端落点会持续后滑（实测约 1.7 cm/s、横移 0.7 cm/s），
+  // 这里只做宽松回归护栏，不把"完全原地"写成当前还达不到的指标。
+  EXPECT_LT(std::abs(report.settled_delta_x), 0.30);
+  EXPECT_LT(std::abs(report.settled_delta_y), 0.15);
 }
 
 // 横向扰动恢复：接触切换之外，机身姿态和关节阻抗也要能吸收外力，

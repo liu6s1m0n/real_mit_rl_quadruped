@@ -74,8 +74,8 @@ HardwareBridge::HardwareBridge(
   const Options & options)
 : hardware_(hardware), calibration_(calibration), options_(options),
   runner_(options.control_time_step),
-  // 默认使用受控的 45 N*m 上限，不直接放开到电机 97 N*m 峰值；
-  // 可用 hardware_main --torque-limit 覆盖。
+  // 默认 88 N*m 关节力矩饱和上限（电机峰值 97 N*m）：超限关节按比例缩小后
+  // 照常发送，不丢弃整帧；可用 hardware_main --torque-limit 覆盖。
   mit_(hardware, calibration, options.feedback_timeout_s, false, options.torque_limit_nm)
 {
   if (!std::isfinite(options_.control_time_step) ||
@@ -164,8 +164,8 @@ int HardwareBridge::runKeyboardControl(
     };
   imu_log::print(
     imu_log::Level::Info,
-    "键盘控制已启动：电机初始处于锁定状态。按 H 查看帮助；按 Shift+U/0 使能/失能；"
-    "按 Esc 失能并退出。\n");
+    "键盘控制已启动：电机初始处于锁定状态。按 Shift+U/0 使能/失能，1 站立，"
+    "2 原地小跑，3 原地静态行走，P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
 
   while (!stop_requested.load()) {
     next_cycle += period;
@@ -186,8 +186,9 @@ int HardwareBridge::runKeyboardControl(
     if (arbiter.takeHelpRequest()) {
       imu_log::print(
         imu_log::Level::Info,
-        "按键：Shift+U 使能，0 失能，1 站立，2 趴下，W/S 前进/后退，"
-        "A/D 左移/右移，Q/E 旋转，空格停止，Esc 退出，H 帮助。\n");
+        "按键：Shift+U 使能，0 失能，1 站立，2 原地小跑（TROT 50% 支撑），"
+        "3 原地静态行走（80% 支撑），P 趴下，"
+        "W/S 前进/后退，A/D 左移/右移，Q/E 旋转，空格停止，Esc 退出，H 帮助。\n");
     }
     if (arbiter.quitRequested()) {
       if (output_enabled) {hardware_.disableAll();}
@@ -311,6 +312,15 @@ int HardwareBridge::runKeyboardControl(
         const auto velocity = teleop::velocityForMotion(arbiter.motion());
         runner_.setLocomotionVelocityCommand(
           velocity.forward, velocity.lateral, velocity.yaw);
+        // 2 号原地踏步用对角小跑（TROT，50% 支撑）；
+        // 3 号原地静态行走用 STATIC_WALK（80% 支撑，四腿依次抬起）。
+        GaitType gait = GaitType::TROT_WALK;
+        if (arbiter.motion() == teleop::Motion::MarchInPlace) {
+          gait = GaitType::TROT;
+        } else if (arbiter.motion() == teleop::Motion::StaticWalkInPlace) {
+          gait = GaitType::STATIC_WALK;
+        }
+        runner_.setLocomotionGait(gait);
         runner_.setControlMode(ControlMode::Locomotion);
       }
     }

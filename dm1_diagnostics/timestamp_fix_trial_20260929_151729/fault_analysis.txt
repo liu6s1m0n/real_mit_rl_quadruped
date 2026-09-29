@@ -1,0 +1,42 @@
+first_disable=1790666328.138411 key=('can1', '006')
+last aligned command/feedback before first disable:
+FR_hip    status=1 cmd_age=   0.9ms fb_age= 720.9ms q=-0.047->-0.221 dq=-0.42->-1.30 kp=100.0 kd=5.00 ff= -1.20 pd= -21.85 total= -23.06 fb_tau= +0.79
+FR_thigh  status=1 cmd_age=   0.8ms fb_age= 720.8ms q=-0.551->-0.526 dq=+0.00->-2.54 kp=100.0 kd=5.00 ff= +0.67 pd= -10.25 total=  -9.58 fb_tau= +5.71
+FR_calf   status=1 cmd_age=   0.7ms fb_age= 720.6ms q=+1.118->+1.186 dq=+0.55->+4.09 kp=100.0 kd=5.00 ff= -0.15 pd= +24.43 total= +24.28 fb_tau= +4.60
+FL_hip    status=1 cmd_age=   0.8ms fb_age= 721.2ms q=-0.083->-0.032 dq=-0.65->+0.00 kp=100.0 kd=5.00 ff= -5.83 pd=  +8.41 total=  +2.58 fb_tau= +1.61
+FL_thigh  status=1 cmd_age=   0.7ms fb_age= 721.1ms q=-0.216->-0.297 dq=+1.14->+0.00 kp=100.0 kd=5.00 ff= -0.32 pd= -13.68 total= -14.00 fb_tau= -6.18
+FL_calf   status=1 cmd_age=   0.6ms fb_age= 721.0ms q=+0.777->+1.070 dq=+0.27->+0.00 kp=100.0 kd=5.00 ff=+13.27 pd= +28.02 total= +41.29 fb_tau= +3.19
+RR_hip    status=1 cmd_age=   0.8ms fb_age= 720.8ms q=-0.101->-0.118 dq=-0.46->-0.00 kp=100.0 kd=5.00 ff= +6.77 pd=  +0.61 total=  +7.38 fb_tau= +1.26
+RR_thigh  status=1 cmd_age=   0.7ms fb_age= 720.7ms q=-0.217->-0.247 dq=+0.25->-0.00 kp=100.0 kd=5.00 ff= +0.09 pd=  -4.22 total=  -4.13 fb_tau= +8.47
+RR_calf   status=0 cmd_age=   0.7ms fb_age=   0.0ms q=+0.096->+0.864 dq=+0.00->-0.00 kp=100.0 kd=5.00 ff=+12.75 pd= +76.76 total= +89.51 fb_tau= +0.03
+RL_hip    status=1 cmd_age=   0.8ms fb_age= 721.2ms q=+0.016->-0.259 dq=+0.25->-1.58 kp=100.0 kd=5.00 ff= +0.44 pd= -36.67 total= -36.23 fb_tau= -3.02
+RL_thigh  status=1 cmd_age=   0.7ms fb_age= 721.0ms q=-0.548->-0.195 dq=-0.46->-1.17 kp=100.0 kd=5.00 ff= +0.97 pd= +31.73 total= +32.69 fb_tau= +5.83
+RL_calf   status=1 cmd_age=   0.6ms fb_age= 720.9ms q=+0.906->+0.426 dq=-0.09->+2.08 kp=100.0 kd=5.00 ff= -0.56 pd= -37.13 total= -37.69 fb_tau=+14.51
+
+FR/RL thigh commands in final 0.8s:
+FR_thigh
+  -793.9ms q=-0.477 dq=-0.00 kp=100.0 kd=5.00 ff=+0.56
+  -746.0ms q=-0.481 dq=-0.00 kp=100.0 kd=5.00 ff=+1.14
+  -698.0ms q=-0.522 dq=-0.00 kp=100.0 kd=5.00 ff=+0.56
+  -642.2ms q=-0.551 dq=+1.13 kp=100.0 kd=5.00 ff=+2.73
+  -594.1ms q=-0.364 dq=+4.06 kp=100.0 kd=5.00 ff=+1.96
+  -449.6ms q=-0.619 dq=-0.00 kp=100.0 kd=5.00 ff=+0.79
+  -393.6ms q=-0.607 dq=-0.00 kp=100.0 kd=5.00 ff=+1.03
+  -345.6ms q=-0.511 dq=-0.00 kp=100.0 kd=5.00 ff=+1.26
+  -199.2ms q=-0.477 dq=-0.00 kp=100.0 kd=5.00 ff=+1.55
+  -144.9ms q=-0.475 dq=+0.25 kp=100.0 kd=5.00 ff=+1.32
+   -96.8ms q=-0.426 dq=+0.72 kp=100.0 kd=5.00 ff=+0.56
+   -48.9ms q=-0.424 dq=-1.32 kp=100.0 kd=5.00 ff=-0.44
+RL_thigh
+  -793.8ms q=-0.536 dq=+0.00 kp=100.0 kd=5.00 ff=+1.79
+  -745.9ms q=-0.611 dq=+0.00 kp=100.0 kd=5.00 ff=+2.67
+  -697.9ms q=-0.689 dq=+0.00 kp=100.0 kd=5.00 ff=+1.90
+  -642.1ms q=-0.671 dq=+1.41 kp=100.0 kd=5.00 ff=+3.14
+  -594.1ms q=-0.434 dq=+5.54 kp=100.0 kd=5.00 ff=+2.61
+  -449.5ms q=-0.469 dq=+0.00 kp=100.0 kd=5.00 ff=+2.14
+  -393.5ms q=-0.407 dq=+0.00 kp=100.0 kd=5.00 ff=+3.60
+  -345.6ms q=-0.302 dq=+0.00 kp=100.0 kd=5.00 ff=+3.60
+  -199.1ms q=-0.315 dq=+0.00 kp=100.0 kd=5.00 ff=+2.26
+  -144.8ms q=-0.332 dq=+0.31 kp=100.0 kd=5.00 ff=+1.38
+   -96.8ms q=-0.246 dq=+1.38 kp=100.0 kd=5.00 ff=+0.91
+   -48.9ms q=-0.177 dq=+0.03 kp=100.0 kd=5.00 ff=+0.21

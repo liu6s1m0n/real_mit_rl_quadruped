@@ -354,13 +354,17 @@ TEST(Dm1Contract, HardwareRequiresCalibratedFeedbackAndClampsMitOutput)
     EXPECT_EQ(transport.frames[index].master_id, can_id + 0x10);
   }
 
-  // 站立收腿时 30 Nm 连续上限附近的瞬时超调在容差内，不再丢弃整帧。
+  // 力矩超限不再丢弃整帧：只把该关节的 kp/kd/前馈按比例缩小，其余 11 路保持
+  // 原样，整批 12 帧照常发送。丢帧会让电机收不到新帧而自行超时失能。
+  transport.frames.clear();
   commands[0].torque_feedforward[0] = 31.0F;
   EXPECT_TRUE(hardware.send(commands, 1.0));
+  EXPECT_EQ(transport.frames.size(), kNumJoints);
+  EXPECT_FALSE(transport.disabled);
 
-  // 超过软限 10% 容差后整帧被拒绝；失能改由上层连续失败看门狗负责，
-  // 接口本身不再直接 disableAll()。
+  transport.frames.clear();
   commands[0].torque_feedforward[0] = 40.0F;
-  EXPECT_FALSE(hardware.send(commands, 1.0));
+  EXPECT_TRUE(hardware.send(commands, 1.0));
+  EXPECT_EQ(transport.frames.size(), kNumJoints);
   EXPECT_FALSE(transport.disabled);
 }

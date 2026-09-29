@@ -57,6 +57,14 @@ private:
   bool locomotionSafe() const;
   std::array < Vec3 < T >, kNumLegs > footPositionsWorld() const;
   void resetSwingTrajectories() noexcept;
+  /**
+   * @brief 把 ControlFSMData 请求的步态同步到 MPC 接触表和 GaitScheduler。
+   *
+   * 两个系统的相位必须一致，否则会出现"MPC 认为支撑、调度器认为摆动"的错相。
+   * 中途换步态时同时把 MPC 的相位计数归零，与调度器重置后的相位对齐。
+   * @param force 为 true 时无论是否变化都重新下发（进入 Locomotion 时使用）。
+   */
+  void applyRequestedGait(bool force);
   void startSwingTrajectory(
     std::size_t leg, const Vec3 < T > & initial_position,
     const mpc::LocomotionResult < T > & locomotion_result);
@@ -89,13 +97,15 @@ private:
   T swing_height_ = T(0.10);
   /*足端相对髋的横向安全边界，必须容纳该机型名义足宽和横移步长。*/
   T maximum_lateral_foot_offset_ = T(0.18);
-  /*参数2：单个步周期内最大水平步长为 18 cm。 -> 0.20*/
+  /*单个步周期内最大水平步长为 15 cm。*/
   T maximum_step_length_ = T(0.15);
-  /*只提高摆动腿的关节速度前馈：Hip保持原速以稳定支撑宽度，
-    thigh/calf提高50%；最终仍按DM1关节速度上限裁剪。*/
+  /*摆动腿各关节使用同一速度比例；最终仍按DM1关节速度上限裁剪。*/
   Vec3<T> swing_joint_velocity_scale_ =
-    Vec3<T>(T(1), T(1.5), T(1.5));
+    Vec3<T>(T(1), T(1), T(1));
   std::size_t iteration_ = 0;
+  /*当前已下发给 MPC/GaitScheduler 的步态，用于检测中途换步态。*/
+  GaitType applied_gait_ = GaitType::TROT;
+  bool gait_applied_ = false;
 };
 
 extern template class FSM_State_Locomotion < float >;

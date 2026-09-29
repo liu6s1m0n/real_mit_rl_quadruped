@@ -52,8 +52,9 @@ struct Arguments
   // 控制周期和启动零位允许误差，单位分别为 s 和 rad。
   float control_time_step = 0.002F;
   float zero_tolerance_rad = 0.05F;
-  // 电机力矩上限；连续额定 30 Nm、峰值 97 Nm，默认沿用 60 Nm 的受控值。
-  float torque_limit_nm = 60.0F;
+  // 关节力矩饱和上限；默认 88 Nm（电机峰值 97 Nm）。超限关节按比例缩小后
+  // 照常发送，不丢弃整帧。
+  float torque_limit_nm = 88.0F;
   // 运行模式开关。
   bool enable_output = false;
   bool keyboard_control = false;
@@ -82,7 +83,7 @@ struct Arguments
           "\n用法: hardware_main --calibration FILE [--can0 can0] [--can1 can1] "
           "[--imu auto|DEVICE] [--control-dt 0.002] "
           "[--zero-tolerance 0.05]（自动输出启动/零位维护容差） "
-          "[--torque-limit 60]（0~97 Nm，站立/行走力矩上限） "
+          "[--torque-limit 88]（0~97 Nm，关节力矩饱和上限） "
           "[--enable-output | --keyboard-control] [--stand-up] [--set-zero] "
           "[--imu-only | --motor-only] "
           "[--poll-feedback BUS CAN_ID] "
@@ -755,7 +756,8 @@ int main(int argc, char ** argv)
     }
     imu_log::print(
       imu_log::Level::Info,
-      "DM1 电机力矩上限=%.1f Nm（连续额定 30、峰值 97；可用 --torque-limit 调整）。\n",
+      "DM1 关节力矩饱和上限=%.1f Nm（超过则按比例截断后仍发送；连续额定 30、峰值 97；"
+      "可用 --torque-limit 调整）。\n",
       static_cast<double>(arguments.torque_limit_nm));
     // 进入完整硬件桥：打开设备、执行启动检查，然后运行控制循环。
     const int result = bridge.run(g_stop_requested);

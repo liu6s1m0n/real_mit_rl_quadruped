@@ -64,18 +64,40 @@ void FSM_State_Locomotion<T>::onEnter()
   mpc_->initialize();
   resetSwingTrajectories();
   active_mode_ = this->_data->desired_state->mode;
-  mpc_->setGait(GaitType::TROT);
   rl_history_.fill(0.0F);
   rl_history_initialized_ = false;
   rl_previous_action_.fill(0.0F);
   rl_policy_counter_ = 0;
-  /*同时通知步态调度器使用 TROT。这里必须同步两个系统：
-    MPC 的接触预测；GaitScheduler 的实际接触逻辑。
-    如果两者不一致，就可能出现：MPC 认为后腿支撑；
-    GaitScheduler 认为后腿摆动；WBC 约束错误；足端轨迹不断漂移或打滑。*/
-  // 当前行走使用 60% 支撑率的 TROT_WALK：0.5 s 周期内支撑 0.30 s、
-  // 摆动 0.20 s；与 MPC 接触表保持一致，避免状态估计接触约束错相。
-  this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
+  /*步态由操作者选择（ControlFSMData::locomotion_gait）：
+    2 号原地踏步用 TROT（50% 支撑），
+    3 号原地静态行走用 STATIC_WALK（80% 支撑）。
+    两个系统必须同时设置：只改一个就会出现"MPC 认为后腿支撑、
+    GaitScheduler 认为后腿摆动"的错相，导致 WBC 约束错误、足端轨迹漂移。*/
+  applyRequestedGait(true);
+}
+
+/*把请求的步态同步给 MPC 接触表和 GaitScheduler，并把两者的相位对齐。*/
+template<typename T>
+void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
+{
+  const GaitType requested = this->_data->locomotion_gait;
+  if (!force && gait_applied_ && requested == applied_gait_) {return;}
+  // 中途换步态：MPC 的相位由内部周期计数换算，而 GaitScheduler 换步态时会把
+  // 相位重置到各自的 phase_offset。这里把 MPC 一起归零，两者才不会错相。
+  const bool switching = gait_applied_ && requested != applied_gait_;
+  if (switching) {mpc_->initialize();}
+  applied_gait_ = requested;
+  gait_applied_ = true;
+  if (requested == GaitType::STATIC_WALK) {
+    mpc_->setGait(GaitType::STATIC_WALK);
+    this->_data->gait_scheduler->requestGait(GaitType::STATIC_WALK);
+  } else if (requested == GaitType::TROT) {
+    mpc_->setGait(GaitType::TROT);
+    this->_data->gait_scheduler->requestGait(GaitType::TROT);
+  } else {
+    mpc_->setGait(GaitType::TROT_WALK);
+    this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
+  }
 }
 
 /*每个控制周期直接执行一次完整行走控制。*/
@@ -262,8 +284,27 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   const Vec2<T> nominal_foot_body =
     (this->_data->quadruped->hipLocation(leg_id) + nominal_foot_from_hip)
     .template head<2>();
+
+  // 用四条腿 home 姿态正运动学得到的名义足端均值作为支撑中心。
+  // 这样保留相对足距，同时消除 DM1 几何造成的固定前后偏置。
+  Vec2<T> nominal_foot_center = Vec2<T>::Zero();
+  for (std::size_t nominal_leg = 0; nominal_leg < kNumLegs; ++nominal_leg) {
+    const LegId nominal_leg_id = static_cast<LegId>(nominal_leg);
+    const auto & nominal_leg_model = this->_data->quadruped->leg(nominal_leg_id);
+    Vec3<T> nominal_leg_foot_from_hip = Vec3<T>::Zero();
+    computeLegJacobianAndPosition(
+      *this->_data->quadruped, nominal_leg_model.joints.home_position,
+      static_cast<Mat3<T> *>(nullptr), &nominal_leg_foot_from_hip,
+      nominal_leg_id);
+    nominal_foot_center += (
+      this->_data->quadruped->hipLocation(nominal_leg_id) +
+      nominal_leg_foot_from_hip).template head<2>();
+  }
+  nominal_foot_center /= static_cast<T>(kNumLegs);
+  const Vec2<T> centered_nominal_foot_body = nominal_foot_body - nominal_foot_center;
   const Vec2<T> nominal_foot_world =
-    estimate.position_world.template head<2>() + yaw_rotation * nominal_foot_body;
+    estimate.position_world.template head<2>() +
+    yaw_rotation * centered_nominal_foot_body;
   const Vec2<T> desired_velocity =
     locomotion_result.command.body_velocity_world.template head<2>();
   const Vec2<T> measured_velocity =
@@ -275,12 +316,34 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   // 后腿因而逐周期落后于机身并最终拉直。
   const T placement_time = locomotion_result.swing_time[leg] +
     T(0.5) * locomotion_result.stance_time[leg];
-  Vec2<T> step = placement_time * measured_velocity + T(0.08) * velocity_error;
+  // 摆动落足点分成两条互不影响的路径，用期望速度连续过渡：
+  //   1) 行进（期望速度非零，含前进/后退/横移/原地旋转）：沿用已经过方向动力学
+  //      回归的“实测速度 x 前馈时间”落足公式；
+  //   2) 原地踏步（期望速度为零）：不能再用实测速度前馈，因为它等于把当前速度
+  //      原样维持住，零命令下任何微小扰动都会被保留，四条腿乱抖、机身匀速漂移。
+  //      这一路改用速度误差捕获项，把足端收敛回机身正下方。
+  // 期望速度 >= kInPlaceVelocityThreshold 时第 1 条与修改前的公式逐项相同，
+  // 因此 2 号 TROT / 3 号 STATIC_WALK 的原地修复不会影响方向行走。
+  constexpr T kTravelCaptureGain = T(0.08);
+  constexpr T kInPlaceCaptureGain = T(0.25);
+  constexpr T kInPlaceVelocityThreshold = T(0.05);
+  const T desired_speed = desired_velocity.norm();
+  const T in_place_blend = std::clamp(
+    desired_speed / kInPlaceVelocityThreshold, T(0), T(1));
+  const T capture_gain = kInPlaceCaptureGain +
+    in_place_blend * (kTravelCaptureGain - kInPlaceCaptureGain);
+  Vec2<T> step = placement_time * desired_velocity +
+    capture_gain * velocity_error +
+    in_place_blend * placement_time * velocity_error;
   if (step.norm() > maximum_step_length_) {
     step *= maximum_step_length_ / step.norm();
   }
+  // 落脚点始终相对当前机身规划：nominal_foot_world 跟随状态估计的机身位置，
+  // step 提供速度前馈与落点捕获项。零速度时前馈为零，靠捕获项把足端收敛回
+  // 机身正下方，即为原地踏步。
+  // 注意：曾把零速度下的落点"锚定"到离地瞬间的绝对世界坐标，等于丢掉捕获项，
+  // 实测机身会一路乱摆并摔倒（复测确认），因此落点必须继续跟随机身。
   Vec3<T> landing_position = initial_position;
-  // 前进/横移补偿叠加在名义支撑点上，因此速度控制不会侵蚀支撑宽度。
   landing_position.template head<2>() = nominal_foot_world + step;
   // z 始终使用离地瞬间锁存的地面高度，不能跟随摆动中的实测足高漂移。
   landing_position.z() = initial_position.z();
@@ -292,6 +355,8 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
 template<typename T>
 void FSM_State_Locomotion<T>::LocomotionControlStep()
 {
+  // 允许在行走中按 2/3 切换步态；未变化时是空操作。
+  applyRequestedGait(false);
   // MPC 输入必须使用统一的世界坐标系，否则反作用力方向会与 WBC 不一致。
   const auto feet_world = footPositionsWorld();
   /*MPC 输入：当前状态估计；用户期望状态；当前四个足端的世界坐标。

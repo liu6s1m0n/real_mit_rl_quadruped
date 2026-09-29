@@ -1,4 +1,5 @@
 #include <array>
+#include <cmath>
 #include <limits>
 #include <vector>
 
@@ -110,22 +111,87 @@ TEST(Dm1MitInterfaceTest, ValidatesCommandLimitsBeforeSending)
   EXPECT_EQ(transport.disable_count, 0);
 }
 
-// 站立收腿的大腿 PD 峰值本来就在 30 Nm 连续上限附近；容差内的瞬时超调必须
-// 被接受，否则整帧被丢弃会让电机等不到新帧而超时失能。
-TEST(Dm1MitInterfaceTest, ToleratesSmallTorqueOvershootBeforeRejecting)
+// 超过当前上限时只截断该关节的 kp/kd/前馈力矩，整批 12 帧仍然发送。
+TEST(Dm1MitInterfaceTest, ClampsPositiveAndNegativeTotalTorquePerJoint)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(
+    transport, calibration(), 0.05, false, 30.0F);
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  auto commands = validCommands(1.0F);
+  commands[0].kp[1] = 100.0F;
+  commands[0].kd[1] = 0.2F;
+  commands[0].position_desired[1] = 0.5F;
+  commands[0].velocity_desired[1] = 0.4F;
+  // 预计总力矩 = 100*0.5 + 0.2*0.4 = 50.08 Nm，超过 30 Nm 上限。
+  ASSERT_TRUE(interface.validateCommands(commands, 1.0));
+  ASSERT_TRUE(interface.send(commands, 1.0));
+  ASSERT_EQ(transport.frames.size(), kNumJoints);
+  const auto & positive = transport.frames[4];  // bus0/CAN2 = leg0/joint1
+  // 目标位置/速度按原样保留：截断只作用于增益和前馈，不改变目标轨迹。
+  EXPECT_FLOAT_EQ(positive.position, 0.5F);
+  EXPECT_FLOAT_EQ(positive.velocity, 0.4F);
+  // 等比缩小后，预计总力矩正好压到上限。
+  EXPECT_NEAR(
+    positive.kp * 0.5F + positive.kd * 0.4F + positive.torque, 30.0F, 1.0e-4F);
+  EXPECT_GT(positive.kp, 0.0F);
+  EXPECT_LT(positive.kp, 100.0F);
+  for (std::size_t index = 0; index < transport.frames.size(); ++index) {
+    if (index != 4) {
+      EXPECT_FLOAT_EQ(transport.frames[index].kp, 1.0F);
+      EXPECT_FLOAT_EQ(transport.frames[index].kd, 0.1F);
+      EXPECT_FLOAT_EQ(transport.frames[index].torque, 0.0F);
+    }
+  }
+
+  transport.frames.clear();
+  commands[0].position_desired[1] = -0.5F;
+  commands[0].velocity_desired[1] = -0.4F;  // -50.08 Nm -> -30 Nm
+  ASSERT_TRUE(interface.validateCommands(commands, 1.0));
+  ASSERT_TRUE(interface.send(commands, 1.0));
+  ASSERT_EQ(transport.frames.size(), kNumJoints);
+  const auto & negative = transport.frames[4];
+  EXPECT_FLOAT_EQ(negative.position, -0.5F);
+  EXPECT_FLOAT_EQ(negative.velocity, -0.4F);
+  EXPECT_NEAR(
+    negative.kp * -0.5F + negative.kd * -0.4F + negative.torque, -30.0F, 1.0e-4F);
+  // 正负方向的截断比例一致（同为 30/50.08）。
+  EXPECT_NEAR(negative.kp, positive.kp, 1.0e-4F);
+}
+
+TEST(Dm1MitInterfaceTest, ClampsTorqueFeedforwardToMitProtocolRange)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(
+    transport, calibration(), 0.05, false, 97.0F);
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+
+  auto commands = validCommands(1.0F);
+  commands[0].kp[1] = 100.0F;
+  commands[0].position_desired[1] = -1.2F;
+  commands[0].torque_feedforward[1] = 200.0F;
+  ASSERT_TRUE(interface.validateCommands(commands, 1.0));
+  ASSERT_TRUE(interface.send(commands, 1.0));
+  ASSERT_EQ(transport.frames.size(), kNumJoints);
+
+  const auto & frame = transport.frames[4];
+  EXPECT_LE(std::abs(frame.torque), dm1_hardware::mit_protocol::kTorqueMax);
+  EXPECT_NEAR(frame.torque, dm1_hardware::mit_protocol::kTorqueMax, 1.0e-4F);
+  EXPECT_NEAR(frame.kp, 60.0F, 1.0e-4F);
+  EXPECT_NEAR(frame.kp * -1.2F + frame.torque, 48.0F, 1.0e-4F);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsNonFiniteTorqueFeedforward)
 {
   MockTransport transport;
   dm1_hardware::Dm1MitInterface interface(transport, calibration());
   ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
 
   auto commands = validCommands(1.0F);
-  commands[0].kp[1] = 100.0F;
-  commands[0].position_desired[1] = 0.32F;  // 32 Nm：超过 30 Nm，但在 25% 容差内
-  EXPECT_TRUE(interface.validateCommands(commands, 1.0));
-
-  commands[0].position_desired[1] = 0.5F;   // 50 Nm：超过硬上限，必须拒绝
+  commands[0].torque_feedforward[0] = std::numeric_limits<float>::quiet_NaN();
   EXPECT_FALSE(interface.validateCommands(commands, 1.0));
-  EXPECT_EQ(transport.disable_count, 0);
+  EXPECT_TRUE(transport.frames.empty());
 }
 
 // 指令速度只是前馈目标，放宽到电机空载 60 rpm；超过才拒绝。
@@ -184,6 +250,23 @@ TEST(Dm1MitInterfaceTest, HoldingLastCommandSkipsFeedbackFreshnessButKeepsBounds
   // 保持通道不是免检通道：几何越界依旧拒绝。
   commands[0].position_desired[0] = 2.0F;
   EXPECT_FALSE(interface.validateCommands(commands, 5.0, false));
+}
+
+TEST(Dm1MitInterfaceTest, AcceptsSameSourceFloatTimestampAtDoubleBoundary)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  constexpr double now_s = 32.006239;
+  const float same_source_timestamp = static_cast<float>(now_s);
+  ASSERT_GT(static_cast<double>(same_source_timestamp), now_s);
+  ASSERT_TRUE(interface.updateFeedback(feedback(now_s), now_s));
+
+  const auto commands = validCommands(same_source_timestamp);
+  EXPECT_TRUE(interface.validateCommands(commands, now_s));
+
+  auto future_commands = commands;
+  future_commands[0].timestamp = static_cast<float>(now_s + 0.01);
+  EXPECT_FALSE(interface.validateCommands(future_commands, now_s));
 }
 
 TEST(Dm1MitInterfaceTest, RejectsProtocolGainBoundsBeforeEnable)

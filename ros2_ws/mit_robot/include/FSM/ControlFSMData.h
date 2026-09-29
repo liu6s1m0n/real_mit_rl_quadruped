@@ -33,6 +33,10 @@ struct ControlFSMData
   //参数 控制周期
   T control_time_step = T(0.001);
   bool use_wbc = true;
+  // 普通方向运动默认使用 TROT_WALK（60% 支撑）；按键 2/3 分别选择
+  // TROT（50% 支撑）和 STATIC_WALK（80% 支撑）。
+  // 由遥控层按操作者选择写入；Locomotion 负责让 MPC 接触表与 GaitScheduler 同步切换。
+  GaitType locomotion_gait = GaitType::TROT_WALK;
   // BalanceStand uses the RL joint reference while this posture transition is
   // active; this flag is not itself a locomotion mode.
   bool rl_entry_posture_active = false;

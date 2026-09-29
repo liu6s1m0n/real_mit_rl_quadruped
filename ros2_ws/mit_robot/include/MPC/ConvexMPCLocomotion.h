@@ -68,7 +68,7 @@ public:
 
   /** @brief 清零周期、命令斜坡和缓存的 MPC 输出。 */
   void initialize() noexcept;
-  /** @brief 设置当前步态；当前实现支持 STAND 和 TROT。 */
+  /** @brief 设置当前步态；支持 STAND、TROT、TROT_WALK 和 STATIC_WALK。 */
   void setGait(GaitType gait);
   /** @brief 设置机身前向速度，单位 m/s。 */
   void setForwardVelocity(T velocity);
@@ -95,7 +95,7 @@ public:
     const std::array<Vec3<T>, kNumLegs> & foot_positions_world);
 
 private:
-  /** @brief 根据当前步态类型返回 STAND 或 TROT 的步态对象。 */
+  /** @brief 返回当前 STAND、TROT、TROT_WALK 或 STATIC_WALK 步态对象。 */
   OffsetDurationGait & activeGait() noexcept;
   /**
    * @brief 将外部目标和速度命令转换为 MPC 内部目标状态。
@@ -147,8 +147,12 @@ private:
   SolverMPC<T> solver_;
   /** @brief 始终四脚支撑的站立步态。 */
   OffsetDurationGait stand_;
-  /** @brief 对角腿交替支撑的小跑步态。 */
+  /** @brief 50% 支撑率的对角小跑，用于按键 2 原地踏步。 */
   OffsetDurationGait trot_;
+  /** @brief 60% 支撑率的对角行走，用于普通方向运动。 */
+  OffsetDurationGait trot_walk_;
+  /** @brief 单腿依次摆动、始终至少三腿支撑的静态步态。 */
+  OffsetDurationGait static_walk_;
 };
 
 extern template struct LocomotionResult<float>;

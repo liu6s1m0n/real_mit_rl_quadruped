@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
@@ -132,4 +133,64 @@ TEST(GaitSchedulerTest, RejectsInvalidParametersAndTimeStep)
   parameters.gait_period_time =
     std::numeric_limits<float>::quiet_NaN();
   EXPECT_THROW(GaitScheduler<float>(parameters, 0.002F), std::invalid_argument);
+}
+
+// 3 号原地静态行走（按 3）：支撑占比 80%，一个周期内四腿依次抬起，
+// 任意时刻最多一条腿摆动（始终至少三腿支撑）。周期必须等于 MPC horizon
+// （10 段 × 50 ms = 0.5 s），否则 MPC 接触表与调度器会错相。
+TEST(GaitSchedulerTest, StaticWalkKeepsThreeFeetDownAndMatchesMpcHorizon)
+{
+  GaitScheduler<float> scheduler(0.002F);
+  scheduler.requestGait(GaitType::STATIC_WALK);
+  scheduler.step();
+
+  EXPECT_EQ(scheduler.gait_data.current_gait, GaitType::STATIC_WALK);
+  EXPECT_NEAR(scheduler.gait_data.period_time_nominal, 0.5F, kTolerance);
+  EXPECT_NEAR(scheduler.gait_data.switching_phase_nominal, 0.8F, kTolerance);
+
+  // 走满一个周期（0.5 s / 0.002 s = 250 步），记录每条腿的摆动窗口。
+  constexpr int kStepsPerCycle = 250;
+  std::array<int, kNumLegs> swing_steps{};
+  std::array<std::array<bool, kNumLegs>, kStepsPerCycle> in_swing{};
+  int maximum_concurrent_swing = 0;
+  for (int step = 0; step < kStepsPerCycle; ++step) {
+    int concurrent = 0;
+    for (std::size_t index = 0; index < kNumLegs; ++index) {
+      const bool swinging =
+        scheduler.gait_data.contact_state_scheduled(
+        static_cast<Eigen::Index>(index)) == 0;
+      in_swing[static_cast<std::size_t>(step)][index] = swinging;
+      if (swinging) {
+        ++concurrent;
+        ++swing_steps[index];
+      }
+    }
+    maximum_concurrent_swing = std::max(maximum_concurrent_swing, concurrent);
+    // 最多一条腿摆动 <=> 始终至少三条腿支撑。
+    EXPECT_LE(concurrent, 1);
+    scheduler.step();
+  }
+  EXPECT_EQ(maximum_concurrent_swing, 1);
+
+  // 每条腿摆动 20% 周期（0.1 s ≈ 50 步）。
+  for (std::size_t index = 0; index < kNumLegs; ++index) {
+    EXPECT_NEAR(static_cast<float>(swing_steps[index]), 50.0F, 2.0F);
+  }
+
+  // 摆动顺序 RR -> FR -> RL -> FL（交替前后腿的侧向序列），
+  // 与 MPC static_walk_ 的 {5,0,2,8} 一致。
+  const auto first_swing_step = [&](std::size_t leg) {
+      for (int step = 0; step < kStepsPerCycle; ++step) {
+        if (in_swing[static_cast<std::size_t>(step)][leg]) {return step;}
+      }
+      return kStepsPerCycle;
+    };
+  const int rr = first_swing_step(static_cast<std::size_t>(LegId::RR));
+  const int rl = first_swing_step(static_cast<std::size_t>(LegId::RL));
+  const int fr = first_swing_step(static_cast<std::size_t>(LegId::FR));
+  const int fl = first_swing_step(static_cast<std::size_t>(LegId::FL));
+  EXPECT_LE(rr, 2);
+  EXPECT_LT(rr, fr);
+  EXPECT_LT(fr, rl);
+  EXPECT_LT(rl, fl);
 }

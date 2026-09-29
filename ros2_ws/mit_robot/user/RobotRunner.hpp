@@ -76,6 +76,8 @@ public:
   /** 将前进速度透传给 ControlFSM 内的 Locomotion/MPC，单位 m/s。 */
   void setWalkingForwardSpeed(float speed);
   /** 设置机身系前后、左右速度和偏航角速度，单位 m/s、rad/s。 */
+  /** 设置 Locomotion 使用的步态（TROT、TROT_WALK 或 STATIC_WALK）。 */
+  void setLocomotionGait(GaitType gait) noexcept;
   void setLocomotionVelocityCommand(
     float forward_velocity, float lateral_velocity, float yaw_rate);
   /** 设置站立目标高度，实际命令会按 standing_height_rate_limit_ 平滑跟随。 */

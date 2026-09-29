@@ -1,0 +1,14 @@
+[DM IMU] 已自动选择串口设备: /dev/serial/by-id/usb-DM-Tech_DM-IMU-L1_DMIMU20250212-if00
+DM1 键盘控制: 电机启动时处于锁定状态；不会修改电机零位参数。只有机器人静止、水平且 12 路反馈健康时，才能使用 Shift+U 解锁；键盘模式不检查当前关节是否处于零位窗口。
+DM1 电机力矩上限=88.0 Nm（连续额定 30、峰值 97；可用 --torque-limit 调整）。
+[DM IMU] receiver started: /dev/serial/by-id/usb-DM-Tech_DM-IMU-L1_DMIMU20250212-if00, 921600 baud
+[DM IMU] collecting startup baseline; keep robot motionless...
+[DM IMU] status=UPDATING seq=1 | acc=(-0.594, -0.458, 10.037) gyro=(-0.009, -0.007, -0.005) rpy_deg=(-2.542, 3.295, 35.891)
+[DM IMU] startup baseline accepted: gravity_body=(-0.588, -0.443, 10.053) |g|=10.080 m/s^2 rpy0_deg=(-2.539, 3.308, 35.834) from 200 samples
+[INFO] Successfully started receiver thread with ID 128859445913152
+[INFO] Successfully started receiver thread with ID 128859437520448
+DM1 启动阶段：主动发送一次全电机失能帧，然后开始反馈轮询。
+DM1 电机反馈不可用：joint=0 bus=0 can_id=0x04 reason=offline（从未收到匹配反馈） age=inf s status=0x00 mos=0.0℃ rotor=0.0℃ sequence=0
+Unable to write CAN frame on can1 errno=105 (No buffer space available)
+DM1 启动失败原因：启动阶段电机反馈轮询失败；随后执行 close()。
+[ros2run]: Process exited with failure 2

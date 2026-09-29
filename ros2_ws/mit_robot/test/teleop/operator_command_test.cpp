@@ -18,7 +18,28 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   ASSERT_TRUE(enable.has_value());
   EXPECT_EQ(enable->type, CommandType::EnableMotors);
 
-  const auto prone_down = teleop::decodeKey('2');
+  const auto march = teleop::decodeKey('2');
+  ASSERT_TRUE(march.has_value());
+  EXPECT_EQ(march->type, CommandType::Motion);
+  EXPECT_EQ(march->motion, teleop::Motion::MarchInPlace);
+  const auto march_velocity = teleop::velocityForMotion(march->motion);
+  EXPECT_FLOAT_EQ(march_velocity.forward, 0.0F);
+  EXPECT_FLOAT_EQ(march_velocity.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(march_velocity.yaw, 0.0F);
+
+  // 3 = 原地静态行走（80% 支撑）；同为零速度，只切换步态。
+  const auto static_walk = teleop::decodeKey('3');
+  ASSERT_TRUE(static_walk.has_value());
+  EXPECT_EQ(static_walk->type, CommandType::Motion);
+  EXPECT_EQ(static_walk->motion, teleop::Motion::StaticWalkInPlace);
+  const auto static_walk_velocity =
+    teleop::velocityForMotion(static_walk->motion);
+  EXPECT_FLOAT_EQ(static_walk_velocity.forward, 0.0F);
+  EXPECT_FLOAT_EQ(static_walk_velocity.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(static_walk_velocity.yaw, 0.0F);
+  EXPECT_NE(march->motion, static_walk->motion);
+
+  const auto prone_down = teleop::decodeKey('P');
   ASSERT_TRUE(prone_down.has_value());
   EXPECT_EQ(prone_down->type, CommandType::ProneDown);
 
@@ -50,14 +71,18 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
 TEST(OperatorCommandTest, ProneDownRequestRequiresEnabledMotors)
 {
   teleop::OperatorCommandArbiter arbiter;
-  arbiter.apply(*teleop::decodeKey('2'));
+  arbiter.apply(*teleop::decodeKey('P'));
   EXPECT_FALSE(arbiter.takeProneDownRequest());
 
   arbiter.apply(*teleop::decodeKey('U'));
   arbiter.markEnabled();
-  arbiter.apply(*teleop::decodeKey('2'));
+  arbiter.apply(*teleop::decodeKey('p'));
   EXPECT_TRUE(arbiter.takeProneDownRequest());
   EXPECT_FALSE(arbiter.takeProneDownRequest());
+
+  arbiter.apply(*teleop::decodeKey('2'));
+  EXPECT_TRUE(arbiter.motionActive());
+  EXPECT_EQ(arbiter.motion(), teleop::Motion::MarchInPlace);
 }
 
 TEST(OperatorCommandTest, LockedStateRejectsMotionAndEnableIsIdempotent)

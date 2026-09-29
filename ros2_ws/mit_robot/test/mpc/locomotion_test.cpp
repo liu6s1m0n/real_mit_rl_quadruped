@@ -40,12 +40,12 @@ TEST(MpcLocomotion, PublishesUnambiguousContactStateAndGaitTiming)
   ASSERT_TRUE(result.valid);
   EXPECT_DOUBLE_EQ(result.contact_phase[static_cast<std::size_t>(LegId::FR)], 0.0);
   EXPECT_TRUE(result.contact_state[static_cast<std::size_t>(LegId::FR)]);
-  EXPECT_TRUE(result.contact_state[static_cast<std::size_t>(LegId::FL)]);
-  EXPECT_TRUE(result.contact_state[static_cast<std::size_t>(LegId::RR)]);
+  EXPECT_FALSE(result.contact_state[static_cast<std::size_t>(LegId::FL)]);
+  EXPECT_FALSE(result.contact_state[static_cast<std::size_t>(LegId::RR)]);
   EXPECT_TRUE(result.contact_state[static_cast<std::size_t>(LegId::RL)]);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    EXPECT_NEAR(result.stance_time[leg], 0.18, 1.0e-6);
-    EXPECT_NEAR(result.swing_time[leg], 0.12, 1.0e-6);
+    EXPECT_NEAR(result.stance_time[leg], 0.15, 1.0e-6);
+    EXPECT_NEAR(result.swing_time[leg], 0.15, 1.0e-6);
   }
 }
 
@@ -117,10 +117,10 @@ TEST(MpcLocomotion, KeepsGaitTimingIndependentAndRefreshesAtContactChanges)
     test_support::standingFeet());
   ASSERT_TRUE(result.valid);
   EXPECT_TRUE(result.mpc_updated);
-  EXPECT_NEAR(result.stance_time[0], 0.30, 1.0e-6);
-  EXPECT_NEAR(result.swing_time[0], 0.20, 1.0e-6);
+  EXPECT_NEAR(result.stance_time[0], 0.25, 1.0e-6);
+  EXPECT_NEAR(result.swing_time[0], 0.25, 1.0e-6);
 
-  for (int cycle = 1; cycle < 25; ++cycle) {
+  for (int cycle = 1; cycle < 125; ++cycle) {
     result = controller.run(
       test_support::standingEstimate(), test_support::standingDesired(),
       test_support::standingFeet());
