@@ -146,29 +146,7 @@ FSM_StateName FSM_State_StandUp<T>::checkTransition()
   } else if (!stand_up_complete_ || mode == ControlMode::StandUp) {
     this->nextStateName = this->stateName;
   } else {
-    switch (mode) {
-      case ControlMode::Passive:
-      case ControlMode::StandUp:
-        break;
-      case ControlMode::JointPd:
-        this->nextStateName = FSM_StateName::JOINT_PD;
-        break;
-      case ControlMode::BalanceStand:
-        this->nextStateName = FSM_StateName::BALANCE_STAND;
-        break;
-      case ControlMode::Locomotion:
-      case ControlMode::WalkClassic:
-      case ControlMode::WalkRl:
-      case ControlMode::StairsRl:
-        this->nextStateName = FSM_StateName::LOCOMOTION;
-        break;
-      case ControlMode::ProneDown:
-        this->nextStateName = FSM_StateName::LIE_DOWN;
-        break;
-      case ControlMode::RecoveryStand:
-        this->nextStateName = FSM_StateName::RECOVERY_STAND;
-        break;
-    }
+    this->nextStateName = this->stateForMode(mode);
   }
   this->transitionDuration = T(0);
   return this->nextStateName;

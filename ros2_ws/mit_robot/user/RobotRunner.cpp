@@ -11,6 +11,7 @@ namespace
 {
 constexpr std::array<LegId, kNumLegs> kLegOrder{
   LegId::FR, LegId::FL, LegId::RR, LegId::RL};
+constexpr float kLocomotionEntryStableDuration = 0.20F;
 
 bool isLocomotionMode(ControlMode mode) noexcept
 {
@@ -326,8 +327,23 @@ bool RobotRunner::standingReady() const noexcept
 
 bool RobotRunner::locomotionEntryReady() const noexcept
 {
-  if (!standingReady() || !state_estimate_.valid ||
+  return control_fsm_->currentStateName() == FSM_StateName::BALANCE_STAND &&
+         locomotion_entry_stable_time_s_ >= kLocomotionEntryStableDuration;
+}
+
+bool RobotRunner::locomotionEntryPostureStable() const noexcept
+{
+  if (control_fsm_->currentStateName() != FSM_StateName::BALANCE_STAND ||
+    !state_estimate_.valid ||
     !state_estimate_.rpy.allFinite())
+  {
+    return false;
+  }
+  // 先让站立高度指令完成斜坡过渡，再开始计时。这个条件
+  // 不依赖真机的机身速度估计，避免因估计噪声阻塞行走。
+  constexpr float kStandingCommandTolerance = 0.008F;
+  if (std::abs(standing_height_command_ - standing_height_target_) >
+    kStandingCommandTolerance)
   {
     return false;
   }
@@ -465,6 +481,7 @@ void RobotRunner::reset()
   desired_state_initialized_ = false;
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
+  locomotion_entry_stable_time_s_ = 0.0F;
   rl_entry_stable_time_s_ = 0.0F;
   prone_down_active_ = false;
   prone_down_complete_ = false;
@@ -743,6 +760,8 @@ bool RobotRunner::run()
   {
     prone_down_complete_ = true;
   }
+  locomotion_entry_stable_time_s_ = locomotionEntryPostureStable() ?
+    locomotion_entry_stable_time_s_ + control_time_step_ : 0.0F;
   if (rl_posture_transition_pending_) {
     rl_entry_stable_time_s_ = rlEntryPostureStable() ?
       rl_entry_stable_time_s_ + control_time_step_ : 0.0F;

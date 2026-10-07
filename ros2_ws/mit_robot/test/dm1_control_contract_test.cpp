@@ -93,7 +93,7 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
       Vec3<float>(2.0F, 2.0F, 2.0F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 100.0F)));
+      Vec3<float>(100.0F, 60.0F, 60.0F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kd.isApprox(
       Vec3<float>(5.0F, 5.0F, 5.0F)));

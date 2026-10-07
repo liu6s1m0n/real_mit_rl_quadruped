@@ -30,32 +30,7 @@ void FSM_State_Passive<T>::run()
 template<typename T>
 FSM_StateName FSM_State_Passive<T>::checkTransition()
 {
-  switch (this->_data->desired_state->mode) {
-    case ControlMode::Passive:
-      this->nextStateName = FSM_StateName::PASSIVE;
-      break;
-    case ControlMode::JointPd:
-      this->nextStateName = FSM_StateName::JOINT_PD;
-      break;
-    case ControlMode::BalanceStand:
-      this->nextStateName = FSM_StateName::BALANCE_STAND;
-      break;
-    case ControlMode::Locomotion:
-    case ControlMode::WalkClassic:
-    case ControlMode::WalkRl:
-    case ControlMode::StairsRl:
-      this->nextStateName = FSM_StateName::LOCOMOTION;
-      break;
-    case ControlMode::ProneDown:
-      this->nextStateName = FSM_StateName::LIE_DOWN;
-      break;
-    case ControlMode::StandUp:
-      this->nextStateName = FSM_StateName::STAND_UP;
-      break;
-    case ControlMode::RecoveryStand:
-      this->nextStateName = FSM_StateName::RECOVERY_STAND;
-      break;
-  }
+  this->nextStateName = this->stateForMode(this->_data->desired_state->mode);
   this->transitionDuration = T(0);
   return this->nextStateName;
 }

@@ -84,37 +84,10 @@ FSM_StateName FSM_State_BalanceStand<T>::checkTransition()
     注意：它发生在 run() 之前还是之后，由 ControlFSM::runFSM() 的调用顺序决定。
     当前控制框架中，先检查切换，如果不切换才执行当前状态的 run()。*/
   ++iteration_;
-  switch (this->_data->desired_state->mode) {
-    case ControlMode::BalanceStand:
-      break;
-    case ControlMode::Locomotion:
-    case ControlMode::WalkClassic:
-    case ControlMode::WalkRl:
-    case ControlMode::StairsRl:
-      this->nextStateName = FSM_StateName::LOCOMOTION;
-      this->transitionDuration = T(0);
-      this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
-      break;
-    case ControlMode::ProneDown:
-      this->nextStateName = FSM_StateName::LIE_DOWN;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::Passive:
-      this->nextStateName = FSM_StateName::PASSIVE;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::JointPd:
-      this->nextStateName = FSM_StateName::JOINT_PD;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::StandUp:
-      this->nextStateName = FSM_StateName::STAND_UP;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::RecoveryStand:
-      this->nextStateName = FSM_StateName::RECOVERY_STAND;
-      this->transitionDuration = T(0);
-      break;
+  this->nextStateName = this->stateForMode(this->_data->desired_state->mode);
+  this->transitionDuration = T(0);
+  if (this->nextStateName == FSM_StateName::LOCOMOTION) {
+    this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
   }
   return this->nextStateName;
 }

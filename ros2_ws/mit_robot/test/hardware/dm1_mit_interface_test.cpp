@@ -15,7 +15,7 @@ public:
   bool sendMit(const dm1_hardware::MitFrame & frame) override
   {
     frames.push_back(frame);
-    return send_ok;
+    return send_ok && !(frame.bus == 0 && frame.can_id == fail_can_id);
   }
 
   void disableAll() noexcept override {++disable_count;}
@@ -23,6 +23,7 @@ public:
   std::vector<dm1_hardware::MitFrame> frames;
   int disable_count = 0;
   bool send_ok = true;
+  std::uint16_t fail_can_id = 0;
 };
 
 dm1_hardware::Dm1MitInterface::CalibrationArray calibration()
@@ -380,4 +381,20 @@ TEST(Dm1MitInterfaceTest, RejectsPhysicalIdThatCannotFitInFeedbackNibble)
   invalid[0].address.can_id = 0x10;
   EXPECT_THROW(
     dm1_hardware::Dm1MitInterface(transport, invalid), std::invalid_argument);
+}
+
+TEST(Dm1MitInterfaceTest, OneFailedMotorDoesNotStarveOtherMotors)
+{
+  MockTransport transport;
+  transport.fail_can_id = 1;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+  EXPECT_FALSE(interface.send(validCommands(1.0F), 1.0));
+  ASSERT_EQ(transport.frames.size(), kNumJoints);
+  std::array<bool, kNumJoints> seen{};
+  for (const auto & frame : transport.frames) {
+    seen[frame.bus * 6 + frame.can_id - 1] = true;
+  }
+  for (const bool attempted : seen) {EXPECT_TRUE(attempted);}
+  EXPECT_EQ(transport.disable_count, 0);
 }

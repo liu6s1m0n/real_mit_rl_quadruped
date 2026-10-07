@@ -39,6 +39,10 @@ struct WalkReport
   double maximum_abs_pitch = 0.0;
   double maximum_joint_torque = 0.0;
   double maximum_joint_speed = 0.0;
+  double absolute_torque_sum = 0.0;
+  double squared_torque_sum = 0.0;
+  std::size_t torque_samples = 0;
+  std::size_t continuous_overload_samples = 0;
 };
 
 ModelPointer loadModel()
@@ -146,10 +150,17 @@ WalkReport runDirection(
       std::atan2(-rotation[6],
       std::sqrt(rotation[0] * rotation[0] + rotation[3] * rotation[3]))));
     for (int dof = 6; dof < model->nv; ++dof) {
+      const double torque = data->qfrc_applied[dof];
       report.maximum_joint_torque = std::max(
-        report.maximum_joint_torque, std::abs(data->qfrc_applied[dof]));
+        report.maximum_joint_torque, std::abs(torque));
       report.maximum_joint_speed = std::max(
         report.maximum_joint_speed, std::abs(data->qvel[dof]));
+      if (state == FSM_StateName::LOCOMOTION) {
+        report.absolute_torque_sum += std::abs(torque);
+        report.squared_torque_sum += torque * torque;
+        ++report.torque_samples;
+        if (std::abs(torque) > 30.0) {++report.continuous_overload_samples;}
+      }
     }
     mj_step(model, data);
   }
@@ -158,6 +169,16 @@ WalkReport runDirection(
   report.settled_delta_x = report.net_x - report.initial_reposition_x;
   report.settled_delta_y = report.net_y - report.initial_reposition_y;
   return report;
+}
+
+void printTorqueStats(const char * label, const WalkReport & report)
+{
+  const double samples = static_cast<double>(report.torque_samples);
+  std::printf(
+    "torque_stats %-12s mean_abs=%.3f rms=%.3f peak=%.3f over_30=%.4f%%\n",
+    label, report.absolute_torque_sum / samples,
+    std::sqrt(report.squared_torque_sum / samples), report.maximum_joint_torque,
+    100.0 * static_cast<double>(report.continuous_overload_samples) / samples);
 }
 
 TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
@@ -193,6 +214,7 @@ TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
       report.frames_in_locomotion, report.net_x, report.net_y,
       report.minimum_height, report.maximum_height, report.maximum_abs_pitch,
       report.maximum_joint_torque, report.maximum_joint_speed);
+    printTorqueStats(item.name, report);
 
     // 行走一旦进入 Locomotion 就必须连续保持；反复退回 BalanceStand 正是
     // 现场观察到的“一步一停”。
@@ -201,8 +223,7 @@ TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
     EXPECT_GT(report.minimum_height, 0.30) << item.name;
     EXPECT_LT(report.maximum_height, 0.45) << item.name;
     EXPECT_LT(report.maximum_abs_pitch, 0.35) << item.name;
-    // 仿真执行器峰值力矩与 DM1 的 ±97 Nm 契约一致，留出饱和裕度。
-    EXPECT_LT(report.maximum_joint_torque, 97.0) << item.name;
+    EXPECT_LE(report.maximum_joint_torque, 88.0 + 1.0e-6) << item.name;
     if (item.command.x() > 0.0F) {
       EXPECT_GT(report.net_x, 0.15) << item.name;
     } else if (item.command.x() < 0.0F) {
@@ -234,6 +255,7 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
     report.frames_in_locomotion, report.net_x, report.net_y,
     report.minimum_height, report.maximum_height, report.maximum_abs_pitch,
     report.maximum_joint_torque, report.maximum_joint_speed);
+  printTorqueStats("march", report);
   std::printf(
     "march_windows initial_reposition=(%.3f,%.3f) settled_delta=(%.3f,%.3f)\n",
     report.initial_reposition_x, report.initial_reposition_y,
@@ -251,45 +273,7 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
   EXPECT_LT(std::abs(report.initial_reposition_y), 0.20);
   EXPECT_LT(std::abs(report.settled_delta_x), 0.08);
   EXPECT_LT(std::abs(report.settled_delta_y), 0.08);
-  EXPECT_LT(report.maximum_joint_torque, 97.0);
-}
-
-// 3 号原地静态行走：80% 支撑、四腿依次抬起。这里跑完整的 RobotRunner 栈，
-// 验证换步态后 MPC 接触表与 GaitScheduler 仍同步，不会因错相而摔倒。
-TEST(Dm1MpcWalkDiagnostic, StaticWalkInPlaceStaysBalanced)
-{
-  auto model = loadModel();
-  auto data = makeData(model.get());
-  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
-  SimulationActuatorWriter writer(model.get());
-  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
-
-  runner.setLocomotionGait(GaitType::STATIC_WALK);
-  const auto report = runDirection(
-    model.get(), data.get(), runner, writer,
-    Vec3<float>(0.0F, 0.0F, 0.0F), 6000);
-  std::printf(
-    "static_walk march    entries=%zu fallbacks=%zu frames=%zu net=(%.3f,%.3f) "
-    "z=[%.3f,%.3f] max_pitch=%.3f max_tau=%.1f max_joint_speed=%.2f\n",
-    report.locomotion_entries, report.fallback_count,
-    report.frames_in_locomotion, report.net_x, report.net_y,
-    report.minimum_height, report.maximum_height, report.maximum_abs_pitch,
-    report.maximum_joint_torque, report.maximum_joint_speed);
-  std::printf(
-    "static_walk_windows  initial_reposition=(%.3f,%.3f) settled_delta=(%.3f,%.3f)\n",
-    report.initial_reposition_x, report.initial_reposition_y,
-    report.settled_delta_x, report.settled_delta_y);
-
-  EXPECT_EQ(report.fallback_count, 0U);
-  EXPECT_EQ(report.locomotion_entries, 1U);
-  EXPECT_GT(report.frames_in_locomotion, 5500U);
-  EXPECT_GT(report.minimum_height, 0.25);
-  EXPECT_LT(report.maximum_abs_pitch, 0.35);
-  EXPECT_LT(report.maximum_joint_torque, 97.0);
-  // 已知不足：80% 支撑下足端落点会持续后滑（实测约 1.7 cm/s、横移 0.7 cm/s），
-  // 这里只做宽松回归护栏，不把"完全原地"写成当前还达不到的指标。
-  EXPECT_LT(std::abs(report.settled_delta_x), 0.30);
-  EXPECT_LT(std::abs(report.settled_delta_y), 0.15);
+  EXPECT_LE(report.maximum_joint_torque, 88.0 + 1.0e-6);
 }
 
 // 横向扰动恢复：接触切换之外，机身姿态和关节阻抗也要能吸收外力，
@@ -312,15 +296,16 @@ TEST(Dm1MpcWalkStress, ForwardWithLateralPush)
     report.frames_in_locomotion, report.net_x, report.net_y,
     report.minimum_height, report.maximum_height, report.maximum_abs_pitch,
     report.maximum_joint_torque, report.maximum_joint_speed);
+  printTorqueStats("push120N", report);
   EXPECT_EQ(report.fallback_count, 0U);
   EXPECT_GT(report.minimum_height, 0.30);
   EXPECT_LT(report.maximum_abs_pitch, 0.35);
-  EXPECT_LT(report.maximum_joint_torque, 97.0);
+  EXPECT_LE(report.maximum_joint_torque, 88.0 + 1.0e-6);
 }
 
 // 入场门槛：只要 BalanceStand 一建立就立刻下发方向命令（真机上“按 1 后马上
-// 按 W”的时序），控制器必须等机身抬到站立高度才切入 Locomotion，不能像
-// 旧版本那样在 0.13 m 就开始迈步。
+// 按 W”的时序），控制器必须等高度指令到位并连续稳定后才
+// 切入 Locomotion，不能在站起过程中开始迈步。
 TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
 {
   auto model = loadModel();
@@ -371,10 +356,11 @@ TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
     "minimum_locomotion_height=%.3f net_x=%.3f\n",
     static_cast<int>(entered_locomotion), height_at_entry,
     minimum_locomotion_height, data->qpos[0] - start_x);
-  // 门槛必须挡住趴卧高度（约 0.12 m）的起步请求。
+  // 仿真没有真机柔性下沉；高度指令走完后再计时，入场时机身
+  // 应已接近 0.32 m 名义站高，而不是刚越过 0.28 m 下限。
   ASSERT_TRUE(entered_locomotion);
-  EXPECT_GT(height_at_entry, 0.28);
-  EXPECT_GT(minimum_locomotion_height, 0.28);
+  EXPECT_GT(height_at_entry, 0.30);
+  EXPECT_GT(minimum_locomotion_height, 0.29);
   EXPECT_GT(data->qpos[0] - start_x, 0.05);
 }
 }  // namespace

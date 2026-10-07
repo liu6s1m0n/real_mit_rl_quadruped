@@ -19,9 +19,6 @@ std::optional<OperatorCommand> decodeKey(int key)
   } else if (key == '2') {
     command.type = CommandType::Motion;
     command.motion = Motion::MarchInPlace;
-  } else if (key == '3') {
-    command.type = CommandType::Motion;
-    command.motion = Motion::StaticWalkInPlace;
   } else if (key == 'p' || key == 'P') {
     command.type = CommandType::ProneDown;
   } else if (key == 'w' || key == 'W') {
@@ -107,6 +104,9 @@ void OperatorCommandArbiter::apply(const OperatorCommand & command) noexcept
     case CommandType::Motion:
       if (state_ == MotorOutputState::Enabled) {
         motion_ = command.motion;
+        if (command.motion == Motion::MarchInPlace) {
+          selected_gait_motion_ = command.motion;
+        }
         last_motion_at_ = command.received_at;
         motion_watchdog_enabled_ = command.watchdog;
       }

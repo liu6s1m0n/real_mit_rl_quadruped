@@ -18,9 +18,8 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   if (control_fsm_data == nullptr || !control_fsm_data->valid()) {
     throw std::invalid_argument("locomotion state requires valid FSM data");
   }
-  // 优化以 25 Hz 刷新；MPC 的 10 段 TROT 仍按每段 50 ms 推进，从而与
-  // GaitScheduler 的 0.5 s 周期一致。两个间隔必须分开，否则提高求解频率
-  // 会意外加快步态并使状态估计器误判支撑脚。
+  // MPC 优化仍以约25 Hz刷新；经典步态的10段接触周期在 setGait() 中同步，
+  // 每段50 ms。
   const std::size_t mpc_interval = static_cast<std::size_t>(std::max(
       T(1), std::round(T(0.04) / control_fsm_data->control_time_step)));
   const std::size_t gait_segment_interval = static_cast<std::size_t>(std::max(
@@ -68,10 +67,9 @@ void FSM_State_Locomotion<T>::onEnter()
   rl_history_initialized_ = false;
   rl_previous_action_.fill(0.0F);
   rl_policy_counter_ = 0;
-  /*步态由操作者选择（ControlFSMData::locomotion_gait）：
-    2 号原地踏步用 TROT（50% 支撑），
-    3 号原地静态行走用 STATIC_WALK（80% 支撑）。
-    两个系统必须同时设置：只改一个就会出现"MPC 认为后腿支撑、
+  /*步态由 ControlFSMData::locomotion_gait 选择：用户入口中的 2 号原地踏步
+    使用 TROT（50% 支撑，0.5 s 周期），方向运动使用 TROT_WALK。
+    MPC 与 GaitScheduler 必须同时设置：只改一个就会出现"MPC 认为后腿支撑、
     GaitScheduler 认为后腿摆动"的错相，导致 WBC 约束错误、足端轨迹漂移。*/
   applyRequestedGait(true);
 }
@@ -134,43 +132,14 @@ FSM_StateName FSM_State_Locomotion<T>::checkTransition()
     return this->nextStateName;
   }
 
-  switch (this->_data->desired_state->mode) {
-    case ControlMode::Locomotion:
-    case ControlMode::WalkClassic:
-    case ControlMode::WalkRl:
-    case ControlMode::StairsRl:
-      if (this->_data->desired_state->mode != active_mode_) {
-        // 控制器之间禁止热切换：先回到 BalanceStand，下一次进入本状态
-        // 时 onEnter() 才会建立新的策略历史或 MPC 相位。
-        this->_data->desired_state->mode = ControlMode::BalanceStand;
-        this->nextStateName = FSM_StateName::BALANCE_STAND;
-        this->transitionDuration = T(0);
-      }
-      break;
-    case ControlMode::ProneDown:
-      this->nextStateName = FSM_StateName::LIE_DOWN;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::BalanceStand:
-      this->nextStateName = FSM_StateName::BALANCE_STAND;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::Passive:
-      this->nextStateName = FSM_StateName::PASSIVE;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::JointPd:
-      this->nextStateName = FSM_StateName::JOINT_PD;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::StandUp:
-      this->nextStateName = FSM_StateName::STAND_UP;
-      this->transitionDuration = T(0);
-      break;
-    case ControlMode::RecoveryStand:
-      this->nextStateName = FSM_StateName::RECOVERY_STAND;
-      this->transitionDuration = T(0);
-      break;
+  const ControlMode requested_mode = this->_data->desired_state->mode;
+  this->nextStateName = this->stateForMode(requested_mode);
+  this->transitionDuration = T(0);
+  if (this->nextStateName == FSM_StateName::LOCOMOTION && requested_mode != active_mode_) {
+    // 控制器之间禁止热切换：先回到 BalanceStand，下一次进入本状态
+    // 时 onEnter() 才会建立新的策略历史或 MPC 相位。
+    this->_data->desired_state->mode = ControlMode::BalanceStand;
+    this->nextStateName = FSM_StateName::BALANCE_STAND;
   }
   return this->nextStateName;
 }
@@ -311,30 +280,35 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
     estimate.velocity_world.template head<2>();
   const Vec2<T> velocity_error =
     measured_velocity - desired_velocity;
-  // 从离地到下一次着地，机身还会在整个摆动期内继续前进；着地后再以前后
-  // 对称方式跨过半个支撑期。漏掉 swing_time 会让每一步少前移 v*T_swing，
-  // 后腿因而逐周期落后于机身并最终拉直。
-  const T placement_time = locomotion_result.swing_time[leg] +
-    T(0.5) * locomotion_result.stance_time[leg];
+  const T swing_time = locomotion_result.swing_time[leg];
+  const T half_stance_time = T(0.5) * locomotion_result.stance_time[leg];
   // 摆动落足点分成两条互不影响的路径，用期望速度连续过渡：
-  //   1) 行进（期望速度非零，含前进/后退/横移/原地旋转）：沿用已经过方向动力学
-  //      回归的“实测速度 x 前馈时间”落足公式；
+  //   1) 行进（期望速度非零，含前进/后退/横移/原地旋转）：使用实测速度主导、
+  //      目标速度参与半个支撑期的落足公式；
   //   2) 原地踏步（期望速度为零）：不能再用实测速度前馈，因为它等于把当前速度
   //      原样维持住，零命令下任何微小扰动都会被保留，四条腿乱抖、机身匀速漂移。
   //      这一路改用速度误差捕获项，把足端收敛回机身正下方。
-  // 期望速度 >= kInPlaceVelocityThreshold 时第 1 条与修改前的公式逐项相同，
-  // 因此 2 号 TROT / 3 号 STATIC_WALK 的原地修复不会影响方向行走。
+  // 方向运动保留实测速度主导的落足反馈，只在半个支撑期内把实测/目标速度
+  // 各取一半，再加小幅速度误差捕获。这样保留驱动方向所需的反向落足，
+  // 同时减小起步时实测速度落后目标速度造成的前几次接触修正。
   constexpr T kTravelCaptureGain = T(0.08);
-  constexpr T kInPlaceCaptureGain = T(0.25);
+  // DM1 零速原地踏步的纵向/横向滑移不同，分别调节已有速度捕获项；
+  // 有明确行走速度时两轴仍连续过渡到原有 0.08 参数。
+  const Vec2<T> kInPlaceCaptureGain = applied_gait_ == GaitType::STATIC_WALK ?
+    Vec2<T>(T(1.08), T(0.14)) : Vec2<T>::Constant(T(0.25));
   constexpr T kInPlaceVelocityThreshold = T(0.05);
   const T desired_speed = desired_velocity.norm();
   const T in_place_blend = std::clamp(
     desired_speed / kInPlaceVelocityThreshold, T(0), T(1));
-  const T capture_gain = kInPlaceCaptureGain +
-    in_place_blend * (kTravelCaptureGain - kInPlaceCaptureGain);
-  Vec2<T> step = placement_time * desired_velocity +
-    capture_gain * velocity_error +
-    in_place_blend * placement_time * velocity_error;
+  const Vec2<T> in_place_step =
+    kInPlaceCaptureGain.cwiseProduct(velocity_error);
+  const Vec2<T> stance_velocity =
+    T(0.5) * (measured_velocity + desired_velocity);
+  const Vec2<T> travel_step =
+    swing_time * measured_velocity + half_stance_time * stance_velocity +
+    kTravelCaptureGain * velocity_error;
+  Vec2<T> step = (T(1) - in_place_blend) * in_place_step +
+    in_place_blend * travel_step;
   if (step.norm() > maximum_step_length_) {
     step *= maximum_step_length_ / step.norm();
   }
@@ -348,14 +322,18 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   // z 始终使用离地瞬间锁存的地面高度，不能跟随摆动中的实测足高漂移。
   landing_position.z() = initial_position.z();
   trajectory.setFinalPosition(landing_position);
-  trajectory.setHeight(swing_height_);
+  // STATIC_WALK 保持较低摆脚高度，减少接触交接时的悬空窗口；其他步态沿用
+  // 全局原地/行走摆高参数。
+  const T trajectory_swing_height = applied_gait_ == GaitType::STATIC_WALK ?
+    T(0.030) : swing_height_;
+  trajectory.setHeight(trajectory_swing_height);
   swing_active_[leg] = true;
 }
 
 template<typename T>
 void FSM_State_Locomotion<T>::LocomotionControlStep()
 {
-  // 允许在行走中按 2/3 切换步态；未变化时是空操作。
+  // 同步当前步态请求；未变化时是空操作。
   applyRequestedGait(false);
   // MPC 输入必须使用统一的世界坐标系，否则反作用力方向会与 WBC 不一致。
   const auto feet_world = footPositionsWorld();
@@ -423,11 +401,19 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
     if (wbc_valid) {
       // 直接提高摆动腿电机期望关节转速；支撑腿保持KinWBC原始速度。
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-        if (result.contact_state[leg]) {continue;}
-        auto & velocity = this->_data->leg_controller->commands[leg].velocity_desired;
-        velocity = velocity.cwiseProduct(swing_joint_velocity_scale_);
         const auto leg_id = static_cast<LegId>(leg);
-        const Vec3<T> & limit = this->_data->quadruped->leg(leg_id).joints.velocity_limit;
+        const auto & joints = this->_data->quadruped->leg(leg_id).joints;
+        auto & command = this->_data->leg_controller->commands[leg];
+
+        // KinWBC 不处理关节限位；源头限幅可避免驱动层拒绝整批 MIT 指令。
+        command.position_desired =
+          command.position_desired.cwiseMax(joints.lower_limit)
+            .cwiseMin(joints.upper_limit);
+
+        if (result.contact_state[leg]) {continue;}
+        auto & velocity = command.velocity_desired;
+        velocity = velocity.cwiseProduct(swing_joint_velocity_scale_);
+        const Vec3<T> & limit = joints.velocity_limit;
         velocity = velocity.cwiseMin(limit).cwiseMax(-limit);
       }
     }

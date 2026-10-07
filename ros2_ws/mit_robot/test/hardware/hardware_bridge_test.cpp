@@ -2,10 +2,13 @@
 #include <atomic>
 #include <cstdint>
 #include <cmath>
+#include <mutex>
+#include <thread>
 
 #include <gtest/gtest.h>
 
 #include "hardware/hardware_bridge.hpp"
+#include "hardware/periodic_mit_sender.hpp"
 
 namespace
 {
@@ -19,7 +22,16 @@ public:
 
   bool read(dm1_hardware::HardwareSample & sample, double now_s) override
   {
+    std::unique_lock<std::mutex> lock(mutex_);
     ++read_count;
+    if (read_count == stall_read_at) {
+      sends_before_stall = send_count;
+      lock.unlock();
+      std::this_thread::sleep_for(std::chrono::milliseconds(stall_ms));
+      lock.lock();
+      sends_during_stall = send_count - sends_before_stall;
+      stop_requested_.store(true);
+    }
     sample.imu.orientation_world_from_body = Eigen::Quaternionf::Identity();
     sample.imu.angular_velocity_body.setZero();
     sample.imu.acceleration_body <<
@@ -47,7 +59,8 @@ public:
     }
     if (fail_read_after > 0 && read_count >= fail_read_after) {
       if (failed_read_count++ == 0) {send_count_at_first_failed_read = send_count;}
-      if (damage_on_failed_read) {sample.motors[0].fault_code = 1;}
+      if (damage_on_failed_read) {sample.motors[0].fault_code = 0x0A;}
+      if (communication_fault) {sample.motors[0].fault_code = 0x0D;}
       if (stop_after_failed_reads > 0 && failed_read_count >= stop_after_failed_reads) {
         stop_requested_.store(true);
       }
@@ -65,6 +78,7 @@ public:
 
   bool sendMit(const dm1_hardware::MitFrame & frame) override
   {
+    std::lock_guard<std::mutex> lock(mutex_);
     ++send_count;
     const auto index = static_cast<std::size_t>(frame.bus) * 6 + frame.can_id - 1;
     if (index < last_positions.size()) {
@@ -115,6 +129,10 @@ public:
   void close() noexcept override {++close_count; disableAll();}
 
   int read_count = 0;
+  int stall_read_at = 0;
+  int stall_ms = 0;
+  int sends_before_stall = 0;
+  int sends_during_stall = 0;
   int zero_count = 0;
   int disable_count = 0;
   int close_count = 0;
@@ -141,12 +159,14 @@ public:
   bool repeat_sequence = false;
   bool repeat_after_zero = false;
   bool damage_on_failed_read = false;
+  bool communication_fault = false;
   float startup_offset = 0.1F;
   std::array<float, kNumJoints> first_positions{};
   std::array<float, kNumJoints> last_positions{};
   std::array<bool, kNumJoints> seen_positions{};
 
 private:
+  std::mutex mutex_;
   std::atomic_bool & stop_requested_;
 };
 
@@ -373,25 +393,24 @@ TEST(HardwareBridgeTest, UsesRawStartupGravityInsteadOfRelativeQuaternion)
   EXPECT_EQ(hardware.close_count, 1);
 }
 
-TEST(HardwareBridgeTest, StandUpKeepsSendingLastSafeCommandOnReadFailure)
+TEST(HardwareBridgeTest, EnabledOutputKeepsSendingLastSafeCommandOnReadFailure)
 {
   std::atomic_bool stop_requested{false};
   StartupZeroHardware hardware(stop_requested);
   hardware.startup_offset = 0.0F;
   hardware.fail_read_after = 70;
-  hardware.stop_after_failed_reads = 12;
+  hardware.stop_after_failed_reads = 12;  // 超过旧100ms期限仍保持。
   HardwareBridge::Options options;
   options.control_time_step = 0.02F;
   options.startup_stable_samples = 1;
   options.enable_output = true;
-  options.request_stand_up = true;
   HardwareBridge bridge(hardware, calibration(), options);
 
   EXPECT_EQ(bridge.run(stop_requested), 0);
   EXPECT_GT(hardware.send_count, hardware.send_count_at_first_failed_read);
 }
 
-TEST(HardwareBridgeTest, StandUpDisablesForReportedMotorFault)
+TEST(HardwareBridgeTest, EnabledOutputDisablesForReportedMotorFault)
 {
   std::atomic_bool stop_requested{false};
   StartupZeroHardware hardware(stop_requested);
@@ -402,9 +421,169 @@ TEST(HardwareBridgeTest, StandUpDisablesForReportedMotorFault)
   options.control_time_step = 0.02F;
   options.startup_stable_samples = 1;
   options.enable_output = true;
-  options.request_stand_up = true;
   HardwareBridge bridge(hardware, calibration(), options);
 
   EXPECT_EQ(bridge.run(stop_requested), 3);
   EXPECT_GE(hardware.disable_count, 2);
+}
+
+TEST(HardwareBridgeTest, SenderContinuesWhileControlThreadIsBlocked)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.stall_read_at = 70;
+  hardware.stall_ms = 50;
+  HardwareBridge::Options options;
+  options.control_time_step = 0.002F;
+  options.startup_stable_samples = 1;
+  options.enable_output = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+  EXPECT_EQ(bridge.run(stop_requested), 0);
+  EXPECT_GE(hardware.sends_during_stall, static_cast<int>(kNumJoints * 2));
+}
+
+namespace
+{
+class SenderTransport final : public dm1_hardware::MitTransport
+{
+public:
+  bool sendMit(const dm1_hardware::MitFrame & frame) override
+  {
+    ++attempts[frame.can_id - 1];
+    if (disabled.load()) {++sends_after_disable;}
+    if (throw_on_send) {throw std::runtime_error("injected send failure");}
+    return frame.can_id != failed_id;
+  }
+  void disableAll() noexcept override {disabled.store(true); ++disable_count;}
+  std::array<std::atomic<int>, kNumJoints> attempts{};
+  std::atomic<int> disable_count{0};
+  std::atomic<int> sends_after_disable{0};
+  std::atomic<bool> disabled{false};
+  int failed_id = 0;
+  bool throw_on_send = false;
+};
+
+dm1_hardware::PeriodicMitSender::Frames senderFrames()
+{
+  dm1_hardware::PeriodicMitSender::Frames frames{};
+  for (std::size_t i = 0; i < frames.size(); ++i) {frames[i].can_id = i + 1;}
+  return frames;
+}
+}
+
+TEST(PeriodicMitSenderTest, PauseQuiescesOutputAndReenableUsesOnlyNewFrames)
+{
+  using namespace std::chrono_literals;
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  EXPECT_FALSE(sender.publish(senderFrames()));
+  sender.arm();
+  ASSERT_TRUE(sender.publish(senderFrames()));
+  std::this_thread::sleep_for(40ms);
+  sender.pause();
+  const int count = transport.attempts.back().load();
+  EXPECT_GE(count, 2);
+  std::this_thread::sleep_for(25ms);
+  EXPECT_EQ(transport.attempts.back().load(), count);
+  sender.arm();
+  std::this_thread::sleep_for(16ms);
+  EXPECT_EQ(transport.attempts.back().load(), count);
+  ASSERT_TRUE(sender.publish(senderFrames()));
+  std::this_thread::sleep_for(25ms);
+  sender.shutdown();
+  EXPECT_GT(transport.attempts.back().load(), count);
+}
+
+TEST(PeriodicMitSenderTest, OldCommandsContinueWithoutAutomaticDisable)
+{
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  sender.arm();
+  ASSERT_TRUE(sender.publish(senderFrames()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  EXPECT_GE(transport.attempts.back().load(), 10);
+  EXPECT_EQ(transport.disable_count.load(), 0);
+  EXPECT_EQ(transport.sends_after_disable.load(), 0);
+  EXPECT_TRUE(sender.publish(senderFrames()));
+}
+
+TEST(PeriodicMitSenderTest, EnabledWithoutFirstCommandDoesNotAutomaticallyDisable)
+{
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  sender.arm();
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  EXPECT_EQ(transport.disable_count.load(), 0);
+  EXPECT_EQ(transport.attempts[0].load(), 0);
+}
+
+TEST(PeriodicMitSenderTest, FailedMotorDoesNotStarveOthersOrDisable)
+{
+  using namespace std::chrono_literals;
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  transport.failed_id = 1;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  sender.arm();
+  for (int i = 0; i < 20; ++i) {
+    sender.publish(senderFrames());
+    std::this_thread::sleep_for(10ms);
+  }
+  sender.shutdown();
+  EXPECT_GE(transport.attempts.back().load(), 5);
+  EXPECT_GT(sender.failedFrames(), 0U);
+  EXPECT_EQ(transport.disable_count.load(), 0);
+  EXPECT_EQ(transport.sends_after_disable.load(), 0);
+}
+
+TEST(PeriodicMitSenderTest, StopRequestDisablesWithoutWaitingForControlThread)
+{
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  sender.arm();
+  ASSERT_TRUE(sender.publish(senderFrames()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  stop.store(true);
+  std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  sender.shutdown();
+  EXPECT_EQ(transport.disable_count.load(), 1);
+  EXPECT_EQ(transport.sends_after_disable.load(), 0);
+}
+
+TEST(PeriodicMitSenderTest, TransportExceptionKeepsRetryingWithoutDisabling)
+{
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  transport.throw_on_send = true;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  sender.arm();
+  ASSERT_TRUE(sender.publish(senderFrames()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  sender.shutdown();
+  EXPECT_GT(sender.failedFrames(), 0U);
+  EXPECT_GT(transport.attempts.back().load(), 0);
+  EXPECT_EQ(transport.disable_count.load(), 0);
+}
+
+TEST(HardwareBridgeTest, CommunicationFaultKeepsSendingBeyondOldThreeSecondTimeout)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.fail_read_after = 70;
+  hardware.communication_fault = true;
+  hardware.stop_after_failed_reads = 1600;
+  HardwareBridge::Options options;
+  options.control_time_step = 0.002F;
+  options.startup_stable_samples = 1;
+  options.enable_output = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+  EXPECT_EQ(bridge.run(stop_requested), 0);
+  EXPECT_EQ(hardware.failed_read_count, 1600);
+  EXPECT_GT(hardware.send_count - hardware.send_count_at_first_failed_read, 1000);
 }

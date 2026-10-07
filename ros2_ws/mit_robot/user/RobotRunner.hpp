@@ -143,6 +143,7 @@ private:
   /** 仅在 DM1 Home 启用整段小腿贴地代理，运动前关闭以免擦地。 */
   void setHomeCalfContactsEnabled(bool enabled) noexcept;
   float measuredBodyHeight() const noexcept;
+  bool locomotionEntryPostureStable() const noexcept;
   bool rlEntryPostureStable() const noexcept;
   void initializeController(OrientationEstimatorMode orientation_mode);
   float currentTime() const noexcept;
@@ -212,6 +213,7 @@ private:
   bool rl_posture_transition_pending_ = false;
   bool rl_entry_posture_latched_ = false;
   ControlMode pending_rl_mode_ = ControlMode::WalkRl;
+  float locomotion_entry_stable_time_s_ = 0.0F;
   float rl_entry_stable_time_s_ = 0.0F;
   bool prone_down_active_ = false;
   bool prone_down_complete_ = false;

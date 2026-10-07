@@ -45,7 +45,7 @@ enum class Motion : std::uint8_t
   RotateClockwise,
   /// 原地对角小跑：周期 0.5 s、支撑占比 50%，FR+RL 与 FL+RR 交替抬起。
   MarchInPlace,
-  /// 原地静态行走：周期 0.5 s、支撑占比 80%，按侧向序列 RR->FR->RL->FL
+  /// 原地静态行走：周期 1.0 s、支撑占比 80%，按侧向序列 RR->FR->RL->FL
   /// 四腿依次抬起，始终至少三腿支撑。
   StaticWalkInPlace
 };
@@ -107,6 +107,8 @@ public:
   bool quitRequested() const noexcept {return quit_requested_;}
   bool motionActive() const noexcept {return motion_.has_value();}
   Motion motion() const noexcept {return motion_.value_or(Motion::Forward);}
+  // 步态选择与方向命令分开锁存；空格停止或方向切换不会覆盖2/3选择。
+  Motion selectedGaitMotion() const noexcept {return selected_gait_motion_;}
 
   bool takeEnableRequest() noexcept
   {
@@ -170,6 +172,7 @@ public:
 private:
   MotorOutputState state_ = MotorOutputState::Locked;
   std::optional<Motion> motion_;
+  Motion selected_gait_motion_ = Motion::MarchInPlace;
   std::chrono::steady_clock::time_point last_motion_at_{};
   bool motion_watchdog_enabled_ = true;
   bool enable_requested_ = false;

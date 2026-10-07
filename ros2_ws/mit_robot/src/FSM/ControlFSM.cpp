@@ -8,25 +8,6 @@
 
 namespace
 {
-//将用户控制模式转换成 FSM 状态名称。
-FSM_StateName stateForMode(ControlMode mode) noexcept
-{
-  switch (mode) {
-    case ControlMode::Passive: return FSM_StateName::PASSIVE;
-    case ControlMode::JointPd: return FSM_StateName::JOINT_PD;
-    case ControlMode::BalanceStand: return FSM_StateName::BALANCE_STAND;
-    case ControlMode::Locomotion:
-    case ControlMode::WalkClassic:
-    case ControlMode::WalkRl:
-    case ControlMode::StairsRl:
-      return FSM_StateName::LOCOMOTION;
-    case ControlMode::ProneDown:
-      return FSM_StateName::LIE_DOWN;
-    case ControlMode::StandUp: return FSM_StateName::STAND_UP;
-    case ControlMode::RecoveryStand: return FSM_StateName::RECOVERY_STAND;
-  }
-  return FSM_StateName::INVALID;
-}
 //2. JointPdState这是 ControlFSM.cpp 内部定义的一个简单状态。
 template<typename T>
 class JointPdState final : public FSM_State<T>
@@ -71,7 +52,7 @@ public:
   /*读取用户选择的控制模式，并转换成下一个 FSM 状态。*/
   FSM_StateName checkTransition() override
   {
-    this->nextStateName = stateForMode(this->_data->desired_state->mode);
+    this->nextStateName = this->stateForMode(this->_data->desired_state->mode);
     this->transitionDuration = T(0);
     return this->nextStateName;
   }

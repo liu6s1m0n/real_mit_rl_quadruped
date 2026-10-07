@@ -119,10 +119,8 @@ enum MotionCommand : int
   kDisableMotors = 11,
   kStop = 12,
   kProneDown = 13,
-  /// 原地对角小跑：TROT 接触表，50% 支撑。
-  kMarchInPlace = 14,
-  /// 原地静态行走：STATIC_WALK 接触表，80% 支撑、四腿依次抬起。
-  kStaticWalkInPlace = 15
+  /// 原地对角小跑：TROT 接触表，0.5 s 周期、50% 支撑。
+  kMarchInPlace = 14
 };
 
 int commandForButton(const char * name)
@@ -143,7 +141,6 @@ int commandForButton(const char * name)
   if (std::strcmp(name, "Stop") == 0) {return kStop;}
   if (std::strcmp(name, "Prone down") == 0) {return kProneDown;}
   if (std::strcmp(name, "March in place TROT") == 0) {return kMarchInPlace;}
-  if (std::strcmp(name, "March in place STATIC") == 0) {return kStaticWalkInPlace;}
   return kNoMotionCommand;
 }
 
@@ -230,7 +227,6 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
     {mjITEM_BUTTON, "Stop", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Prone down", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "March in place TROT", 2, nullptr, "", 0},
-    {mjITEM_BUTTON, "March in place STATIC", 2, nullptr, "", 0},
     {mjITEM_END, "", 0, nullptr, "", 0}
   };
   add(ui, height_controls);
@@ -507,15 +503,11 @@ void runPhysics(
             "Controller selection ignored while walking; press Stand up first\n");
         }
       }
-      if (pending_command == kMarchInPlace ||
-        pending_command == kStaticWalkInPlace)
-      {
+      if (pending_command == kMarchInPlace) {
         walking_mode = ControlMode::Locomotion;
         std::printf(
-          "Motion selected: %s, body velocity=(0, 0, 0)\n",
-          pending_command == kStaticWalkInPlace ?
-          "March in place STATIC (STATIC_WALK 80% stance)" :
-          "March in place TROT (TROT 50% stance)");
+          "Motion selected: March in place TROT "
+          "(TROT 0.5 s, 50%% stance), body velocity=(0, 0, 0)\n");
       }
       if (pending_command == kEnableMotors) {
         gui_commands.push_back(
@@ -530,8 +522,7 @@ void runPhysics(
         gui_commands.push_back(
           teleop::OperatorCommand{teleop::CommandType::ProneDown});
       } else if ((pending_command > kStand && pending_command < kSelectMpc) ||
-        pending_command == kMarchInPlace ||
-        pending_command == kStaticWalkInPlace)
+        pending_command == kMarchInPlace)
       {
         teleop::OperatorCommand command;
         command.type = teleop::CommandType::Motion;
@@ -548,8 +539,6 @@ void runPhysics(
           case kRotateClockwise:
             command.motion = teleop::Motion::RotateClockwise; break;
           case kMarchInPlace: command.motion = teleop::Motion::MarchInPlace; break;
-          case kStaticWalkInPlace:
-            command.motion = teleop::Motion::StaticWalkInPlace; break;
           default: command.type = teleop::CommandType::Stop; break;
         }
         gui_commands.push_back(command);
@@ -573,7 +562,7 @@ void runPhysics(
       arbiter.expireMotion(std::chrono::steady_clock::now());
       if (arbiter.takeHelpRequest()) {
         std::printf(
-          "Keys: U enable, 0 disable, 1 stand, 2 march TROT, 3 march STATIC, "
+          "Keys: U enable, 0 disable, 1 stand, 2 march TROT, "
           "P prone down, W/S forward/back, A/D left/right, "
           "Q/E rotate, Space stop, Esc exit, H help\n");
       }
@@ -639,9 +628,6 @@ void runPhysics(
           if (motion == teleop::Motion::MarchInPlace) {
             walking_mode = ControlMode::Locomotion;
             gait = GaitType::TROT;
-          } else if (motion == teleop::Motion::StaticWalkInPlace) {
-            walking_mode = ControlMode::Locomotion;
-            gait = GaitType::STATIC_WALK;
           }
           runner.setLocomotionGait(gait);
           runner.setControlMode(walking_mode);

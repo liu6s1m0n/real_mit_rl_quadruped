@@ -423,10 +423,13 @@ public:
         }
         if (std::abs(tau) > mit_protocol::kTorqueMax) {
           logTorqueClamped(
-            "torque_feedforward_protocol", leg, joint, tau, mit_protocol::kTorqueMax);
+            "torque_feedforward_protocol", leg, joint, tau, mit_protocol::kTorqueMax,
+            q, dq, kp, kd, tau);
         }
         if (std::abs(total_torque) > torque_limit) {
-          logTorqueClamped("total_torque", leg, joint, total_torque, torque_limit);
+          logTorqueClamped(
+            "total_torque", leg, joint, total_torque, torque_limit,
+            q, dq, kp, kd, tau);
         }
       }
     }
@@ -440,14 +443,31 @@ public:
     const CommandArray & commands, double now_s,
     bool require_fresh_feedback = true) noexcept
   {
+    std::array<MitFrame, kNumJoints> frames{};
+    if (!prepareFrames(commands, now_s, frames, require_fresh_feedback)) {return fail();}
+    bool sent_all = true;
+    // 一台电机/一条总线发送失败，也必须尝试本轮剩余电机。
+    for (const auto & frame : frames) {
+      if (!transport_.sendMit(frame)) {sent_all = false;}
+    }
+    return sent_all ? true : fail();
+  }
+
+  // 在控制线程完成校验和力矩饱和；独立发送线程只接收完整的不可变帧批次。
+  bool prepareFrames(
+    const CommandArray & commands, double now_s,
+    std::array<MitFrame, kNumJoints> & frames,
+    bool require_fresh_feedback = true) const noexcept
+  {
     // 统一复用带诊断信息的校验，避免发送路径吞掉反馈/时间失败原因。
-    if (!validateCommands(commands, now_s, require_fresh_feedback)) {return fail();}
+    if (!validateCommands(commands, now_s, require_fresh_feedback)) {return false;}
 
     // 两条 CAN 共用同一个双通道 USB 适配器。按关节交错发送前后腿，避免先向
     // can0 连续灌入六帧、再向 can1 连续灌入六帧形成单通道突发。
     const float torque_limit = torque_limit_override_ > 0.0F ? torque_limit_override_ :
       (allow_peak_torque_ ? 97.0F : 30.0F);
     static constexpr std::array<std::size_t, kNumLegs> kInterleavedLegOrder{0, 2, 1, 3};
+    std::size_t frame_index = 0;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       for (const std::size_t leg : kInterleavedLegOrder) {
         const auto & command = commands[leg];
@@ -475,21 +495,7 @@ public:
           calibration.direction * tau * scale,
           -mit_protocol::kTorqueMax, mit_protocol::kTorqueMax);
 
-        // 任意一帧发送失败都进入失效状态并关闭全部电机。
-        if (!transport_.sendMit(frame)) {
-          static robot_log::Throttle transport_failure_log(1000);
-          if (transport_failure_log.ready()) {
-            imu_log::print(
-              imu_log::Level::Warning,
-              "DM1 MIT 底层发送失败：leg=%zu joint=%zu bus=%u can_id=0x%02x "
-              "master_id=0x%03x q=%.6g dq=%.6g kp=%.6g kd=%.6g tau_ff=%.6g。\n",
-              leg, joint, static_cast<unsigned int>(frame.bus),
-              static_cast<unsigned int>(frame.can_id),
-              static_cast<unsigned int>(frame.master_id), frame.position,
-              frame.velocity, frame.kp, frame.kd, frame.torque);
-          }
-          return fail();
-        }
+        frames[frame_index++] = frame;
       }
     }
     return true;
@@ -543,14 +549,22 @@ private:
   // 力矩超限时只记录并在发送帧中截断；每 500 次提示一次，避免热路径刷屏。
   void logTorqueClamped(
     const char * field, std::size_t leg, std::size_t joint, float actual,
-    float limit) const noexcept
+    float limit, float q, float dq, float kp, float kd, float tau) const noexcept
   {
     if ((torque_clamp_frames_++ % 500U) != 0U) {return;}
+    const auto & feedback = feedback_[leg * kJointsPerLeg + joint];
+    const float position_torque = kp * (q - feedback.position);
+    const float velocity_torque = kd * (dq - feedback.velocity);
     imu_log::print(
       imu_log::Level::Warning,
       "DM1 MIT 力矩将截断：field=%s leg=%zu joint=%zu actual=%.4g Nm "
-      "limit=%.4g Nm；该关节帧仍会发送。\n",
-      field, leg, joint, static_cast<double>(actual), static_cast<double>(limit));
+      "limit=%.4g Nm q_des=%.4g q=%.4g dq_des=%.4g dq=%.4g "
+      "tau_pos=%.4g tau_vel=%.4g tau_ff=%.4g；该关节帧仍会发送。\n",
+      field, leg, joint, static_cast<double>(actual), static_cast<double>(limit),
+      static_cast<double>(q), static_cast<double>(feedback.position),
+      static_cast<double>(dq), static_cast<double>(feedback.velocity),
+      static_cast<double>(position_torque), static_cast<double>(velocity_torque),
+      static_cast<double>(tau));
   }
 
   // 反馈校验失败时只清空有效标志，失能策略由上层硬件桥决定。

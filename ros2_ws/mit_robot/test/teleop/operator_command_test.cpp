@@ -27,17 +27,8 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   EXPECT_FLOAT_EQ(march_velocity.lateral, 0.0F);
   EXPECT_FLOAT_EQ(march_velocity.yaw, 0.0F);
 
-  // 3 = 原地静态行走（80% 支撑）；同为零速度，只切换步态。
-  const auto static_walk = teleop::decodeKey('3');
-  ASSERT_TRUE(static_walk.has_value());
-  EXPECT_EQ(static_walk->type, CommandType::Motion);
-  EXPECT_EQ(static_walk->motion, teleop::Motion::StaticWalkInPlace);
-  const auto static_walk_velocity =
-    teleop::velocityForMotion(static_walk->motion);
-  EXPECT_FLOAT_EQ(static_walk_velocity.forward, 0.0F);
-  EXPECT_FLOAT_EQ(static_walk_velocity.lateral, 0.0F);
-  EXPECT_FLOAT_EQ(static_walk_velocity.yaw, 0.0F);
-  EXPECT_NE(march->motion, static_walk->motion);
+  // 80% 原地步态已撤下，3 不再产生操作命令。
+  EXPECT_FALSE(teleop::decodeKey('3').has_value());
 
   const auto prone_down = teleop::decodeKey('P');
   ASSERT_TRUE(prone_down.has_value());
@@ -221,3 +212,21 @@ TEST(OperatorCommandTest, WindowInputHasItsOwnQueue)
 }
 
 }  // namespace
+
+TEST(OperatorCommandTest, DirectionKeysRetainMarchSelectionAcrossStopAndBatches)
+{
+  teleop::OperatorCommandArbiter arbiter;
+  arbiter.apply(*teleop::decodeKey('U'));
+  arbiter.markEnabled();
+  EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
+  arbiter.applyBatch({*teleop::decodeKey('2'), *teleop::decodeKey('w')});
+  EXPECT_EQ(arbiter.motion(), teleop::Motion::Forward);
+  EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
+  for (const char key : {'s', 'a', 'd', 'q', 'e', ' ', 'w'}) {
+    arbiter.apply(*teleop::decodeKey(key));
+    EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
+  }
+  arbiter.applyBatch({*teleop::decodeKey('2'), *teleop::decodeKey('a')});
+  EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
+  EXPECT_EQ(arbiter.motion(), teleop::Motion::Left);
+}

@@ -21,6 +21,10 @@ constexpr float kKpMax = dm1_hardware::mit_protocol::kKpMax;  // kp 上限。
 constexpr float kKdMax = dm1_hardware::mit_protocol::kKdMax;  // kd 上限。
 constexpr auto kEnableConfirmationTimeout = std::chrono::milliseconds(100);  // 使能确认超时。
 constexpr int kDisableAttempts = 3;  // 禁用命令的最大重试次数。
+// 默认 CAN txqueuelen=10；每总线 6 帧批次发送后留出排空时间，再进入反馈轮询。
+constexpr auto kCommandBatchDrainDelay = std::chrono::milliseconds(2);
+// gs_usb 的瞬时发送容量可能小于每总线 6 帧；控制命令逐帧留出上线时间。
+constexpr auto kCommandFrameSpacing = std::chrono::microseconds(250);
 
 // 将指定范围内的浮点值量化为无符号整数，用于写入 MIT 数据帧。
 std::uint16_t floatToUint(float value, float minimum, float maximum, unsigned bits)
@@ -498,12 +502,16 @@ bool DmMotorDriver::enableAll()
         static_cast<unsigned int>(item.address.can_id));
       result = false;
     }
+    std::this_thread::sleep_for(kCommandFrameSpacing);
   }
   if (!result) {
     // 使能命令未能完整发出时，立即回到禁用状态。
     disableAll();
     return false;
   }
+  // 使能批次与紧随其后的 12 路轮询合计会超过默认发送队列深度。
+  // 等待已排队的使能帧上总线，避免 pollAll() 因 ENOBUFS 误判使能失败。
+  std::this_thread::sleep_for(kCommandBatchDrainDelay);
 
   // 发送轮询帧并等待所有电机反馈确认，避免只依赖命令发送成功。
   const auto deadline = std::chrono::steady_clock::now() + kEnableConfirmationTimeout;
@@ -575,10 +583,14 @@ void DmMotorDriver::disableAll() noexcept
       {
         continue;
       }
-      all_sent = sendCommand(item.address, 0xFD) && all_sent;
+      const bool sent = sendCommand(item.address, 0xFD);
+      all_sent = sent && all_sent;
+      std::this_thread::sleep_for(kCommandFrameSpacing);
     }
     if (all_sent) {
       // 只有全部禁用命令发送成功才记录完成状态。
+      // close() 或启动反馈轮询可能紧随其后；先让默认深度为 10 的发送队列排空。
+      std::this_thread::sleep_for(kCommandBatchDrainDelay);
       output_disabled_.store(true);
       return;
     }
@@ -586,6 +598,7 @@ void DmMotorDriver::disableAll() noexcept
       imu_log::Level::Warning,
       "DM1 失能帧发送未完整成功，正在重试（第 %d/%d 次）。\n",
       attempt + 1, kDisableAttempts);
+    std::this_thread::sleep_for(kCommandBatchDrainDelay);
   }
 }
 

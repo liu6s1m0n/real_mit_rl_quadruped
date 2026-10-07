@@ -217,32 +217,7 @@ FSM_StateName FSM_State_RecoveryStand<T>::checkTransition()
     return this->nextStateName;
   }
 
-  switch (this->_data->desired_state->mode) {
-    case ControlMode::Passive:
-      // 上面的快速路径已经处理，此分支仅用于穷举枚举值。
-      break;
-    case ControlMode::JointPd:
-      this->nextStateName = FSM_StateName::JOINT_PD;
-      break;
-    case ControlMode::BalanceStand:
-      this->nextStateName = FSM_StateName::BALANCE_STAND;
-      break;
-    case ControlMode::Locomotion:
-    case ControlMode::WalkClassic:
-    case ControlMode::WalkRl:
-    case ControlMode::StairsRl:
-      this->nextStateName = FSM_StateName::LOCOMOTION;
-      break;
-    case ControlMode::ProneDown:
-      this->nextStateName = FSM_StateName::LIE_DOWN;
-      break;
-    case ControlMode::StandUp:
-      this->nextStateName = FSM_StateName::STAND_UP;
-      break;
-    case ControlMode::RecoveryStand:
-      this->nextStateName = this->stateName;
-      break;
-  }
+  this->nextStateName = this->stateForMode(this->_data->desired_state->mode);
   this->transitionDuration = T(0);
   return this->nextStateName;
 }

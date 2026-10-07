@@ -31,8 +31,7 @@ ConvexMPCLocomotion<T>::ConvexMPCLocomotion(
   //构造站立步态
   stand_(settings.horizon, {0, 0, 0, 0},
     {settings.horizon, settings.horizon, settings.horizon, settings.horizon}, "stand"),
-  // 构造 50% 支撑率的 TROT：默认 10 段中支撑、摆动各 5 段。
-  // 当前 FSM 每段接触时序为 50 ms，因此完整周期为 0.5 s。
+  // TROT 独立使用50%支撑、0.5s周期；与80% STATIC_WALK分开。
   trot_(settings.horizon, {0, settings.horizon / 2, settings.horizon / 2, 0},
     {settings.horizon / 2, settings.horizon / 2,
       settings.horizon / 2, settings.horizon / 2}, "trot"),
@@ -188,6 +187,11 @@ void ConvexMPCLocomotion<T>::setGait(GaitType gait)
     throw std::invalid_argument(
       "MPC locomotion supports STAND, STATIC_WALK, TROT and TROT_WALK");
   }
+  // 三种经典步态都使用 50 ms 段长；STATIC_WALK 仍由 8/10 段接触
+  // 保持 80% 支撑率，完整周期为 0.5 s。
+  const T gait_segment_time = T(0.05);
+  iterations_per_gait_segment_ = static_cast<std::size_t>(std::max(
+      T(1), std::round(gait_segment_time / control_time_step_)));
   if (gait_type_ != gait) {
     gait_type_ = gait;
     // 接触约束随步态改变，旧反力不能继续沿用。

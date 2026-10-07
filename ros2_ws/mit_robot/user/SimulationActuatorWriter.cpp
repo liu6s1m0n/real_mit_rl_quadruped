@@ -22,18 +22,40 @@ kActuatorNames{{
   {{"RR_hip", "RR_thigh", "RR_calf"}},
   {{"RL_hip", "RL_thigh", "RL_calf"}}
 }};
+constexpr std::size_t kMotorFrameDivider = 4;
+constexpr double kCommandTorqueLimitNm = 88.0;
+constexpr double kContinuousTorqueNm = 30.0;
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kRatedSpeedRadS = 40.0 * 2.0 * kPi / 60.0;
+constexpr double kNoLoadSpeedRadS = 60.0 * 2.0 * kPi / 60.0;
+
+double motoringTorqueLimit(double speed)
+{
+  speed = std::abs(speed);
+  if (speed <= kRatedSpeedRadS) {
+    const double blend = speed / kRatedSpeedRadS;
+    return kCommandTorqueLimitNm + blend *
+      (kContinuousTorqueNm - kCommandTorqueLimitNm);
+  }
+  const double blend = std::clamp(
+    (speed - kRatedSpeedRadS) / (kNoLoadSpeedRadS - kRatedSpeedRadS), 0.0, 1.0);
+  return kContinuousTorqueNm * (1.0 - blend);
+}
 
 double clampActuatorForce(
-  const mjModel * model, int actuator, double force)
+  const mjModel * model, int actuator, double force, double velocity)
 {
-  if (model->actuator_forcelimited[actuator] == 0) {return force;}
-  const double minimum = model->actuator_forcerange[2 * actuator];
-  const double maximum = model->actuator_forcerange[2 * actuator + 1];
-  const double symmetric_limit = std::max(std::abs(minimum), std::abs(maximum));
-  // MuJoCo's actuator forcerange is already the configured motor limit.  A
-  // second linear speed derating here could drive the available torque to zero
-  // during a normal swing, which presents as one step followed by a pause and
-  // is not part of the controller/training contract.
+  double symmetric_limit = kCommandTorqueLimitNm;
+  if (model->actuator_forcelimited[actuator] != 0) {
+    const double minimum = model->actuator_forcerange[2 * actuator];
+    const double maximum = model->actuator_forcerange[2 * actuator + 1];
+    symmetric_limit = std::min(
+      symmetric_limit, std::max(std::abs(minimum), std::abs(maximum)));
+  }
+  // 只对输出机械功率的驱动方向应用转速降额；反向制动仍受 88 Nm 指令上限约束。
+  if (force * velocity > 0.0) {
+    symmetric_limit = std::min(symmetric_limit, motoringTorqueLimit(velocity));
+  }
   return std::clamp(force, -symmetric_limit, symmetric_limit);
 }
 }  // namespace
@@ -65,6 +87,12 @@ void SimulationActuatorWriter::write(
   if (data == nullptr) {throw std::invalid_argument("MuJoCo data is null");}
   mju_zero(data->qfrc_applied, model_->nv);
   const auto & commands = runner.jointCommands();
+  if (!motors_enabled) {
+    held_commands_ = {};
+    write_count_ = 0;
+  }
+  const bool latch_commands = motors_enabled && write_count_ % kMotorFrameDivider == 0;
+  if (motors_enabled) {++write_count_;}
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & command = commands[leg];
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
@@ -73,13 +101,20 @@ void SimulationActuatorWriter::write(
       // controller's complete MIT-PD torque is written through qfrc_applied;
       // this keeps the simulation from adding a second position-servo path.
       data->ctrl[address.actuator] = 0.0;
-      if (!motors_enabled || !command.enabled) {continue;}
       const Eigen::Index index = static_cast<Eigen::Index>(joint);
-      const double torque = command.torque_feedforward[index] +
-        command.kp[index] * (command.position_desired[index] - data->qpos[address.qpos]) +
-        command.kd[index] * (command.velocity_desired[index] - data->qvel[address.dof]);
+      auto & held = held_commands_[leg][joint];
+      if (latch_commands) {
+        held = HeldCommand{
+          command.position_desired[index], command.velocity_desired[index],
+          command.kp[index], command.kd[index], command.torque_feedforward[index],
+          command.enabled};
+      }
+      if (!motors_enabled || !held.enabled) {continue;}
+      const double torque = held.torque_feedforward +
+        held.kp * (held.position - data->qpos[address.qpos]) +
+        held.kd * (held.velocity - data->qvel[address.dof]);
       data->qfrc_applied[address.dof] = clampActuatorForce(
-        model_, address.actuator, torque);
+        model_, address.actuator, torque, data->qvel[address.dof]);
     }
   }
 }

@@ -9,17 +9,18 @@ namespace
 
 TEST(MpcGait, BuildsTrotContactPredictionInProjectLegOrder)
 {
-  // 10 个预测段、半周期相位差和 5 段支撑共同构成标准 TROT 接触表。
+  // 10 个预测段、半周期相位差和 5 段支撑共同构成 50% 支撑 TROT。
   mpc::OffsetDurationGait gait(10, {0, 5, 5, 0}, {5, 5, 5, 5}, "trot");
   gait.advance(0, 10);
   const auto & table = gait.contactTable();
   ASSERT_EQ(table.size(), 40U);
+  // 两组对角腿严格交替。
   EXPECT_EQ(table[0], 1);
   EXPECT_EQ(table[1], 0);
   EXPECT_EQ(table[2], 0);
   EXPECT_EQ(table[3], 1);
-  EXPECT_EQ(table[5 * kNumLegs], 0);
-  EXPECT_EQ(table[5 * kNumLegs + 1], 1);
+  EXPECT_EQ(table[6 * kNumLegs], 0);
+  EXPECT_EQ(table[6 * kNumLegs + 1], 1);
 }
 
 }  // namespace

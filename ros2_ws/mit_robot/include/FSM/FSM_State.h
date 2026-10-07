@@ -75,6 +75,25 @@ public:
   bool checkForceFeedForward = false;    ///< 是否检查足端前馈力是否安全。
 
 protected:
+  /** 将外部控制模式统一映射到内部 FSM 状态。 */
+  static FSM_StateName stateForMode(ControlMode mode) noexcept
+  {
+    switch (mode) {
+      case ControlMode::Passive: return FSM_StateName::PASSIVE;
+      case ControlMode::JointPd: return FSM_StateName::JOINT_PD;
+      case ControlMode::BalanceStand: return FSM_StateName::BALANCE_STAND;
+      case ControlMode::Locomotion:
+      case ControlMode::WalkClassic:
+      case ControlMode::WalkRl:
+      case ControlMode::StairsRl:
+        return FSM_StateName::LOCOMOTION;
+      case ControlMode::ProneDown: return FSM_StateName::LIE_DOWN;
+      case ControlMode::StandUp: return FSM_StateName::STAND_UP;
+      case ControlMode::RecoveryStand: return FSM_StateName::RECOVERY_STAND;
+    }
+    return FSM_StateName::INVALID;
+  }
+
   ControlFSMData < T > *_data;  ///< 非拥有指针，指向所有状态共享的控制数据。
 };
 
