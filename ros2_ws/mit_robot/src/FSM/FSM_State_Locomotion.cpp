@@ -62,6 +62,7 @@ void FSM_State_Locomotion<T>::onEnter()
     目标位置；约束和缓存。*/
   mpc_->initialize();
   resetSwingTrajectories();
+  startup_step_blend_.fill(T(0.4));
   active_mode_ = this->_data->desired_state->mode;
   rl_history_.fill(0.0F);
   rl_history_initialized_ = false;
@@ -86,10 +87,7 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   if (switching) {mpc_->initialize();}
   applied_gait_ = requested;
   gait_applied_ = true;
-  if (requested == GaitType::STATIC_WALK) {
-    mpc_->setGait(GaitType::STATIC_WALK);
-    this->_data->gait_scheduler->requestGait(GaitType::STATIC_WALK);
-  } else if (requested == GaitType::TROT) {
+  if (requested == GaitType::TROT) {
     mpc_->setGait(GaitType::TROT);
     this->_data->gait_scheduler->requestGait(GaitType::TROT);
   } else {
@@ -289,13 +287,11 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   //      原样维持住，零命令下任何微小扰动都会被保留，四条腿乱抖、机身匀速漂移。
   //      这一路改用速度误差捕获项，把足端收敛回机身正下方。
   // 方向运动保留实测速度主导的落足反馈，只在半个支撑期内把实测/目标速度
-  // 各取一半，再加小幅速度误差捕获。这样保留驱动方向所需的反向落足，
-  // 同时减小起步时实测速度落后目标速度造成的前几次接触修正。
+  // 各取一半，再加小幅速度误差捕获。
   constexpr T kTravelCaptureGain = T(0.08);
   // DM1 零速原地踏步的纵向/横向滑移不同，分别调节已有速度捕获项；
   // 有明确行走速度时两轴仍连续过渡到原有 0.08 参数。
-  const Vec2<T> kInPlaceCaptureGain = applied_gait_ == GaitType::STATIC_WALK ?
-    Vec2<T>(T(1.08), T(0.14)) : Vec2<T>::Constant(T(0.25));
+  const Vec2<T> kInPlaceCaptureGain = Vec2<T>::Constant(T(0.25));
   constexpr T kInPlaceVelocityThreshold = T(0.05);
   const T desired_speed = desired_velocity.norm();
   const T in_place_blend = std::clamp(
@@ -309,6 +305,11 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
     kTravelCaptureGain * velocity_error;
   Vec2<T> step = (T(1) - in_place_blend) * in_place_step +
     in_place_blend * travel_step;
+  // 首两次摆动逐级接入实测反馈，第三次恢复完整反馈。
+  const T startup_blend = startup_step_blend_[leg];
+  const Vec2<T> commanded_step =
+    (swing_time + half_stance_time) * desired_velocity;
+  step = (T(1) - startup_blend) * commanded_step + startup_blend * step;
   if (step.norm() > maximum_step_length_) {
     step *= maximum_step_length_ / step.norm();
   }
@@ -322,11 +323,12 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   // z 始终使用离地瞬间锁存的地面高度，不能跟随摆动中的实测足高漂移。
   landing_position.z() = initial_position.z();
   trajectory.setFinalPosition(landing_position);
-  // STATIC_WALK 保持较低摆脚高度，减少接触交接时的悬空窗口；其他步态沿用
-  // 全局原地/行走摆高参数。
-  const T trajectory_swing_height = applied_gait_ == GaitType::STATIC_WALK ?
-    T(0.030) : swing_height_;
+  T trajectory_swing_height = swing_height_;
+  if (startup_blend < T(1)) {
+    trajectory_swing_height *= T(0.375) + T(0.625) * startup_blend;
+  }
   trajectory.setHeight(trajectory_swing_height);
+  startup_step_blend_[leg] = std::min(T(1), startup_blend + T(0.3));
   swing_active_[leg] = true;
 }
 

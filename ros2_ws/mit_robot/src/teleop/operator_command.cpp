@@ -68,7 +68,6 @@ VelocityCommand velocityForMotion(
     case Motion::RotateCounterClockwise: return {0.0F, 0.0F, profile.yaw};
     case Motion::RotateClockwise: return {0.0F, 0.0F, -profile.yaw};
     case Motion::MarchInPlace: return {0.0F, 0.0F, 0.0F};
-    case Motion::StaticWalkInPlace: return {0.0F, 0.0F, 0.0F};
   }
   return {};
 }

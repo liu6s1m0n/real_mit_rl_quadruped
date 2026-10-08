@@ -39,7 +39,6 @@ TEST(MpcLocomotion, PublishesUnambiguousContactStateAndGaitTiming)
     test_support::standingFeet());
   ASSERT_TRUE(result.valid);
   EXPECT_DOUBLE_EQ(result.contact_phase[static_cast<std::size_t>(LegId::FR)], 0.0);
-  // 50%支撑：FR/RL支撑，FL/RR摆动；与80%静态行走分开。
   EXPECT_EQ(result.contact_state, (std::array<bool, kNumLegs>{true, false, false, true}));
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     EXPECT_NEAR(result.stance_time[leg], 0.25, 1.0e-6);
@@ -139,31 +138,3 @@ TEST(MpcLocomotion, RejectsUnsafeForwardVelocity)
 }
 
 }  // namespace
-
-TEST(MpcLocomotion, SwitchingGaitsKeepsFiftyAndEightyPercentSeparate)
-{
-  const auto quadruped = robots::dm1::makeModel<double>();
-  mpc::ConvexMPCLocomotion<double> controller(quadruped, 0.002, 20);
-  for (const auto gait : {GaitType::TROT, GaitType::STATIC_WALK, GaitType::TROT}) {
-    controller.initialize();
-    controller.setGait(gait);
-    constexpr int cycles = 250;
-    std::array<int, kNumLegs> stance_samples{};
-    for (int cycle = 0; cycle < cycles; ++cycle) {
-      const auto result = controller.run(test_support::standingEstimate(),
-        test_support::standingDesired(), test_support::standingFeet());
-      ASSERT_TRUE(result.valid);
-      int contacts = 0;
-      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-        contacts += result.contact_state[leg];
-        stance_samples[leg] += result.contact_state[leg];
-        EXPECT_NEAR(result.stance_time[leg], gait == GaitType::TROT ? 0.25 : 0.4, 1e-6);
-        EXPECT_NEAR(result.swing_time[leg], gait == GaitType::TROT ? 0.25 : 0.1, 1e-6);
-      }
-      if (gait == GaitType::TROT) {EXPECT_EQ(contacts, 2);} else {EXPECT_GE(contacts, 3);}
-    }
-    for (const int samples : stance_samples) {
-      EXPECT_EQ(samples, gait == GaitType::TROT ? 125 : 200);
-    }
-  }
-}

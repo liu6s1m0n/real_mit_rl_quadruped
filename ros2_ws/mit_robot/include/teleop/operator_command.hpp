@@ -45,9 +45,6 @@ enum class Motion : std::uint8_t
   RotateClockwise,
   /// 原地对角小跑：周期 0.5 s、支撑占比 50%，FR+RL 与 FL+RR 交替抬起。
   MarchInPlace,
-  /// 原地静态行走：周期 1.0 s、支撑占比 80%，按侧向序列 RR->FR->RL->FL
-  /// 四腿依次抬起，始终至少三腿支撑。
-  StaticWalkInPlace
 };
 
 struct VelocityCommand

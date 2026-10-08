@@ -85,6 +85,8 @@ private:
   std::array < FootSwingTrajectory < T >, kNumLegs > swing_trajectories_ {};
   /*记录每条腿是否已经开始当前摆动周期。*/
   std::array < bool, kNumLegs > swing_active_ {};
+  /*各腿从期望速度落点过渡到完整实测速度反馈的进度。*/
+  std::array < T, kNumLegs > startup_step_blend_ {};
   std::array<float, kRlObservationSize * kRlHistoryLength> rl_history_{};
   bool rl_history_initialized_ = false;
   std::array<float, kRlActionSize> rl_previous_action_{};

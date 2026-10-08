@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -31,6 +32,13 @@ namespace
 
 // 收到 Ctrl+C 或终止信号后，所有运行循环都会在下一个周期安全退出。
 std::atomic_bool g_stop_requested{false};
+
+const char * torqueStatus(float torque) noexcept
+{
+  const float magnitude = std::abs(torque);
+  return magnitude > 97.0F ? "OVER_PEAK" :
+    (magnitude > 30.0F ? "OVER_CONTINUOUS" : "NORMAL");
+}
 
 // 信号处理函数只设置停止标志，不直接访问 CAN、串口等非异步信号安全资源。
 void handleSignal(int) noexcept
@@ -393,15 +401,18 @@ int runMotorOnly(
           // sequence 增加表示轮询后确实收到了新反馈帧。
           const auto sequence_delta = polled_motor->sequence - last_report_sequence;
           imu_log::print(
-            sequence_delta > 0 ? imu_log::Level::Info : imu_log::Level::Warning,
+            std::abs(polled_motor->torque) > 97.0F ? imu_log::Level::Error :
+            (std::abs(polled_motor->torque) > 30.0F || sequence_delta == 0 ?
+            imu_log::Level::Warning : imu_log::Level::Info),
             "[轮询] 总线%u CAN=0x%03x 状态=%s 序号=%llu (+%llu/%.2fs) "
-            "q=%+.4f dq=%+.4f tau=%+.4f 已发送=%llu\n",
+            "q=%+.4f dq=%+.4f tau=%+.4f Nm torque=%s 已发送=%llu\n",
             static_cast<unsigned int>(polled_motor->bus),
             static_cast<unsigned int>(polled_motor->can_id),
             sequence_delta > 0 ? "UPDATING" : "NO_UPDATE",
             static_cast<unsigned long long>(polled_motor->sequence),
             static_cast<unsigned long long>(sequence_delta), report_age.count(),
             polled_motor->position, polled_motor->velocity, polled_motor->torque,
+            torqueStatus(polled_motor->torque),
             static_cast<unsigned long long>(sent_poll_count));
           last_report_sequence = polled_motor->sequence;
         }
@@ -415,11 +426,13 @@ int runMotorOnly(
       for (std::size_t i = 0; i < feedback.size(); ++i) {
         const auto & motor = feedback[i];
         imu_log::print(
-          imu_log::Level::Info,
-          "  %02zu bus%u can=0x%03x seq=%llu q=%+.4f dq=%+.4f tau=%+.4f\n",
+          std::abs(motor.torque) > 97.0F ? imu_log::Level::Error :
+          (std::abs(motor.torque) > 30.0F ? imu_log::Level::Warning : imu_log::Level::Info),
+          "  %02zu bus%u can=0x%03x seq=%llu q=%+.4f dq=%+.4f "
+          "tau=%+.4f Nm torque=%s\n",
           i, static_cast<unsigned int>(motor.bus), static_cast<unsigned int>(motor.can_id),
           static_cast<unsigned long long>(motor.sequence), motor.position,
-          motor.velocity, motor.torque);
+          motor.velocity, motor.torque, torqueStatus(motor.torque));
       }
     }
     std::this_thread::sleep_until(next_cycle);

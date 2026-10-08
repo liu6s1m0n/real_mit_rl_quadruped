@@ -313,15 +313,6 @@ void GaitScheduler<T>::createGait()
         "STAND_CYCLE", T(1), T(1), all_legs,
         Vec4<T>(T(0.5), T(0.5), T(0.5), T(0.5)), unit_scale, false);
       break;
-  /*周期 = 0.5 s，支撑占比 = 0.8、摆动占比 = 0.2（0.10 s），共 10 段、每段 50 ms，
-    与 MPC 的 10 段静态步态严格同步，并始终至少三腿支撑。
-    相位偏移 (0.5, 0, 0.8, 0.2) 对应 FR/FL/RR/RL，
-    与 static_walk_ 的 {5,0,2,8} 一致。*/
-    case GaitType::STATIC_WALK:
-      configureGait(
-        "STATIC_WALK", T(0.5), T(0.8), all_legs,
-        Vec4<T>(T(0.5), T(0), T(0.8), T(0.2)), unit_scale, true);
-      break;
   /*周期 = 0.5 s  支撑比例 = 0.625  摆动比例 = 0.375 每条腿相位错开，用于平稳行走。*/
     case GaitType::AMBLE:
       configureGait(

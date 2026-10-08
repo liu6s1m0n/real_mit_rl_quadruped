@@ -37,6 +37,12 @@ struct WalkReport
   double maximum_height = 0.0;
   double minimum_height = 1.0e9;
   double maximum_abs_pitch = 0.0;
+  double startup_maximum_planar_speed = 0.0;
+  std::size_t startup_maximum_planar_speed_step = 0;
+  double startup_maximum_abs_pitch = 0.0;
+  double startup_maximum_joint_speed = 0.0;
+  double startup_displacement_x = 0.0;
+  double startup_displacement_y = 0.0;
   double maximum_joint_torque = 0.0;
   double maximum_joint_speed = 0.0;
   double absolute_torque_sum = 0.0;
@@ -146,15 +152,30 @@ WalkReport runDirection(
     report.maximum_height = std::max(report.maximum_height, data->xpos[3 * trunk + 2]);
     report.minimum_height = std::min(report.minimum_height, data->xpos[3 * trunk + 2]);
     const mjtNum * rotation = data->xmat + 9 * trunk;
-    report.maximum_abs_pitch = std::max(report.maximum_abs_pitch, std::abs(
-      std::atan2(-rotation[6],
-      std::sqrt(rotation[0] * rotation[0] + rotation[3] * rotation[3]))));
+    const double abs_pitch = std::abs(std::atan2(-rotation[6],
+      std::sqrt(rotation[0] * rotation[0] + rotation[3] * rotation[3])));
+    report.maximum_abs_pitch = std::max(report.maximum_abs_pitch, abs_pitch);
+    if (index < 1000) {
+      const double planar_speed = std::hypot(data->qvel[0], data->qvel[1]);
+      if (planar_speed > report.startup_maximum_planar_speed) {
+        report.startup_maximum_planar_speed = planar_speed;
+        report.startup_maximum_planar_speed_step = index;
+      }
+      report.startup_maximum_abs_pitch = std::max(
+        report.startup_maximum_abs_pitch, abs_pitch);
+      report.startup_displacement_x = data->qpos[0] - start_x;
+      report.startup_displacement_y = data->qpos[1] - start_y;
+    }
     for (int dof = 6; dof < model->nv; ++dof) {
       const double torque = data->qfrc_applied[dof];
       report.maximum_joint_torque = std::max(
         report.maximum_joint_torque, std::abs(torque));
       report.maximum_joint_speed = std::max(
         report.maximum_joint_speed, std::abs(data->qvel[dof]));
+      if (index < 1000) {
+        report.startup_maximum_joint_speed = std::max(
+          report.startup_maximum_joint_speed, std::abs(data->qvel[dof]));
+      }
       if (state == FSM_StateName::LOCOMOTION) {
         report.absolute_torque_sum += std::abs(torque);
         report.squared_torque_sum += torque * torque;
@@ -215,6 +236,13 @@ TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
       report.minimum_height, report.maximum_height, report.maximum_abs_pitch,
       report.maximum_joint_torque, report.maximum_joint_speed);
     printTorqueStats(item.name, report);
+    std::printf(
+      "startup %-12s displacement=(%.3f,%.3f) max_speed=%.3f step=%zu "
+      "max_pitch=%.3f max_joint_speed=%.3f\n",
+      item.name, report.startup_displacement_x,
+      report.startup_displacement_y, report.startup_maximum_planar_speed,
+      report.startup_maximum_planar_speed_step,
+      report.startup_maximum_abs_pitch, report.startup_maximum_joint_speed);
 
     // 行走一旦进入 Locomotion 就必须连续保持；反复退回 BalanceStand 正是
     // 现场观察到的“一步一停”。
@@ -260,6 +288,13 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
     "march_windows initial_reposition=(%.3f,%.3f) settled_delta=(%.3f,%.3f)\n",
     report.initial_reposition_x, report.initial_reposition_y,
     report.settled_delta_x, report.settled_delta_y);
+  std::printf(
+    "march_startup displacement=(%.3f,%.3f) max_planar_speed=%.3f step=%zu "
+    "max_pitch=%.3f max_joint_speed=%.3f\n",
+    report.startup_displacement_x, report.startup_displacement_y,
+    report.startup_maximum_planar_speed,
+    report.startup_maximum_planar_speed_step, report.startup_maximum_abs_pitch,
+    report.startup_maximum_joint_speed);
 
   EXPECT_EQ(report.fallback_count, 0U);
   EXPECT_EQ(report.locomotion_entries, 1U);
@@ -267,8 +302,11 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
   EXPECT_GT(report.minimum_height, 0.30);
   EXPECT_LT(report.maximum_height, 0.45);
   EXPECT_LT(report.maximum_abs_pitch, 0.35);
-  // The first half captures the one-time nominal-foot recentering; the second
-  // half measures continued drift after that transition has settled.
+  // 初次接触切换时不能立即把全部实测速度瞬态写入落脚捕获项。
+  EXPECT_LT(report.startup_maximum_planar_speed, 0.30);
+  EXPECT_LT(report.startup_maximum_abs_pitch, 0.10);
+  EXPECT_LT(report.startup_maximum_joint_speed, 4.0);
+  // 长时间运行后仍须回到完整反馈并保持收敛，不能持续漂移。
   EXPECT_LT(std::abs(report.initial_reposition_x), 0.20);
   EXPECT_LT(std::abs(report.initial_reposition_y), 0.20);
   EXPECT_LT(std::abs(report.settled_delta_x), 0.08);

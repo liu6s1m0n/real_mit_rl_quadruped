@@ -22,7 +22,6 @@ kActuatorNames{{
   {{"RR_hip", "RR_thigh", "RR_calf"}},
   {{"RL_hip", "RL_thigh", "RL_calf"}}
 }};
-constexpr std::size_t kMotorFrameDivider = 4;
 constexpr double kCommandTorqueLimitNm = 88.0;
 constexpr double kContinuousTorqueNm = 30.0;
 constexpr double kPi = 3.14159265358979323846;
@@ -87,12 +86,6 @@ void SimulationActuatorWriter::write(
   if (data == nullptr) {throw std::invalid_argument("MuJoCo data is null");}
   mju_zero(data->qfrc_applied, model_->nv);
   const auto & commands = runner.jointCommands();
-  if (!motors_enabled) {
-    held_commands_ = {};
-    write_count_ = 0;
-  }
-  const bool latch_commands = motors_enabled && write_count_ % kMotorFrameDivider == 0;
-  if (motors_enabled) {++write_count_;}
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & command = commands[leg];
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
@@ -102,17 +95,10 @@ void SimulationActuatorWriter::write(
       // this keeps the simulation from adding a second position-servo path.
       data->ctrl[address.actuator] = 0.0;
       const Eigen::Index index = static_cast<Eigen::Index>(joint);
-      auto & held = held_commands_[leg][joint];
-      if (latch_commands) {
-        held = HeldCommand{
-          command.position_desired[index], command.velocity_desired[index],
-          command.kp[index], command.kd[index], command.torque_feedforward[index],
-          command.enabled};
-      }
-      if (!motors_enabled || !held.enabled) {continue;}
-      const double torque = held.torque_feedforward +
-        held.kp * (held.position - data->qpos[address.qpos]) +
-        held.kd * (held.velocity - data->qvel[address.dof]);
+      if (!motors_enabled || !command.enabled) {continue;}
+      const double torque = command.torque_feedforward[index] +
+        command.kp[index] * (command.position_desired[index] - data->qpos[address.qpos]) +
+        command.kd[index] * (command.velocity_desired[index] - data->qvel[address.dof]);
       data->qfrc_applied[address.dof] = clampActuatorForce(
         model_, address.actuator, torque, data->qvel[address.dof]);
     }

@@ -25,6 +25,8 @@ constexpr std::array<const char *, kNumJoints> kJointNames{
   "RR_hip", "RR_thigh", "RR_calf",
   "RL_hip", "RL_thigh", "RL_calf"};
 constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(100);
+constexpr float kContinuousTorqueNm = 30.0F;
+constexpr float kPeakTorqueNm = 97.0F;
 // 状态估计/控制保持 500 Hz，MIT 命令与未使能反馈轮询按 125 Hz 下发。
 // 每条总线 6 台电机的命令+反馈约 1500 帧/s，把经典 CAN 占用控制在约 20%。
 constexpr std::uint32_t kMotorFrameDivider = 4;
@@ -69,6 +71,30 @@ void reportSendFailures(const dm1_hardware::PeriodicMitSender & sender)
       "DM1 独立发送累计失败=%llu；同轮其余电机仍发送，失败电机下轮重试。\n",
       static_cast<unsigned long long>(sender.failedFrames()));
   }
+}
+
+void reportMotorTorque(const dm1_hardware::HardwareSample & sample)
+{
+  static robot_log::Throttle report(500);
+  if (!report.ready()) {return;}
+  const auto maximum = std::max_element(
+    sample.motors.begin(), sample.motors.end(), [](const auto & left, const auto & right) {
+      return std::abs(left.torque) < std::abs(right.torque);
+    });
+  if (maximum == sample.motors.end()) {return;}
+  const std::size_t joint = static_cast<std::size_t>(maximum - sample.motors.begin());
+  const float magnitude = std::abs(maximum->torque);
+  const char * status = magnitude > kPeakTorqueNm ? "OVER_PEAK" :
+    (magnitude > kContinuousTorqueNm ? "OVER_CONTINUOUS" : "NORMAL");
+  const auto level = magnitude > kPeakTorqueNm ? imu_log::Level::Error :
+    (magnitude > kContinuousTorqueNm ? imu_log::Level::Warning : imu_log::Level::Info);
+  imu_log::print(
+    level,
+    "[DM1][TORQUE] status=%s joint=%s bus=%u can=0x%03x tau=%+.2f Nm "
+    "continuous=%.1f peak=%.1f Nm（仅监控，不自动失能）\n",
+    status, kJointNames[joint], static_cast<unsigned int>(maximum->bus),
+    static_cast<unsigned int>(maximum->can_id), static_cast<double>(maximum->torque),
+    static_cast<double>(kContinuousTorqueNm), static_cast<double>(kPeakTorqueNm));
 }
 }
 
@@ -248,6 +274,7 @@ int HardwareBridge::runKeyboardControl(
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
+    reportMotorTorque(sample);
     if (keyboard_fault_reported) {
       // 仍读取电机故障，输入断开不再生成新动作，也不自动失能。
       std::this_thread::sleep_until(next_cycle);
@@ -819,6 +846,7 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
+    reportMotorTorque(sample);
 
     const float timestamp = static_cast<float>(now_s);
     // 控制器内部使用桥的相对单调时钟；电机原始时间戳已经在上面的

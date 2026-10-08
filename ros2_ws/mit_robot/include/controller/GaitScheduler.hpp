@@ -20,7 +20,6 @@ enum class GaitType : std::uint8_t
 {
   STAND = 0,
   STAND_CYCLE,
-  STATIC_WALK,
   AMBLE,
   TROT_WALK,
   TROT,

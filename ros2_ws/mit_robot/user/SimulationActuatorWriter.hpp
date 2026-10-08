@@ -38,24 +38,11 @@ private:
     int actuator = -1;
   };
 
-  struct HeldCommand
-  {
-    double position = 0.0;
-    double velocity = 0.0;
-    double kp = 0.0;
-    double kd = 0.0;
-    double torque_feedforward = 0.0;
-    bool enabled = false;
-  };
-
   using JointAddresses =
     std::array<std::array<JointAddress, kJointsPerLeg>, kNumLegs>;
 
   const mjModel * model_ = nullptr;
   JointAddresses addresses_{};
-  mutable std::array<std::array<HeldCommand, kJointsPerLeg>, kNumLegs>
-  held_commands_{};
-  mutable std::size_t write_count_ = 0;
 };
 
 #endif  // MYMIT_ROBOT_USER_SIMULATION_ACTUATOR_WRITER_HPP_
