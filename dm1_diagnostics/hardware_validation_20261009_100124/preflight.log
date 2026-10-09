@@ -1,0 +1,16 @@
+Script started on 2026-10-09 10:01:46+08:00 [TERM="dumb" TTY="/dev/pts/4" COLUMNS="80" LINES="24"]
+[DM IMU] 已自动选择串口设备: /dev/serial/by-id/usb-DM-Tech_DM-IMU-L1_DMIMU20250212-if00
+DM1 硬件桥接在启动时为只读模式；不会写入电机参数。使用 --set-zero 进入维护模式，或使用 --enable-output 启动控制。
+DM1 关节力矩饱和上限=88.0 Nm（超过则按比例截断后仍发送；连续额定 30、峰值 97；可用 --torque-limit 调整）。
+[DM IMU] receiver started: /dev/serial/by-id/usb-DM-Tech_DM-IMU-L1_DMIMU20250212-if00, 921600 baud
+[DM IMU] collecting startup baseline; keep robot motionless...
+[DM IMU] status=UPDATING seq=1 | acc=(-0.610, -0.712, 10.043) gyro=(-0.002, 0.000, -0.017) rpy_deg=(-3.784, 3.524, -20.131)
+[DM IMU] startup baseline accepted: gravity_body=(-0.625, -0.665, 10.051) |g|=10.092 m/s^2 rpy0_deg=(-3.795, 3.531, -20.190) from 200 samples
+[INFO] Successfully started receiver thread with ID 125296980256320
+[INFO] Successfully started receiver thread with ID 125296971863616
+DM1 启动阶段：主动发送一次全电机失能帧，然后开始反馈轮询。
+Reading DM IMU from '/dev/serial/by-id/usb-DM-Tech_DM-IMU-L1_DMIMU20250212-if00' at 921600 baud; CAN buses 'can0'/'can1' are read-only until output is enabled.
+DM1 12 路电机首轮反馈通过；将持续监测 IMU，电机不再要求连续上报。
+DM1 启动稳定性检查通过；使能后将执行平滑回零，未修改电机参数。
+
+Script done on 2026-10-09 10:01:59+08:00 [COMMAND_EXIT_CODE="124"]

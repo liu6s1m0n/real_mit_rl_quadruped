@@ -14,6 +14,7 @@
 #include <mujoco/mujoco.h>
 
 #include "FSM/ControlFSM.h"
+#include "controller/ContactEstimator.hpp"
 #include "controller/PositionVelocityEstimator.hpp"
 #include "controller/leg_controller.hpp"
 #include "model/quadruped.hpp"
@@ -167,6 +168,8 @@ private:
   LegSensorPointers leg_sensor_pointers_{};
   /*位置速度状态估计器。*/
   std::unique_ptr<PositionVelocityEstimator<float>> state_estimator_;
+  /*融合电机力矩与腿部几何得到真实接触概率。*/
+  std::unique_ptr<ContactEstimator<float>> contact_estimator_;
   /*步态调度器。*/
   GaitScheduler<float> gait_scheduler_;
   /*当前状态估计结果*/
@@ -213,6 +216,7 @@ private:
   bool rl_entry_posture_latched_ = false;
   ControlMode pending_rl_mode_ = ControlMode::WalkRl;
   float locomotion_entry_stable_time_s_ = 0.0F;
+  float locomotion_contact_fusion_time_s_ = 0.0F;
   float rl_entry_stable_time_s_ = 0.0F;
   bool prone_down_active_ = false;
   bool prone_down_complete_ = false;

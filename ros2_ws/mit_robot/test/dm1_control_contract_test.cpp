@@ -10,6 +10,7 @@
 #include "controller/RlPolicy.hpp"
 #include "controller/frozen_dwaq_policy.hpp"
 #include "controller/leg_controller.hpp"
+#include "FSM/FSM_State_Locomotion.h"
 #include "hardware/dm1_mit_interface.hpp"
 #include "model/quadruped.hpp"
 #include "model/robot_control_parameters.hpp"
@@ -61,42 +62,41 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
   EXPECT_TRUE(
     parameters.initialization_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 100.0F)));
+      Vec3<float>(99.9F, 99.9F, 99.9F)));
   EXPECT_TRUE(
     parameters.initialization_kd.isApprox(
-      Vec3<float>(2.0F, 2.0F, 2.0F)));
+      Vec3<float>(1.999F, 1.999F, 1.999F)));
   EXPECT_TRUE(
     parameters.prone_home_joint_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 100.0F)));
+      Vec3<float>(70.0F, 70.0F, 70.0F)));
   EXPECT_TRUE(
     parameters.prone_home_joint_kd.isApprox(
-      Vec3<float>(2.0F, 2.0F, 2.0F)));
-  // 机身姿态环属于 BalanceStand 的 WBC 任务增益，与 RL 的直接关节 PD 不同；
-  // 保留 MPC/WBC 已验证的阻尼，避免站立姿态在接触切换时欠阻尼。
+      Vec3<float>(1.6F, 1.6F, 1.6F)));
+  // 机身姿态环属于 BalanceStand 的 WBC 任务增益，与直接关节 PD 量纲不同。
   EXPECT_TRUE(
     parameters.balance_body_orientation_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 40.0F)));
+      Vec3<float>(90.0F, 90.0F, 35.0F)));
   EXPECT_TRUE(
     parameters.balance_body_orientation_kd.isApprox(
-      Vec3<float>(18.0F, 18.0F, 8.0F)));
+      Vec3<float>(16.0F, 16.0F, 7.0F)));
   EXPECT_TRUE(
     parameters.balance_joint_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 300.0F)));
+      Vec3<float>(85.0F, 85.0F, 100.0F)));
   EXPECT_TRUE(
     parameters.balance_joint_kd.isApprox(
-      Vec3<float>(2.0F, 2.0F, 2.0F)));
+      Vec3<float>(1.8F, 1.8F, 1.8F)));
   EXPECT_TRUE(
     parameters.stand_up_joint_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 100.0F)));
+      Vec3<float>(80.0F, 80.0F, 90.0F)));
   EXPECT_TRUE(
     parameters.stand_up_joint_kd.isApprox(
-      Vec3<float>(2.0F, 2.0F, 2.0F)));
+      Vec3<float>(1.8F, 1.8F, 1.8F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kp.isApprox(
-      Vec3<float>(100.0F, 60.0F, 60.0F)));
+      Vec3<float>(59.8F, 59.8F, 59.8F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kd.isApprox(
-      Vec3<float>(5.0F, 5.0F, 5.0F)));
+      Vec3<float>(4.95F, 4.95F, 4.95F)));
 }
 
 // 所有会被写进 command.kp_joint/kd_joint、最终原样下发给 DM 电机的增益，
@@ -105,29 +105,35 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
 TEST(Dm1Contract, MotorFacingJointGainsStayInsideMitProtocolRange)
 {
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
+  constexpr float kOperationalKpLimit = 100.0F;
+  constexpr float kOperationalKdLimit = 4.95F;
   // 直接下发给电机的关节 PD：初始化/趴卧保持、BalanceStand、StandUp 收腿、
-  // MPC/WBC 行走（LieDown 折叠复用），以及 RlControlStep() 中写死的 RL 增益。
+  // MPC/WBC 行走（LieDown 折叠复用）；RL 复用较温和的 initialization_kp/kd。
   const std::array<Vec3<float>, 5> kp_sets{
+    parameters.initialization_kp,
     parameters.prone_home_joint_kp,
     parameters.balance_joint_kp,
     parameters.stand_up_joint_kp,
-    parameters.locomotion_joint_kp,
-    Vec3<float>(100.0F, 100.0F, 100.0F)};
+    parameters.locomotion_joint_kp};
   const std::array<Vec3<float>, 5> kd_sets{
+    parameters.initialization_kd,
     parameters.prone_home_joint_kd,
     parameters.balance_joint_kd,
     parameters.stand_up_joint_kd,
-    parameters.locomotion_joint_kd,
-    Vec3<float>(2.0F, 2.0F, 2.0F)};
+    parameters.locomotion_joint_kd};
   for (const auto & set : kp_sets) {
     EXPECT_TRUE((set.array() >= 0.0F).all());
     EXPECT_TRUE((set.array() <= dm1_hardware::mit_protocol::kKpMax).all())
       << "Kp set exceeds the DM MIT protocol limit";
+    EXPECT_LE(set.maxCoeff(), kOperationalKpLimit)
+      << "Kp set exceeds the validated DM1 operating profile";
   }
   for (const auto & set : kd_sets) {
     EXPECT_TRUE((set.array() >= 0.0F).all());
     EXPECT_TRUE((set.array() <= dm1_hardware::mit_protocol::kKdMax).all())
       << "Kd set exceeds the DM MIT protocol limit";
+    EXPECT_LE(set.maxCoeff(), kOperationalKdLimit)
+      << "Kd set exceeds the validated DM1 operating profile";
   }
 }
 
@@ -144,6 +150,67 @@ TEST(Dm1Contract, AnalyticKinematicsIsFiniteAtHome)
     EXPECT_TRUE(position.allFinite());
     EXPECT_LT(position.z(), 0.0F);
   }
+}
+
+TEST(Dm1Contract, UnsafeLocomotionLatchesBalanceStandWithoutRerunningController)
+{
+  const auto model = makeQuadruped<float>(RobotType::DM1);
+  const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
+  StateEstimate<float> estimate;
+  estimate.valid = true;
+  std::array<JointState<float>, kNumLegs> joints{};
+  LegController<float> leg_controller(model);
+  GaitScheduler<float> gait_scheduler(0.002F);
+  DesiredState<float> desired;
+  desired.valid = true;
+  desired.mode = ControlMode::Locomotion;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    leg_controller.datas[leg].valid = true;
+    leg_controller.datas[leg].p.z() = -0.30F;
+  }
+  // 足端越过髋部上方，模拟实机单腿折叠后触发的安全回站。
+  leg_controller.datas[0].p.z() = 0.01F;
+  leg_controller.commands[0].position_desired.setConstant(0.123F);
+
+  ControlFSMData<float> data;
+  data.quadruped = &model;
+  data.control_parameters = &parameters;
+  data.state_estimate = &estimate;
+  data.joint_states = &joints;
+  data.leg_controller = &leg_controller;
+  data.gait_scheduler = &gait_scheduler;
+  data.desired_state = &desired;
+  data.control_time_step = 0.002F;
+  FSM_State_Locomotion<float> locomotion(&data);
+  locomotion.onEnter();
+
+  EXPECT_EQ(locomotion.checkTransition(), FSM_StateName::BALANCE_STAND);
+  EXPECT_EQ(desired.mode, ControlMode::BalanceStand);
+  EXPECT_TRUE(locomotion.transition().done);
+  EXPECT_TRUE(leg_controller.commands[0].position_desired.isConstant(0.123F));
+}
+
+TEST(Dm1Contract, CommonLegCommandOutputLimitsTotalTorqueToContinuousRating)
+{
+  const auto model = makeQuadruped<float>(RobotType::DM1);
+  LegController<float> controller(model);
+  JointState<float> feedback;
+  feedback.leg = LegId::FR;
+  feedback.valid = true;
+  ASSERT_TRUE(controller.updateData(feedback));
+  controller.setEnabled(true);
+  controller.commands[0].position_desired.setConstant(1.0F);
+  controller.commands[0].velocity_desired.setConstant(2.0F);
+  controller.commands[0].torque_feedforward.setConstant(10.0F);
+  controller.commands[0].kp_joint.setConstant(100.0F);
+  controller.commands[0].kd_joint.setConstant(5.0F);
+
+  const auto command = controller.command(LegId::FR);
+  ASSERT_TRUE(command.enabled);
+  const Vec3<float> total_torque = command.torque_feedforward +
+    command.kp.cwiseProduct(command.position_desired - feedback.position) +
+    command.kd.cwiseProduct(command.velocity_desired - feedback.velocity);
+  EXPECT_LE(total_torque.cwiseAbs().maxCoeff(), 60.0F + 1.0e-4F);
 }
 
 TEST(Dm1Contract, PolicyInterfaceCarriesGoldenVectorShape)

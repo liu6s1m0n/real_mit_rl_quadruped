@@ -11,7 +11,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <deque>
+#include <fstream>
+#include <iomanip>
 #include <stdexcept>
 #include <thread>
 
@@ -67,7 +70,8 @@ void reportSendFailures(const dm1_hardware::PeriodicMitSender & sender)
 {
   static robot_log::Throttle log(1000);
   if (sender.failedFrames() > 0 && log.ready()) {
-    imu_log::print(imu_log::Level::Warning,
+    imu_log::print(
+      imu_log::Level::Warning,
       "DM1 独立发送累计失败=%llu；同轮其余电机仍发送，失败电机下轮重试。\n",
       static_cast<unsigned long long>(sender.failedFrames()));
   }
@@ -157,6 +161,21 @@ int HardwareBridge::runKeyboardControl(
   const std::atomic_bool & stop_requested)
 {
   teleop::KeyboardTeleop keyboard;
+  // 每次键盘控制启动都新建一个带时间戳的 CSV，记录全部 12 个关节的
+  // q（实际位置）、q_des（期望位置）和 tau（反馈力矩），用于步态分析。
+  std::time_t log_ts = std::time(nullptr);
+  char log_name[128];
+  std::strftime(log_name, sizeof(log_name),
+    "/tmp/dm1_march_%Y%m%d_%H%M%S.csv", std::localtime(&log_ts));
+  std::ofstream csv_log(log_name);
+  if (csv_log.is_open()) {
+    csv_log << "t_s,fsm";
+    for (const auto * name : kJointNames) {
+      csv_log << ',' << name << "_q," << name << "_q_des," << name << "_tau";
+    }
+    csv_log << '\n';
+    imu_log::print(imu_log::Level::Info, "关节数据记录到 %s\n", log_name);
+  }
   // 打开 CAN 并不代表物理电机已经失能；接受键盘输入前先建立失效安全状态。
   hardware_.disableAll();
   if (!keyboard.start()) {
@@ -354,19 +373,42 @@ int HardwareBridge::runKeyboardControl(
         }
         runner_.setLocomotionGait(gait);
         runner_.setControlMode(ControlMode::Locomotion);
+        if (runner_.currentStateName() == FSM_StateName::BALANCE_STAND &&
+          !runner_.locomotionEntryReady())
+        {
+          static robot_log::Throttle entry_wait_log(1000);
+          if (entry_wait_log.ready()) {
+            imu_log::print(
+              imu_log::Level::Info,
+              "Locomotion 等待：机身高度/姿态或关节展开度尚未连续满足准入条件。\n");
+          }
+        }
       }
     }
     const float timestamp = static_cast<float>(now_s);
     sample.imu.timestamp = timestamp;
+    // 在 updateHardwareFeedback 之前快照校准后的关节反馈，用于 CSV 记录。
+    const auto log_js = mit_.jointStates(timestamp);
     const bool feedback_valid = !control_active || runner_.updateHardwareFeedback(
-      sample.imu, mit_.jointStates(timestamp), timestamp);
+      sample.imu, log_js, timestamp);
     if (control_active && !feedback_valid) {
       report_control_failure("状态估计器拒绝硬件反馈");
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
 
+    const FSM_StateName state_before_control = runner_.currentStateName();
     const bool control_valid = !control_active || runner_.run();
+    if (control_active && control_valid && arbiter.motionActive() &&
+      state_before_control == FSM_StateName::LOCOMOTION &&
+      runner_.currentStateName() == FSM_StateName::BALANCE_STAND)
+    {
+      arbiter.stopMotion();
+      runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+      imu_log::print(
+        imu_log::Level::Warning,
+        "Locomotion 安全回退已取消当前运动请求；保持 BalanceStand，需重新按运动键。\n");
+    }
     if (control_active && control_valid && stand_up_pending && runner_.requestStandUp()) {
       stand_up_pending = false;
       imu_log::print(imu_log::Level::Info, "站立请求已接受。\n");
@@ -380,6 +422,24 @@ int HardwareBridge::runKeyboardControl(
       output_enabled && !publishCommands(mit_, sender, runner_.jointCommands(), now_s))
     {
       report_control_failure("MIT命令校验/发布失败");
+    }
+    // 每个控制周期写一行 CSV：12 个关节的实际位置、期望位置和反馈力矩。
+    if (control_active && csv_log.is_open()) {
+      csv_log << std::fixed << std::setprecision(4) << now_s
+              << ',' << fsmStateLabel(runner_.currentStateName());
+      const auto & cmds = runner_.jointCommands();
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+          const std::size_t idx = leg * kJointsPerLeg + joint;
+          const auto ji = static_cast<Eigen::Index>(joint);
+          const float q = log_js[leg].position[ji];
+          const float q_des = cmds[leg].position_desired[ji];
+          const float tau = idx < sample.motors.size() ?
+            sample.motors[idx].torque : 0.0F;
+          csv_log << ',' << q << ',' << q_des << ',' << tau;
+        }
+      }
+      csv_log << '\n';
     }
     const auto finished = std::chrono::steady_clock::now();
     if (finished > next_cycle) {
@@ -903,7 +963,8 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
     if (!publishCommands(mit_, sender, runner_.jointCommands(), now_s)) {
       static robot_log::Throttle publish_log(1000);
       if (publish_log.ready()) {
-        imu_log::print(imu_log::Level::Warning,
+        imu_log::print(
+          imu_log::Level::Warning,
           "DM1 新控制帧未发布；独立发送持续保持上一有效命令，不失能。\n");
       }
     }

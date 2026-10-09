@@ -28,10 +28,8 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
   wbc_ctrl_->setBodyOrientationGains(
     parameters.balance_body_orientation_kp,
     parameters.balance_body_orientation_kd);
-  Vec3<T> trial_joint_kp = parameters.balance_joint_kp;
-  trial_joint_kp.z() = T(100);
   wbc_ctrl_->setJointGains(
-    trial_joint_kp, parameters.balance_joint_kd);
+    parameters.balance_joint_kp, parameters.balance_joint_kd);
   wbc_ctrl_->setFloatingBaseWeight(parameters.balance_floating_base_weight);
   wbc_ctrl_->setReactionForceWeight(parameters.balance_reaction_force_weight);
   wbc_ctrl_->setMaxNormalForce(parameters.maximum_normal_force);
@@ -87,7 +85,7 @@ FSM_StateName FSM_State_BalanceStand<T>::checkTransition()
   this->nextStateName = this->stateForMode(this->_data->desired_state->mode);
   this->transitionDuration = T(0);
   if (this->nextStateName == FSM_StateName::LOCOMOTION) {
-    this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
+    this->_data->gait_scheduler->requestGait(this->_data->locomotion_gait);
   }
   return this->nextStateName;
 }

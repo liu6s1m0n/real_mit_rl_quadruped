@@ -32,9 +32,7 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   //浮动基座表示机身不是固定在地面上，而是有：3 个平移自由度 + 3 个旋转自由度
   wbc_ctrl_ = std::make_unique<LocomotionCtrl<T>>(
     model::makeFloatingBaseModel(*control_fsm_data->quadruped));
-  // 默认姿态环 Kp=50、Kd=1 在对角支撑切换时阻尼不足，前进地面力作用于
-  // 质心下方后产生的俯仰无法及时衰减。提高 roll/pitch 恢复力和角速度阻尼，
-  // yaw 保持较温和，避免改变航向响应。
+  // 姿态环保留足够的 roll/pitch 阻尼，同时避免用过高增益放大实机估计噪声。
   const auto & parameters = *control_fsm_data->control_parameters;
   // 两种机型独立设置行走增益、抬脚高度和横向安全边界。DM1 使用较低摆幅
   // 以减小惯性滚转，并按更宽的机械足距放宽边界。
@@ -68,8 +66,10 @@ void FSM_State_Locomotion<T>::onEnter()
   rl_history_initialized_ = false;
   rl_previous_action_.fill(0.0F);
   rl_policy_counter_ = 0;
-  /*步态由 ControlFSMData::locomotion_gait 选择：用户入口中的 2 号原地踏步
-    使用 TROT（50% 支撑，0.5 s 周期），方向运动使用 TROT_WALK。
+  safety_fallback_transition_ = false;
+  prev_joint_target_initialized_ = false;
+  /*步态由 ControlFSMData::locomotion_gait 选择；经典运动统一落到
+    TROT_WALK（60% 支撑，0.5 s 周期），保留四足重叠换载区。
     MPC 与 GaitScheduler 必须同时设置：只改一个就会出现"MPC 认为后腿支撑、
     GaitScheduler 认为后腿摆动"的错相，导致 WBC 约束错误、足端轨迹漂移。*/
   applyRequestedGait(true);
@@ -87,13 +87,10 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   if (switching) {mpc_->initialize();}
   applied_gait_ = requested;
   gait_applied_ = true;
-  if (requested == GaitType::TROT) {
-    mpc_->setGait(GaitType::TROT);
-    this->_data->gait_scheduler->requestGait(GaitType::TROT);
-  } else {
-    mpc_->setGait(GaitType::TROT_WALK);
-    this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
-  }
+  // 实机经典步态统一使用带四足重叠区的 60% 支撑率。外部保留 TROT 请求
+  // 兼容现有按键/API，但不再进入无承重余量的 50% 支撑分支。
+  mpc_->setGait(GaitType::TROT_WALK);
+  this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
 }
 
 /*每个控制周期直接执行一次完整行走控制。*/
@@ -123,7 +120,12 @@ template<typename T>
 FSM_StateName FSM_State_Locomotion<T>::checkTransition()
 {
   ++iteration_;
+  safety_fallback_transition_ = false;
   if (!locomotionSafe()) {
+    // 安全回退必须同步清除 Locomotion 期望，否则外层下一周期仍看到旧模式，
+    // 会把 BalanceStand 立即拉回 Locomotion，形成 500 Hz 状态振荡。
+    this->_data->desired_state->mode = ControlMode::BalanceStand;
+    safety_fallback_transition_ = true;
     this->nextStateName = FSM_StateName::BALANCE_STAND;
     this->transitionData.done = false;
     this->transitionDuration = T(0);
@@ -141,13 +143,14 @@ FSM_StateName FSM_State_Locomotion<T>::checkTransition()
   }
   return this->nextStateName;
 }
-/*执行状态切换处理 如果要切换到 BalanceStand，再执行一次控制周期。
-  作用是：在切换瞬间仍然输出有效关节命令；避免切换帧出现零命令；
-  让站立状态接收到连续的姿态和足端状态。*/
+/*普通请求回到 BalanceStand 时再执行一次控制周期，保持切换帧命令连续；
+  安全回退沿用上一帧有效命令，不重复执行已经判定不安全的行走控制。*/
 template<typename T>
 TransitionData<T> FSM_State_Locomotion<T>::transition()
 {
-  if (this->nextStateName == FSM_StateName::BALANCE_STAND) {
+  if (this->nextStateName == FSM_StateName::BALANCE_STAND &&
+    !safety_fallback_transition_)
+  {
     run();
   }
   if (this->nextStateName == FSM_StateName::PASSIVE) {
@@ -167,10 +170,18 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
   /* 参数四： 俯仰角 翻滚的安全上限了*/
   constexpr T max_roll_degrees = T(40);
   constexpr T max_pitch_degrees = T(40);
-  if (!estimate.valid ||
-    std::abs(estimate.rpy.x()) > ori::deg2rad(max_roll_degrees) ||
+  if (!estimate.valid) {
+    std::fprintf(stderr,
+      "[FSM][LOCOMOTION] 安全回站：状态估计无效。\n");
+    return false;
+  }
+  if (std::abs(estimate.rpy.x()) > ori::deg2rad(max_roll_degrees) ||
     std::abs(estimate.rpy.y()) > ori::deg2rad(max_pitch_degrees))
   {
+    std::fprintf(stderr,
+      "[FSM][LOCOMOTION] 安全回站：姿态越界 roll=%.3f pitch=%.3f rad。\n",
+      static_cast<double>(estimate.rpy.x()),
+      static_cast<double>(estimate.rpy.y()));
     return false;
   }
   
@@ -179,10 +190,24 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
     data.v.norm() > 9  足端速度不能超过 9 m/s。如果超过，通常表示：*/
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & data = this->_data->leg_controller->datas[leg];
-    if (!data.valid || data.p.z() > T(0) ||
-      std::abs(data.p.y()) > maximum_lateral_foot_offset_ ||
-      data.v.norm() > T(9))
+    if (!data.valid) {
+      std::fprintf(stderr,
+        "[FSM][LOCOMOTION] 安全回站：leg=%zu 反馈无效。\n", leg);
+      return false;
+    }
+    const T foot_speed = data.v.norm();
+    if (data.p.z() > T(0) ||
+      std::abs(data.p.y()) > maximum_lateral_foot_offset_ || foot_speed > T(9))
     {
+      std::fprintf(stderr,
+        "[FSM][LOCOMOTION] 安全回站：leg=%zu p=(%.4f,%.4f,%.4f)m "
+        "v_norm=%.3fm/s q=(%.4f,%.4f,%.4f)rad；边界 p_z<=0, "
+        "|p_y|<=%.3f, v<=9。\n",
+        leg, static_cast<double>(data.p.x()),
+        static_cast<double>(data.p.y()), static_cast<double>(data.p.z()),
+        static_cast<double>(foot_speed), static_cast<double>(data.q.x()),
+        static_cast<double>(data.q.y()), static_cast<double>(data.q.z()),
+        static_cast<double>(maximum_lateral_foot_offset_));
       return false;
     }
   }
@@ -333,6 +358,49 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
 }
 
 template<typename T>
+void FSM_State_Locomotion<T>::constrainJointTargets(
+  const std::array<bool, kNumLegs> & contact_state)
+{
+  // WBC 最大单周期关节目标步长：0.15 rad/step @ 500 Hz = 75 rad/s 的等效速率。
+  // 该值远高于任何物理关节速度，只阻止 WBC 在接触状态跳变或状态估计突变时
+  // 产生的瞬间大角度目标跳变（如接触融合退出瞬间 hip q_des 跳到 -1.57 rad）。
+  constexpr T kMaxPositionStep = T(0.15);
+
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto leg_id = static_cast<LegId>(leg);
+    const auto & joints = this->_data->quadruped->leg(leg_id).joints;
+    auto & command = this->_data->leg_controller->commands[leg];
+
+    if (!contact_state[leg]) {
+      command.velocity_desired =
+        command.velocity_desired.cwiseProduct(swing_joint_velocity_scale_);
+    }
+    command.velocity_desired = command.velocity_desired.cwiseMin(
+      joints.velocity_limit).cwiseMax(-joints.velocity_limit);
+    command.position_desired = command.position_desired.cwiseMax(
+      joints.lower_limit).cwiseMin(joints.upper_limit);
+
+    // 对 WBC 输出的关节目标施加逐帧变化率限制，防止接触融合退出等事件
+    // 导致目标瞬间跳变到关节极限、产生无法跟踪的巨大 PD 误差。
+    if (prev_joint_target_initialized_) {
+      for (Eigen::Index joint = 0;
+        joint < static_cast<Eigen::Index>(kJointsPerLeg); ++joint)
+      {
+        const T delta =
+          command.position_desired[joint] - prev_joint_position_desired_[leg][joint];
+        if (std::abs(delta) > kMaxPositionStep) {
+          command.position_desired[joint] =
+            prev_joint_position_desired_[leg][joint] +
+            std::copysign(kMaxPositionStep, delta);
+        }
+      }
+    }
+    prev_joint_position_desired_[leg] = command.position_desired;
+  }
+  prev_joint_target_initialized_ = true;
+}
+
+template<typename T>
 void FSM_State_Locomotion<T>::LocomotionControlStep()
 {
   // 同步当前步态请求；未变化时是空操作。
@@ -401,23 +469,9 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
         "[FSM][LOCOMOTION] 失能前判断：WBC runAndApply 失败。\n");
     }
     if (wbc_valid) {
-      // 直接提高摆动腿电机期望关节转速；支撑腿保持KinWBC原始速度。
-      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-        const auto leg_id = static_cast<LegId>(leg);
-        const auto & joints = this->_data->quadruped->leg(leg_id).joints;
-        auto & command = this->_data->leg_controller->commands[leg];
-
-        // KinWBC 不处理关节限位；源头限幅可避免驱动层拒绝整批 MIT 指令。
-        command.position_desired =
-          command.position_desired.cwiseMax(joints.lower_limit)
-            .cwiseMin(joints.upper_limit);
-
-        if (result.contact_state[leg]) {continue;}
-        auto & velocity = command.velocity_desired;
-        velocity = velocity.cwiseProduct(swing_joint_velocity_scale_);
-        const Vec3<T> & limit = joints.velocity_limit;
-        velocity = velocity.cwiseMin(limit).cwiseMax(-limit);
-      }
+      // 行走层只负责自身的目标范围；所有状态共用的连续力矩约束由
+      // LegController 最终命令出口统一执行。
+      constrainJointTargets(result.contact_state);
     }
   } else {
     // 关闭 WBC 时的降级路径只发送足端前馈力，主要用于调试算法分层。
@@ -599,8 +653,10 @@ void FSM_State_Locomotion<T>::RlControlStep()
     auto & command = controller.commands[leg];
     const auto & joints = this->_data->quadruped->leg(
       static_cast<LegId>(leg)).joints;
-    command.kp_joint.setConstant(T(100));
-    command.kd_joint.setConstant(T(2));
+    // RL 直接位置跟踪复用较温和的初始化阻抗；MPC 需要更高阻尼来抑制
+    // 接触切换振荡，不能把它的 Kd 原样用于 RL 策略输出。
+    command.kp_joint = this->_data->control_parameters->initialization_kp;
+    command.kd_joint = this->_data->control_parameters->initialization_kd;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t index = leg * kJointsPerLeg + joint;
       const float raw_target = kDm1RlDefaultJointPosition[index] +
@@ -625,6 +681,7 @@ void FSM_State_Locomotion<T>::onExit()
   iteration_ = 0;
   resetSwingTrajectories();
   rl_target_initialized_ = false;
+  prev_joint_target_initialized_ = false;
 }
 
 template class FSM_State_Locomotion<float>;

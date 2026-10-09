@@ -65,6 +65,9 @@ private:
    * @param force 为 true 时无论是否变化都重新下发（进入 Locomotion 时使用）。
    */
   void applyRequestedGait(bool force);
+  /** 约束行走关节目标范围和摆动腿速度。 */
+  void constrainJointTargets(
+    const std::array<bool, kNumLegs> & contact_state);
   void startSwingTrajectory(
     std::size_t leg, const Vec3 < T > & initial_position,
     const mpc::LocomotionResult < T > & locomotion_result);
@@ -104,7 +107,13 @@ private:
   /*摆动腿各关节使用同一速度比例；最终仍按DM1关节速度上限裁剪。*/
   Vec3<T> swing_joint_velocity_scale_ =
     Vec3<T>(T(1), T(1), T(1));
+  /*安全条件触发的回站不再重复执行已经不安全的 Locomotion 控制帧。*/
+  bool safety_fallback_transition_ = false;
   std::size_t iteration_ = 0;
+  // WBC 输出的关节目标逐帧变化率保护：保存上一帧各腿关节目标，
+  // 防止接触融合退出等状态估计跳变时目标瞬间突变产生无法跟踪的大误差。
+  std::array<Vec3<T>, kNumLegs> prev_joint_position_desired_ {};
+  bool prev_joint_target_initialized_ = false;
   /*当前已下发给 MPC/GaitScheduler 的步态，用于检测中途换步态。*/
   GaitType applied_gait_ = GaitType::TROT;
   bool gait_applied_ = false;

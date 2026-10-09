@@ -114,6 +114,8 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
   state_estimator_ = std::make_unique<PositionVelocityEstimator<float>>(
     quadruped_, *imu_, leg_sensor_pointers_, orientation_mode,
     estimator_parameters, std::max(0.02F, 2.0F * control_time_step_));
+  contact_estimator_ = std::make_unique<ContactEstimator<float>>(
+    quadruped_, *imu_, leg_sensor_pointers_);
 
   desired_state_.mode = control_parameters_.start_in_prone_home ?
     ControlMode::JointPd : ControlMode::BalanceStand;
@@ -298,6 +300,7 @@ bool RobotRunner::requestProneDown() noexcept
   }
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
+  locomotion_contact_fusion_time_s_ = 0.0F;
   rl_entry_stable_time_s_ = 0.0F;
   control_fsm_->setRlEntryPostureActive(false);
   prone_down_active_ = true;
@@ -353,9 +356,10 @@ bool RobotRunner::locomotionEntryPostureStable() const noexcept
     standing_height_target_ - 0.04F,
     minimumStandingHeight(), maximumStandingHeight());
   if (measuredBodyHeight() < entry_height_floor) {return false;}
-  // 姿态和关节速度也必须稳定：过渡过程中 WBC 仍在抬升机身，此时起步会
-  // 和抬升轨迹叠加成冲击。
+  // 姿态、关节位置和速度也必须稳定：过渡过程中 WBC 仍在抬升机身，
+  // 此时起步会和抬升轨迹叠加成冲击。
   constexpr float kMaximumEntryRollPitch = 0.15F;
+  constexpr float kMaximumEntryJointPositionError = 0.25F;
   constexpr float kMaximumEntryJointSpeed = 1.0F;
   if (std::abs(state_estimate_.rpy.x()) > kMaximumEntryRollPitch ||
     std::abs(state_estimate_.rpy.y()) > kMaximumEntryRollPitch)
@@ -364,9 +368,15 @@ bool RobotRunner::locomotionEntryPostureStable() const noexcept
   }
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     if (!joint_states_[leg].valid) {return false;}
+    const auto & home = quadruped_.leg(static_cast<LegId>(leg)).joints.home_position;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-      if (std::abs(joint_states_[leg].velocity(
-          static_cast<Eigen::Index>(joint))) > kMaximumEntryJointSpeed)
+      const auto index = static_cast<Eigen::Index>(joint);
+      // StandUp 的预备小腿角约 0.07 rad，而正常站姿约 1.00 rad。只检查
+      // 速度会把“折叠但静止”的腿误判为站稳，随后 Locomotion 首帧产生
+      // 约 1 rad 的位置误差和 60+ Nm 的原始 PD 力矩。
+      if (std::abs(joint_states_[leg].position(index) - home(index)) >
+          kMaximumEntryJointPositionError ||
+        std::abs(joint_states_[leg].velocity(index)) > kMaximumEntryJointSpeed)
       {
         return false;
       }
@@ -465,6 +475,7 @@ void RobotRunner::reset()
 {
   // 只清除算法内部状态。MuJoCo 已经处理了 qpos/qvel，本控制器不“扶正”机器人。
   state_estimator_->reset();
+  contact_estimator_->reset();
   gait_scheduler_.initialize();
   state_estimate_ = StateEstimate<float>{};
   joint_states_ = std::array<JointState<float>, kNumLegs>{};
@@ -482,6 +493,7 @@ void RobotRunner::reset()
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
   locomotion_entry_stable_time_s_ = 0.0F;
+  locomotion_contact_fusion_time_s_ = 0.0F;
   rl_entry_stable_time_s_ = 0.0F;
   prone_down_active_ = false;
   prone_down_complete_ = false;
@@ -660,12 +672,31 @@ void RobotRunner::disableCommands() noexcept
 
 bool RobotRunner::run()
 {
-  // 1. 推进一步态并把“预计接触概率”交给状态估计器。
+  // 1. 推进一步态，并用实测支撑力补充计划接触概率。
   //让步态调度器前进一步。它会更新：当前 gait phase；
   //每条腿的接触概率；摆动/支撑状态。
   gait_scheduler_.step();
-  state_estimator_->setContactProbabilities(
-    gait_scheduler_.gait_data.estimatorContactProbabilities());
+  auto contact_probabilities =
+    gait_scheduler_.gait_data.estimatorContactProbabilities();
+  const bool classic_locomotion =
+    control_fsm_->currentStateName() == FSM_StateName::LOCOMOTION &&
+    (desired_state_.mode == ControlMode::Locomotion ||
+    desired_state_.mode == ControlMode::WalkClassic);
+  locomotion_contact_fusion_time_s_ = classic_locomotion ?
+    locomotion_contact_fusion_time_s_ + control_time_step_ : 0.0F;
+  constexpr float kInitialContactFusionDuration = 0.5F;
+  if (classic_locomotion &&
+    locomotion_contact_fusion_time_s_ < kInitialContactFusionDuration &&
+    contact_estimator_->run())
+  {
+    const auto & measured = contact_estimator_->contactProbabilities();
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      // 计划支撑仍是先验；真实足端仍承重或提前触地时不得被立即丢弃。
+      contact_probabilities[leg] = std::max(
+        contact_probabilities[leg], measured[leg]);
+    }
+  }
+  state_estimator_->setContactProbabilities(contact_probabilities);
   /*运行状态估计器。如果失败：*/
   if (!state_estimator_->run()) {
     std::fprintf(stderr, "RobotRunner 失败：状态估计器未产生有效状态。\n");

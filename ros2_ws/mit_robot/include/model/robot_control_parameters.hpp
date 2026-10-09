@@ -73,36 +73,38 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     throw std::invalid_argument("only the DM1 control profile is supported");
   }
 
-  // 数值与 dm1_model_contract.yaml、RL_Robot DM1 训练配置保持一致。
+  // 机械模型与 dm1_model_contract.yaml 保持一致；下列控制增益按实机连续力矩预算整定。
   // 换站立速度要修改的地方：站立速度由这两个共享参数控制。
   // standing_height_rate 限制支撑后抬升速度，stand_up_duration 限制趴地展开速度。
   return {
     // 站立高度范围、抬升速度、趴卧高度、趴下速度/折叠时间、单周期高度步长、初始化时长。
     T(0.30), T(0.42), T(0.04), T(0.12), T(0.08), T(2.0), T(0.00016), T(1.2),
     // 电机刚使能后的关节初始化 PD：[hip, thigh, calf] 的 Kp、Kd。
-    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    Vec3<T>(T(99.9), T(99.9), T(99.9)), Vec3<T>(T(1.999), T(1.999), T(1.999)),
     // 从机械趴卧零位启动；模型零位对应三个电机角全零。
     true, Vec3<T>::Zero(),
     // 趴卧保持关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    Vec3<T>(T(70), T(70), T(70)), Vec3<T>(T(1.6), T(1.6), T(1.6)),
     // BalanceStand 机身位置 WBC 增益：[x, y, z] 的 Kp、Kd；不是电机 MIT-PD。
-    Vec3<T>(T(45), T(45), T(90)), Vec3<T>(T(8), T(8), T(14)),
+    Vec3<T>(T(40), T(40), T(80)), Vec3<T>(T(7), T(7), T(12)),
     // BalanceStand 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd；不是电机 MIT-PD。
-    Vec3<T>(T(100), T(100), T(40)), Vec3<T>(T(18), T(18), T(8)),
+    Vec3<T>(T(90), T(90), T(35)), Vec3<T>(T(16), T(16), T(7)),
     // BalanceStand 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    Vec3<T>(T(100), T(100), T(300)), Vec3<T>(T(2), T(2), T(2)),
+    Vec3<T>(T(85), T(85), T(100)), Vec3<T>(T(1.8), T(1.8), T(1.8)),
     // WBC浮动基权重、反力权重、单脚最大法向力、模型支撑质量。
     T(300), T(1), T(150), T(14.705035),
     // StandUp 趴卧展开时长、大腿速度比例、机械关节目标姿态。
     T(3.2), T(0.75), Vec3<T>(T(0), T(0.1), T(-2.15)),
     // StandUp 第一阶段直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(2), T(2), T(2)),
+    Vec3<T>(T(80), T(80), T(90)), Vec3<T>(T(1.8), T(1.8), T(1.8)),
     // StandUp 非趴卧路径的足端笛卡尔 PD：[x, y, z] 的 Kp、Kd。
-    Vec3<T>(T(220), T(220), T(300)), Vec3<T>(T(12), T(12), T(16)),
+    Vec3<T>(T(190), T(190), T(260)), Vec3<T>(T(10), T(10), T(14)),
     // Locomotion 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd。
-    Vec3<T>(T(70), T(70), T(35)), Vec3<T>(T(12), T(12), T(6)),
+    Vec3<T>(T(69), T(69), T(34)), Vec3<T>(T(11.8), T(11.8), T(5.8)),
     // Locomotion 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    Vec3<T>(T(100), T(60), T(60)), Vec3<T>(T(5), T(5), T(5)),
+    // hip Kp 从 99.5 降至 59.8，与 thigh/calf 对齐，避免接触融合退出等
+    // 状态估计跳变时 hip 单帧产生过大 PD 冲量（原最大可达 ~180 Nm）。
+    Vec3<T>(T(59.8), T(59.8), T(59.8)), Vec3<T>(T(4.95), T(4.95), T(4.95)),
     // 摆腿高度、足端最大横向偏移。
     T(0.035), T(0.24),
     // RL周期、观测维数、历史长度、动作比例、滤波常数、单步变化、速度和力矩限制。

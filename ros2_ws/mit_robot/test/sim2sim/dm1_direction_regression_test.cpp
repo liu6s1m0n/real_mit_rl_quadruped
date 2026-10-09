@@ -793,11 +793,12 @@ TEST(Dm1Sim2Sim, MotionControlStartsFromMeasuredJointPositionWithoutTorqueStep)
   // continuity, not xy station keeping before StandUp.
   EXPECT_TRUE(std::isfinite(data->qpos[0]));
   EXPECT_TRUE(std::isfinite(data->qpos[1]));
+  const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & command = runner.jointCommands()[leg];
     EXPECT_TRUE(command.position_desired.isApprox(measured_joint_positions[leg], 1.0e-5F));
-    EXPECT_TRUE(command.kp.isApprox(Vec3<float>(100.0F, 100.0F, 100.0F)));
-    EXPECT_TRUE(command.kd.isApprox(Vec3<float>(2.0F, 2.0F, 2.0F)));
+    EXPECT_TRUE(command.kp.isApprox(parameters.prone_home_joint_kp));
+    EXPECT_TRUE(command.kd.isApprox(parameters.prone_home_joint_kd));
   }
 
   ASSERT_EQ(runner.currentStateName(), FSM_StateName::JOINT_PD);

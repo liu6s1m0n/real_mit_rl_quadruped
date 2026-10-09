@@ -6,6 +6,7 @@
 #include "controller/leg_controller.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 namespace
@@ -262,11 +263,41 @@ JointCommand<T> LegController<T>::command(LegId leg_id, T timestamp)
   // 从当前机型、当前腿的模型参数中取得 [Hip, thigh, calf] 力矩上限。
   const Vec3<T> torque_limit = _quadruped.leg(leg_id).joints.torque_limit;
   // 将三个前馈力矩分别限制在 [-torque_limit, +torque_limit]。
-  // 注意：本层只知道前馈项；执行层计算出“前馈 + PD”后仍必须再次限幅。
+  // 先限制前馈项；下面再统一约束“前馈 + PD”的预计总力矩。
   result.torque_feedforward =
     result.torque_feedforward.cwiseMin(torque_limit).cwiseMax(-torque_limit);
-  // 转换和限幅结果仍为有限数值时，才正式允许执行层下发此命令。
-  result.enabled = result.torque_feedforward.allFinite();
+  // 60 Nm 是峰值力矩的软件保护阈值（电机额定峰值 97 Nm）。
+  // 使用额定连续值 30 Nm 会在 BalanceStand 入场时因重力前馈 + PD 超限而
+  // 比例缩减全部增益，导致机体无法支撑自重。60 Nm 仍可阻止行走接触融合
+  // 退出时的 ~180 Nm 冲量，同时给 WBC 前馈留出足够裕度。
+  // 硬件接口保留独立的 30 Nm 连续值保护作为最终安全网。
+  constexpr T kContinuousTorqueLimit = T(60);
+  for (Eigen::Index joint = 0;
+    joint < static_cast<Eigen::Index>(kJointsPerLeg); ++joint)
+  {
+    const T total_torque = result.torque_feedforward[joint] +
+      result.kp[joint] * (result.position_desired[joint] - data.q[joint]) +
+      result.kd[joint] * (result.velocity_desired[joint] - data.qd[joint]);
+    if (std::abs(total_torque) <= kContinuousTorqueLimit) {continue;}
+    if ((torque_constraint_events_++ % 500U) == 0U) {
+      std::fprintf(
+        stderr,
+        "[LegController] 总力矩约束：leg=%zu joint=%td raw=%.3f Nm "
+        "limit=60.0 q_des=%.4f q=%.4f dq_des=%.4f dq=%.4f。\n",
+        index, joint, static_cast<double>(total_torque),
+        static_cast<double>(result.position_desired[joint]),
+        static_cast<double>(data.q[joint]),
+        static_cast<double>(result.velocity_desired[joint]),
+        static_cast<double>(data.qd[joint]));
+    }
+    const T scale = kContinuousTorqueLimit / std::abs(total_torque);
+    result.kp[joint] *= scale;
+    result.kd[joint] *= scale;
+    result.torque_feedforward[joint] *= scale;
+  }
+  // 转换和约束结果仍为有限数值时，才正式允许执行层下发此命令。
+  result.enabled = result.torque_feedforward.allFinite() && result.kp.allFinite() &&
+    result.kd.allFinite();
   return result;
 }
 

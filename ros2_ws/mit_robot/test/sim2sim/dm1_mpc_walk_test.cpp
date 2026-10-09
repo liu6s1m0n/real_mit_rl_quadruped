@@ -22,6 +22,13 @@ namespace
 {
 using ModelPointer = std::unique_ptr<mjModel, decltype(&mj_deleteModel)>;
 using DataPointer = std::unique_ptr<mjData, decltype(&mj_deleteData)>;
+constexpr std::array<std::array<const char *, kJointsPerLeg>, kNumLegs>
+kJointNames{{
+  {{"FR_hip_joint", "FR_thigh_joint", "FR_calf_joint"}},
+  {{"FL_hip_joint", "FL_thigh_joint", "FL_calf_joint"}},
+  {{"RR_hip_joint", "RR_thigh_joint", "RR_calf_joint"}},
+  {{"RL_hip_joint", "RL_thigh_joint", "RL_calf_joint"}}
+}};
 
 struct WalkReport
 {
@@ -44,11 +51,13 @@ struct WalkReport
   double startup_displacement_x = 0.0;
   double startup_displacement_y = 0.0;
   double maximum_joint_torque = 0.0;
+  double maximum_raw_joint_torque = 0.0;
   double maximum_joint_speed = 0.0;
   double absolute_torque_sum = 0.0;
   double squared_torque_sum = 0.0;
   std::size_t torque_samples = 0;
   std::size_t continuous_overload_samples = 0;
+  std::size_t raw_overload_samples = 0;
 };
 
 ModelPointer loadModel()
@@ -121,6 +130,13 @@ WalkReport runDirection(
   const int trunk = mj_name2id(model, mjOBJ_BODY, "trunk");
   const double start_x = data->qpos[0];
   const double start_y = data->qpos[1];
+  std::array<std::array<int, kJointsPerLeg>, kNumLegs> joint_ids{};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+      joint_ids[leg][joint] =
+        mj_name2id(model, mjOBJ_JOINT, kJointNames[leg][joint]);
+    }
+  }
   WalkReport report;
   FSM_StateName previous = runner.currentStateName();
   for (std::size_t index = 0; index < steps; ++index) {
@@ -133,8 +149,30 @@ WalkReport runDirection(
     runner.setLocomotionVelocityCommand(command.x(), command.y(), command.z());
     runner.setControlMode(ControlMode::Locomotion);
     runner.run();
-    writer.write(runner, data, true);
     const FSM_StateName state = runner.currentStateName();
+    const auto & joint_commands = runner.jointCommands();
+    if (state == FSM_StateName::LOCOMOTION) {
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+          const int joint_id = joint_ids[leg][joint];
+          const int qpos = model->jnt_qposadr[joint_id];
+          const int dof = model->jnt_dofadr[joint_id];
+          const auto & joint_command = joint_commands[leg];
+          const Eigen::Index component = static_cast<Eigen::Index>(joint);
+          const double raw_torque = joint_command.torque_feedforward[component] +
+            joint_command.kp[component] *
+            (joint_command.position_desired[component] - data->qpos[qpos]) +
+            joint_command.kd[component] *
+            (joint_command.velocity_desired[component] - data->qvel[dof]);
+          report.maximum_raw_joint_torque = std::max(
+            report.maximum_raw_joint_torque, std::abs(raw_torque));
+          if (std::abs(raw_torque) > 30.0 + 1.0e-4) {
+            ++report.raw_overload_samples;
+          }
+        }
+      }
+    }
+    writer.write(runner, data, true);
     if (state != previous) {
       if (state == FSM_StateName::LOCOMOTION) {++report.locomotion_entries;}
       if (state == FSM_StateName::BALANCE_STAND &&
@@ -196,10 +234,13 @@ void printTorqueStats(const char * label, const WalkReport & report)
 {
   const double samples = static_cast<double>(report.torque_samples);
   std::printf(
-    "torque_stats %-12s mean_abs=%.3f rms=%.3f peak=%.3f over_30=%.4f%%\n",
+    "torque_stats %-12s mean_abs=%.3f rms=%.3f applied_peak=%.3f "
+    "raw_peak=%.3f applied_over_30=%.4f%% raw_over_30=%zu\n",
     label, report.absolute_torque_sum / samples,
     std::sqrt(report.squared_torque_sum / samples), report.maximum_joint_torque,
-    100.0 * static_cast<double>(report.continuous_overload_samples) / samples);
+    report.maximum_raw_joint_torque,
+    100.0 * static_cast<double>(report.continuous_overload_samples) / samples,
+    report.raw_overload_samples);
 }
 
 TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
@@ -251,7 +292,9 @@ TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
     EXPECT_GT(report.minimum_height, 0.30) << item.name;
     EXPECT_LT(report.maximum_height, 0.45) << item.name;
     EXPECT_LT(report.maximum_abs_pitch, 0.35) << item.name;
-    EXPECT_LE(report.maximum_joint_torque, 88.0 + 1.0e-6) << item.name;
+    EXPECT_EQ(report.raw_overload_samples, 0U) << item.name;
+    EXPECT_LE(report.maximum_raw_joint_torque, 30.0 + 1.0e-3) << item.name;
+    EXPECT_LE(report.maximum_joint_torque, 30.0 + 1.0e-3) << item.name;
     if (item.command.x() > 0.0F) {
       EXPECT_GT(report.net_x, 0.15) << item.name;
     } else if (item.command.x() < 0.0F) {
@@ -311,7 +354,9 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
   EXPECT_LT(std::abs(report.initial_reposition_y), 0.20);
   EXPECT_LT(std::abs(report.settled_delta_x), 0.08);
   EXPECT_LT(std::abs(report.settled_delta_y), 0.08);
-  EXPECT_LE(report.maximum_joint_torque, 88.0 + 1.0e-6);
+  EXPECT_EQ(report.raw_overload_samples, 0U);
+  EXPECT_LE(report.maximum_raw_joint_torque, 30.0 + 1.0e-3);
+  EXPECT_LE(report.maximum_joint_torque, 30.0 + 1.0e-3);
 }
 
 // 横向扰动恢复：接触切换之外，机身姿态和关节阻抗也要能吸收外力，
@@ -338,7 +383,9 @@ TEST(Dm1MpcWalkStress, ForwardWithLateralPush)
   EXPECT_EQ(report.fallback_count, 0U);
   EXPECT_GT(report.minimum_height, 0.30);
   EXPECT_LT(report.maximum_abs_pitch, 0.35);
-  EXPECT_LE(report.maximum_joint_torque, 88.0 + 1.0e-6);
+  EXPECT_EQ(report.raw_overload_samples, 0U);
+  EXPECT_LE(report.maximum_raw_joint_torque, 30.0 + 1.0e-3);
+  EXPECT_LE(report.maximum_joint_torque, 30.0 + 1.0e-3);
 }
 
 // 入场门槛：只要 BalanceStand 一建立就立刻下发方向命令（真机上“按 1 后马上
@@ -400,5 +447,28 @@ TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
   EXPECT_GT(height_at_entry, 0.30);
   EXPECT_GT(minimum_locomotion_height, 0.29);
   EXPECT_GT(data->qpos[0] - start_x, 0.05);
+}
+
+TEST(Dm1MpcWalkGate, FoldedCalfCannotEnterLocomotion)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  ASSERT_TRUE(runner.locomotionEntryReady());
+
+  const int joint = mj_name2id(model.get(), mjOBJ_JOINT, "FR_calf_joint");
+  ASSERT_GE(joint, 0);
+  data->qpos[model->jnt_qposadr[joint]] = 0.075;
+  data->qvel[model->jnt_dofadr[joint]] = 0.0;
+  mj_forward(model.get(), data.get());
+  ASSERT_TRUE(runner.run());
+  EXPECT_FALSE(runner.locomotionEntryReady());
+
+  runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+  runner.setControlMode(ControlMode::Locomotion);
+  ASSERT_TRUE(runner.run());
+  EXPECT_EQ(runner.currentStateName(), FSM_StateName::BALANCE_STAND);
 }
 }  // namespace

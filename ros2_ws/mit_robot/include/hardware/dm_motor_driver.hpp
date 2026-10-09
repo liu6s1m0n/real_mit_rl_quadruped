@@ -72,9 +72,9 @@ public:
   bool openSingle(const dm1_hardware::MotorAddress & address);
   /** @brief 向全部电机发送零增益 MIT 帧，请求更新反馈。 */
   bool pollAll();
-  /** @brief 非阻塞读取全部电机的最新反馈，并检查反馈是否在线且未超时。 */
+  /** @brief 读取全部缓存反馈；在线/健康校验保留，年龄与收发时序只监管。 */
   bool latest(FeedbackArray & feedback, double now_s) const;
-  /** @brief 非阻塞读取指定电机的最新反馈，并检查其是否新鲜健康。 */
+  /** @brief 读取指定电机的最新缓存反馈，并检查其是否在线健康。 */
   bool latestOne(
     const dm1_hardware::MotorAddress & address, dm1_hardware::MotorFeedback & feedback,
     double now_s) const;
@@ -130,7 +130,21 @@ private:
     float mos_temperature_c = 0.0F;  // MOS/驱动器温度，摄氏度。
     float rotor_temperature_c = 0.0F;  // 转子温度，摄氏度。
     bool online = false;  // 是否收到与标定地址匹配的反馈。
+    std::chrono::steady_clock::time_point position_changed_at{};
+    mutable double max_rx_gap_ms = 0.0;  // 本次监测窗口内的接收间隔与位置/速度残差。
+    mutable double max_q_velocity_residual_rad = 0.0;
   };
+
+  // 只用于监管，不参与反馈接纳、发帧或失能决策；同样由mutex_保护。
+  struct TxMonitor
+  {
+    std::uint64_t attempts = 0, writes_ok = 0;
+    std::chrono::steady_clock::time_point attempted_at{}, written_at{};
+    mutable double max_gap_ms = 0.0;
+  };
+  std::array<TxMonitor, kNumJoints> tx_monitor_{};
+  mutable std::chrono::steady_clock::time_point monitor_report_at_{};
+  mutable std::array<std::uint64_t, kNumJoints> reported_rx_{}, reported_tx_{}, reported_ok_{};
 
   // 接收线程回调：解码、校验地址，并更新对应电机的快照。
   void receive(std::uint8_t bus, const canfd_frame & frame) noexcept;

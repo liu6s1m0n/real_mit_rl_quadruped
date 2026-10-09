@@ -56,6 +56,11 @@ public:
       motor.rotor_temperature_c = 25.0F;
       motor.health_valid = true;
       motor.timestamp = now_s;
+      if (stale_motor_feedback && read_count >= 70) {
+        if (read_count == 70) {disable_count_at_stale_feedback = disable_count;}
+        motor.sequence = 70;
+        motor.timestamp = 0.0;
+      }
     }
     if (fail_read_after > 0 && read_count >= fail_read_after) {
       if (failed_read_count++ == 0) {send_count_at_first_failed_read = send_count;}
@@ -89,6 +94,7 @@ public:
       last_positions[index] = frame.position;
     }
     if (stop_after_send_count > 0 && send_count >= stop_after_send_count) {
+      if (!stop_requested_.load()) {disable_count_before_stop = disable_count;}
       stop_requested_.store(true);
     }
     return true;
@@ -135,6 +141,7 @@ public:
   int sends_during_stall = 0;
   int zero_count = 0;
   int disable_count = 0;
+  int disable_count_at_stale_feedback = 0, disable_count_before_stop = 0;
   int close_count = 0;
   int poll_count = 0;
   int send_count = 0;
@@ -160,6 +167,7 @@ public:
   bool repeat_after_zero = false;
   bool damage_on_failed_read = false;
   bool communication_fault = false;
+  bool stale_motor_feedback = false;
   float startup_offset = 0.1F;
   std::array<float, kNumJoints> first_positions{};
   std::array<float, kNumJoints> last_positions{};
@@ -450,8 +458,11 @@ class SenderTransport final : public dm1_hardware::MitTransport
 public:
   bool sendMit(const dm1_hardware::MitFrame & frame) override
   {
-    ++attempts[frame.can_id - 1];
+    ++attempts[static_cast<std::size_t>(frame.bus) * 6 + frame.can_id - 1];
     if (disabled.load()) {++sends_after_disable;}
+    if (frame.bus == 0 && slow_bus_us > 0) {
+      std::this_thread::sleep_for(std::chrono::microseconds(slow_bus_us));
+    }
     if (throw_on_send) {throw std::runtime_error("injected send failure");}
     return frame.can_id != failed_id;
   }
@@ -462,12 +473,16 @@ public:
   std::atomic<bool> disabled{false};
   int failed_id = 0;
   bool throw_on_send = false;
+  int slow_bus_us = 0;
 };
 
 dm1_hardware::PeriodicMitSender::Frames senderFrames()
 {
   dm1_hardware::PeriodicMitSender::Frames frames{};
-  for (std::size_t i = 0; i < frames.size(); ++i) {frames[i].can_id = i + 1;}
+  for (std::size_t i = 0; i < frames.size(); ++i) {
+    frames[i].bus = static_cast<std::uint8_t>(i / 6);
+    frames[i].can_id = static_cast<std::uint16_t>(i % 6 + 1);
+  }
   return frames;
 }
 }
@@ -482,7 +497,9 @@ TEST(PeriodicMitSenderTest, PauseQuiescesOutputAndReenableUsesOnlyNewFrames)
   sender.arm();
   ASSERT_TRUE(sender.publish(senderFrames()));
   std::this_thread::sleep_for(40ms);
+  const auto pause_started = std::chrono::steady_clock::now();
   sender.pause();
+  EXPECT_LT(std::chrono::steady_clock::now() - pause_started, 100ms);
   const int count = transport.attempts.back().load();
   EXPECT_GE(count, 2);
   std::this_thread::sleep_for(25ms);
@@ -568,6 +585,64 @@ TEST(PeriodicMitSenderTest, TransportExceptionKeepsRetryingWithoutDisabling)
   EXPECT_GT(sender.failedFrames(), 0U);
   EXPECT_GT(transport.attempts.back().load(), 0);
   EXPECT_EQ(transport.disable_count.load(), 0);
+}
+
+TEST(PeriodicMitSenderTest, BothBusesRunNearFiveHundredHz)
+{
+  using Clock = std::chrono::steady_clock;
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  sender.arm();
+  ASSERT_TRUE(sender.publish(senderFrames()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  std::array<int, kNumJoints> before{};
+  for (std::size_t i = 0; i < before.size(); ++i) {before[i] = transport.attempts[i].load();}
+  const auto start = Clock::now();
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  sender.pause();
+  const double elapsed_s = std::chrono::duration<double>(Clock::now() - start).count();
+  for (std::size_t i = 0; i < before.size(); ++i) {
+    const double hz = (transport.attempts[i].load() - before[i]) / elapsed_s;
+    EXPECT_GT(hz, 400.0) << "joint=" << i;
+    EXPECT_LT(hz, 550.0) << "joint=" << i;
+  }
+  EXPECT_EQ(transport.disable_count.load(), 0);
+}
+
+TEST(PeriodicMitSenderTest, SlowBusDoesNotDelayOtherBus)
+{
+  std::atomic_bool stop{false};
+  SenderTransport transport;
+  transport.slow_bus_us = 3000;
+  dm1_hardware::PeriodicMitSender sender(transport, stop);
+  sender.arm();
+  ASSERT_TRUE(sender.publish(senderFrames()));
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  sender.pause();
+  EXPECT_GT(transport.attempts.back().load(), 60);
+  EXPECT_GT(transport.attempts.back().load(), transport.attempts[5].load() * 4);
+  EXPECT_EQ(transport.disable_count.load(), 0);
+}
+
+TEST(HardwareBridgeTest, StaleRepeatedMotorFeedbackDoesNotStopSendingOrDisable)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.stale_motor_feedback = true;
+  hardware.stop_after_send_count = 900;
+  HardwareBridge::Options options;
+  options.control_time_step = 0.002F;
+  options.startup_stable_samples = 1;
+  options.enable_output = true;
+  HardwareBridge bridge(hardware, calibration(), options);
+  EXPECT_EQ(bridge.run(stop_requested), 0);
+  EXPECT_GT(hardware.read_count, 70);
+  EXPECT_GE(hardware.send_count, 900);
+  // 启动与最终显式停机可以失能，中间不能因陈旧/重复反馈失能再使能。
+  EXPECT_EQ(hardware.enable_count, 1);
+  EXPECT_EQ(hardware.disable_count_before_stop, hardware.disable_count_at_stale_feedback);
 }
 
 TEST(HardwareBridgeTest, CommunicationFaultKeepsSendingBeyondOldThreeSecondTimeout)

@@ -37,7 +37,7 @@ const char * torqueStatus(float torque) noexcept
 {
   const float magnitude = std::abs(torque);
   return magnitude > 97.0F ? "OVER_PEAK" :
-    (magnitude > 30.0F ? "OVER_CONTINUOUS" : "NORMAL");
+         (magnitude > 30.0F ? "OVER_CONTINUOUS" : "NORMAL");
 }
 
 // 信号处理函数只设置停止标志，不直接访问 CAN、串口等非异步信号安全资源。

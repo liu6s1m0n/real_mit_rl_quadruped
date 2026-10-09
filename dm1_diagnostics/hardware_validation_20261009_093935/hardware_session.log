@@ -1,0 +1,384 @@
+DM1 键盘控制: 电机启动时处于锁定状态；不会修改电机零位参数。只有机器人静止、水平且 12 路反馈健康时，才能使用 Shift+U 解锁；键盘模式不检查当前关节是否处于零位窗口。
+DM1 关节力矩饱和上限=30.0 Nm（超过则按比例截断后仍发送；连续额定 30、峰值 97；可用 --torque-limit 调整）。
+[DM IMU] receiver started: /dev/serial/by-id/usb-DM-Tech_DM-IMU-L1_DMIMU20250212-if00, 921600 baud
+[DM IMU] collecting startup baseline; keep robot motionless...
+[DM IMU] status=UPDATING seq=1 | acc=(-0.610, -0.625, 10.044) gyro=(-0.011, -0.001, -0.010) rpy_deg=(-3.452, 3.496, -40.945)
+[DM IMU] startup baseline accepted: gravity_body=(-0.616, -0.604, 10.055) |g|=10.092 m/s^2 rpy0_deg=(-3.449, 3.492, -41.005) from 200 samples
+[INFO] Successfully started receiver thread with ID 136573666453056
+[INFO] Successfully started receiver thread with ID 136573584668224
+DM1 启动阶段：主动发送一次全电机失能帧，然后开始反馈轮询。
+Reading DM IMU from '/dev/serial/by-id/usb-DM-Tech_DM-IMU-L1_DMIMU20250212-if00' at 921600 baud; CAN buses 'can0'/'can1' are read-only until output is enabled.
+DM1 键盘控制首轮反馈通过；等待 Shift+U 解锁。
+DM1 启动稳定性检查通过；使能后将执行平滑回零，未修改电机参数。
+键盘控制已启动：电机初始处于锁定状态。按 Shift+U/0 使能/失能，1 站立，2 原地小跑，P 趴下；按 H 查看帮助，Esc 失能并退出。
+[DM1][TORQUE] status=NORMAL joint=RR_thigh bus=1 can=0x005 tau=-1.79 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=-0.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+0.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_thigh bus=1 can=0x005 tau=-1.03 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=-0.44 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_thigh bus=1 can=0x005 tau=-0.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+0.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=-0.85 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_hip bus=1 can=0x004 tau=+0.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_thigh bus=1 can=0x005 tau=-0.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+0.79 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=-0.85 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=-0.85 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.14 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+0.56 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_thigh bus=1 can=0x005 tau=-0.62 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+0.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_hip bus=1 can=0x001 tau=-0.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 电机已使能；正在将电机平滑回到零位，完成后可按 1 站立。
+DM1 MIT command rejected: scope=command leg=1 joint=2 field=position_desired actual=-0.0312547684 allowed=[-0.0299999993,2.72000003]
+DM1 控制帧已跳过：stage=MIT命令校验/发布失败 fsm=PASSIVE output_enabled=true；独立线程持续保持上一有效命令，不失能。
+[DM1][TORQUE] status=NORMAL joint=FR_calf bus=0 can=0x006 tau=+1.26 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_hip bus=1 can=0x001 tau=+2.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.20 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.96 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.26 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.26 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.08 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-1.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.20 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-1.90 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.20 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+1.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.37 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.14 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.26 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.61 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.02 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.43 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.08 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.79 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.20 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.02 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.43 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.14 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.43 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_thigh bus=0 can=0x005 tau=-1.49 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.55 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-1.79 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_calf bus=0 can=0x003 tau=+1.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.55 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.02 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.08 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.20 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.61 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.67 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.20 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.73 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+1.61 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[CONTROL FSM] iteration 9999, state JOINT_PD, gait STAND
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.26 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.85 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.26 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.14 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-1.61 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.96 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-2.37 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.96 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.49 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_thigh bus=0 can=0x002 tau=-1.90 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.32 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.61 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+1.96 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.02 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_hip bus=0 can=0x001 tau=+2.08 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+站立请求已接受。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-1.32 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_thigh bus=0 can=0x005 tau=-2.32 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FR_thigh bus=0 can=0x005 tau=-2.78 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_calf bus=0 can=0x003 tau=+4.13 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_calf bus=0 can=0x003 tau=+4.78 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_calf bus=0 can=0x003 tau=+6.36 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+7.12 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=FL_calf bus=0 can=0x003 tau=+6.59 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING] iteration=1 elapsed_ms=0.847211 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[FSM][BALANCE_STAND] 前馈力矩持续放大：scale=1.30 first_frame_max_tau=11.317 Nm。
+[WBC][TIMING] iteration=2 elapsed_ms=0.511044 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=3 elapsed_ms=0.432780 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=4 elapsed_ms=0.358632 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=5 elapsed_ms=0.333068 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=6 elapsed_ms=0.332011 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=7 elapsed_ms=0.255192 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=8 elapsed_ms=0.187159 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=9 elapsed_ms=0.192441 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[WBC][TIMING] iteration=10 elapsed_ms=0.227204 budget_ms=2.000 overrun=false success=true tasks=2 contacts=4。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+10.70 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-11.52 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=500 samples=500 avg_ms=0.404306 max_ms=0.847211 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+12.51 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+12.04 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=1000 samples=500 avg_ms=0.395417 max_ms=0.646249 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+12.57 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-12.69 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=1500 samples=500 avg_ms=0.394007 max_ms=0.584642 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+13.27 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.33 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=2000 samples=500 avg_ms=0.387089 max_ms=0.564612 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+13.86 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=2500 samples=500 avg_ms=0.391064 max_ms=0.672464 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+13.92 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=3000 samples=500 avg_ms=0.376730 max_ms=0.535959 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.68 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=3500 samples=500 avg_ms=0.365314 max_ms=0.612702 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.86 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=4000 samples=500 avg_ms=0.407804 max_ms=0.654915 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[CONTROL FSM] iteration 19999, state BALANCE_STAND, gait STAND
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.86 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=4500 samples=500 avg_ms=0.415510 max_ms=0.668791 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+14.15 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.86 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=5000 samples=500 avg_ms=0.412522 max_ms=0.812374 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=5500 samples=500 avg_ms=0.351434 max_ms=0.711391 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+14.04 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=6000 samples=500 avg_ms=0.377288 max_ms=0.530568 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.92 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=6500 samples=500 avg_ms=0.373813 max_ms=0.587471 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.80 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.86 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=7000 samples=500 avg_ms=0.402396 max_ms=0.545913 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-14.04 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-14.10 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=7500 samples=500 avg_ms=0.157555 max_ms=0.491264 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.92 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-13.92 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=8000 samples=500 avg_ms=0.156905 max_ms=0.399645 budget_ms=2.000 overruns=0。
+[WBC][TIMING] iteration=1 elapsed_ms=0.191887 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=2 elapsed_ms=0.179757 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=3 elapsed_ms=0.146030 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=4 elapsed_ms=0.083918 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=5 elapsed_ms=0.085572 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=6 elapsed_ms=0.124974 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=7 elapsed_ms=0.083136 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=8 elapsed_ms=0.101331 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=9 elapsed_ms=0.095454 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[WBC][TIMING] iteration=10 elapsed_ms=0.080189 budget_ms=2.000 overrun=false success=true tasks=4 contacts=2。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+14.51 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=36.355 Nm limit=30.0 q_des=0.8491 q=0.6061 dq_des=0.0000 dq=-0.9231。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=2 actual=30 Nm limit=30 Nm q_des=0.8605 q=0.6061 dq_des=8.473e-08 dq=-0.9231 tau_pos=12.31 tau_vel=3.697 tau_ff=13.99；该关节帧仍会发送。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+13.57 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[WBC][TIMING][SUMMARY] end_iteration=500 samples=500 avg_ms=0.156742 max_ms=0.406465 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=3 joint=2 raw=38.620 Nm limit=30.0 q_des=0.9010 q=0.6061 dq_des=0.0000 dq=-0.9231。
+[FSM][LOCOMOTION] 安全回站：leg=1 p=(0.1062,0.1083,0.0157)m v_norm=0.046m/s q=(0.6096,-0.4788,0.1007)rad；边界 p_z<=0, |p_y|<=0.240, v<=9。
+Locomotion 安全回退已取消当前运动请求；保持 BalanceStand，需重新按运动键。
+[FSM][BALANCE_STAND] 前馈力矩持续放大：scale=1.30 first_frame_max_tau=17.028 Nm。
+[DM1][TORQUE] status=NORMAL joint=RL_calf bus=1 can=0x003 tau=+13.57 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=2 joint=1 raw=45.142 Nm limit=30.0 q_des=-0.6058 q=-0.9900 dq_des=0.0000 dq=0.0049。
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+2.61 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=97.069 Nm limit=30.0 q_des=0.6573 q=0.0662 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=8500 samples=500 avg_ms=0.333925 max_ms=0.675860 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+1.20 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=2 joint=1 actual=30 Nm limit=30 Nm q_des=-0.6045 q=-0.99 dq_des=0 dq=0.004885 tau_pos=21.96 tau_vel=-0.005892 tau_ff=8.051；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=100.202 Nm limit=30.0 q_des=0.6881 q=0.0662 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=102.733 Nm limit=30.0 q_des=0.7139 q=0.0662 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+1.85 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=105.513 Nm limit=30.0 q_des=0.7416 q=0.0662 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=108.314 Nm limit=30.0 q_des=0.7685 q=0.0662 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=0 joint=2 actual=30 Nm limit=30 Nm q_des=0.4307 q=0.01668 dq_des=0 dq=0.004885 tau_pos=22.51 tau_vel=-0.00478 tau_ff=7.499；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=0 raw=-34.608 Nm limit=30.0 q_des=0.3226 q=0.6084 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=9000 samples=500 avg_ms=0.327071 max_ms=0.540006 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+2.26 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=2 joint=0 raw=62.159 Nm limit=30.0 q_des=-0.3943 q=-0.8431 dq_des=0.0000 dq=0.0049。
+[LegController] 总力矩约束：leg=3 joint=1 raw=-30.630 Nm limit=30.0 q_des=-0.5035 q=-0.0688 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=0 raw=-43.499 Nm limit=30.0 q_des=0.2181 q=0.6084 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=0 actual=-30 Nm limit=30 Nm q_des=0.2159 q=0.6084 dq_des=0 dq=-0.004885 tau_pos=-22.94 tau_vel=0.006045 tau_ff=-7.067；该关节帧仍会发送。
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+2.61 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=1 joint=2 raw=75.413 Nm limit=30.0 q_des=0.7245 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=121.348 Nm limit=30.0 q_des=0.8978 q=0.0662 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=83.064 Nm limit=30.0 q_des=0.8003 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=0 actual=-30 Nm limit=30 Nm q_des=0.1181 q=0.6084 dq_des=0 dq=-0.004885 tau_pos=-24.02 tau_vel=0.005067 tau_ff=-5.988；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=124.607 Nm limit=30.0 q_des=0.9296 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=9500 samples=500 avg_ms=0.370055 max_ms=0.608121 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-2.78 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=1 joint=2 raw=89.871 Nm limit=30.0 q_des=0.8679 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=127.358 Nm limit=30.0 q_des=0.9571 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=95.534 Nm limit=30.0 q_des=0.9247 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=2 actual=30 Nm limit=30 Nm q_des=0.9757 q=0.06577 dq_des=0 dq=-0.004885 tau_pos=21.13 tau_vel=0.002042 tau_ff=8.865；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=129.526 Nm limit=30.0 q_des=0.9794 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-4.07 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=1 joint=2 raw=99.879 Nm limit=30.0 q_des=0.9681 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=131.148 Nm limit=30.0 q_des=0.9951 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=102.599 Nm limit=30.0 q_des=0.9954 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=0.9967 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.16 tau_vel=0.002567 tau_ff=3.838；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.125 Nm limit=30.0 q_des=1.0032 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=10000 samples=500 avg_ms=0.363817 max_ms=0.614392 budget_ms=2.000 overruns=0。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.90 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.451 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.175 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.2 tau_vel=0.00255 tau_ff=3.802；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.442 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.146 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.06577 dq_des=0 dq=-0.004885 tau_pos=21.27 tau_vel=0.001994 tau_ff=8.724；该关节帧仍会发送。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.90 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.429 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.286 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.412 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.312 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=2 joint=1 actual=30 Nm limit=30 Nm q_des=-0.597 q=-1.011 dq_des=0 dq=-0.004885 tau_pos=22.96 tau_vel=0.005741 tau_ff=7.033；该关节帧仍会发送。
+[WBC][TIMING][SUMMARY] end_iteration=10500 samples=500 avg_ms=0.380902 max_ms=0.610936 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.431 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.37 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.238 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.381 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.21 tau_vel=0.002551 tau_ff=3.79；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.235 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.410 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.90 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.213 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.388 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.06884 dq_des=0 dq=-0.004885 tau_pos=-34.87 tau_vel=0.006829 tau_ff=4.863；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.263 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=11000 samples=500 avg_ms=0.365938 max_ms=0.712496 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.376 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.31 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.152 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.06577 dq_des=0 dq=-0.004885 tau_pos=21.29 tau_vel=0.001995 tau_ff=8.706；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.357 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.196 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.317 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.72 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.213 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.23 tau_vel=0.002553 tau_ff=3.768；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.312 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.166 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=11500 samples=500 avg_ms=0.361215 max_ms=0.623691 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.349 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.55 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.06577 dq_des=0 dq=-0.004885 tau_pos=21.29 tau_vel=0.001996 tau_ff=8.703；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.123 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.324 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.208 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.292 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=FR_hip bus=0 can=0x004 tau=+3.43 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=0 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.008245 dq_des=0 dq=0.004885 tau_pos=-32.84 tau_vel=-0.00577 tau_ff=2.847；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.139 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.286 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.168 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=12000 samples=500 avg_ms=0.372447 max_ms=0.644521 budget_ms=2.000 overruns=0。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.06884 dq_des=0 dq=-0.004885 tau_pos=-34.8 tau_vel=0.006816 tau_ff=4.796；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.299 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.90 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.182 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.317 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.119 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.06884 dq_des=0 dq=-0.004885 tau_pos=-34.78 tau_vel=0.006811 tau_ff=4.771；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.253 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.60 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.159 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.224 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.24 tau_vel=0.002554 tau_ff=3.753；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.137 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=12500 samples=500 avg_ms=0.339895 max_ms=0.737317 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.273 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.72 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.155 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.225 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.25 tau_vel=0.002555 tau_ff=3.747；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.128 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.250 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.31 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.168 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.06884 dq_des=0 dq=-0.004885 tau_pos=-34.76 tau_vel=0.006808 tau_ff=4.756；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.207 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.099 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=13000 samples=500 avg_ms=0.351097 max_ms=0.746282 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.248 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.37 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=2 joint=0 actual=30 Nm limit=30 Nm q_des=0 q=-0.8508 dq_des=0 dq=-0.004885 tau_pos=22.22 tau_vel=0.002701 tau_ff=7.779；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.156 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.267 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.166 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.232 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.55 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.25 tau_vel=0.002555 tau_ff=3.745；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.203 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.190 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.150 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=13500 samples=500 avg_ms=0.361920 max_ms=0.673194 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.163 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.43 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=0 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.01668 dq_des=0 dq=0.004885 tau_pos=26.36 tau_vel=-0.002348 tau_ff=3.638；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.136 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[CONTROL FSM] iteration 29999, state BALANCE_STAND, gait STAND
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.166 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.096 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.158 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-2.90 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.06577 dq_des=0 dq=-0.004885 tau_pos=21.31 tau_vel=0.001997 tau_ff=8.691；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.089 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.122 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.090 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=14000 samples=500 avg_ms=0.377380 max_ms=0.792078 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.107 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.37 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=0 actual=-30 Nm limit=30 Nm q_des=0 q=0.6084 dq_des=0 dq=-0.01465 tau_pos=-24.86 tau_vel=0.01268 tau_ff=-5.156；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=131.996 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.092 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.005 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.114 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.31 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.06577 dq_des=0 dq=-0.004885 tau_pos=21.33 tau_vel=0.001998 tau_ff=8.673；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.029 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.129 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.117 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=14500 samples=500 avg_ms=0.401013 max_ms=0.679672 budget_ms=2.000 overruns=0。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.06884 dq_des=0 dq=-0.004885 tau_pos=-34.65 tau_vel=0.006787 tau_ff=4.648；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.113 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.25 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.126 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.097 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.059 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=0 actual=-30 Nm limit=30 Nm q_des=0 q=0.6084 dq_des=0 dq=-0.004885 tau_pos=-24.83 tau_vel=0.004222 tau_ff=-5.173；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.070 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.60 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.050 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.074 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.060 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=15000 samples=500 avg_ms=0.302749 max_ms=0.666240 budget_ms=2.000 overruns=0。
+DM1 MIT 力矩将截断：field=total_torque leg=0 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.007861 dq_des=0 dq=0.004885 tau_pos=-33.06 tau_vel=-0.005804 tau_ff=3.064；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.052 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.60 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.060 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.026 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.003 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=102.996 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=0 actual=-30 Nm limit=30 Nm q_des=0 q=0.6084 dq_des=0 dq=-0.004885 tau_pos=-24.83 tau_vel=0.004221 tau_ff=-5.176；该关节帧仍会发送。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.25 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.048 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.026 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=131.948 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=15500 samples=500 avg_ms=0.145653 max_ms=0.290547 budget_ms=2.000 overruns=0。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.028 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.31 tau_vel=0.002561 tau_ff=3.688；该关节帧仍会发送。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.02 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.063 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.021 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.033 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+DM1 MIT 力矩将截断：field=total_torque leg=1 joint=2 actual=30 Nm limit=30 Nm q_des=1.004 q=0.1007 dq_des=0 dq=-0.004885 tau_pos=26.31 tau_vel=0.002561 tau_ff=3.689；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.011 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.14 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.055 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.018 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.013 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[WBC][TIMING][SUMMARY] end_iteration=16000 samples=500 avg_ms=0.139368 max_ms=0.329672 budget_ms=2.000 overruns=0。
+DM1 MIT 力矩将截断：field=total_torque leg=3 joint=1 actual=-30 Nm limit=30 Nm q_des=-0.597 q=-0.06884 dq_des=0 dq=-0.004885 tau_pos=-34.54 tau_vel=0.006765 tau_ff=4.533；该关节帧仍会发送。
+[LegController] 总力矩约束：leg=1 joint=2 raw=103.017 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。
+[DM1][TORQUE] status=NORMAL joint=RR_calf bus=1 can=0x006 tau=-3.08 Nm continuous=30.0 peak=97.0 Nm（仅监控，不自动失能）
+[LegController] 总力矩约束：leg=3 joint=2 raw=132.019 Nm limit=30.0 q_des=1.0040 q=0.0658 dq_des=0.0000 dq=-0.0049。
+[LegController] 总力矩约束：leg=1 joint=2 raw=102.967 Nm limit=30.0 q_des=1.0040 q=0.1007 dq_des=0.0000 dq=-0.0049。

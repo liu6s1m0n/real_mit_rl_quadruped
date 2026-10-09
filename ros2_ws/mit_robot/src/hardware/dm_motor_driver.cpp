@@ -195,6 +195,9 @@ bool DmMotorDriver::open()
     // 清空接收缓存，要求启动后重新收到所有电机的反馈。
     std::lock_guard<std::mutex> lock(mutex_);
     snapshots_ = {};
+    tx_monitor_ = {};
+    monitor_report_at_ = {};
+    reported_rx_ = reported_tx_ = reported_ok_ = {};
   }
   opened_.store(true);
   output_disabled_.store(false);
@@ -221,6 +224,9 @@ bool DmMotorDriver::openSingle(const dm1_hardware::MotorAddress & address)
   {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshots_ = {};
+    tx_monitor_ = {};
+    monitor_report_at_ = {};
+    reported_rx_ = reported_tx_ = reported_ok_ = {};
   }
   opened_.store(true);
   output_disabled_.store(false);
@@ -261,15 +267,45 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
     return false;
   }
   bool valid = true;
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::unique_lock<std::mutex> lock(mutex_);
   // 必须在拿到快照锁之后读取当前时间，避免接收线程刚更新
   // received_at 就让 age 短暂变成负数，进而生成超前时间戳。
   const auto now = std::chrono::steady_clock::now();
+  const auto snapshots = snapshots_;
+  const auto tx_monitor = tx_monitor_;
+  const double window_s = monitor_report_at_.time_since_epoch().count() == 0 ? 0.0 :
+    std::chrono::duration<double>(now - monitor_report_at_).count();
+  const bool report = window_s >= 1.0;
+  const auto reported_rx = reported_rx_, reported_tx = reported_tx_, reported_ok = reported_ok_;
+  if (window_s == 0.0 || report) {
+    monitor_report_at_ = now;
+    for (std::size_t i = 0; i < snapshots.size(); ++i) {
+      reported_rx_[i] = snapshots[i].sequence;
+      reported_tx_[i] = tx_monitor[i].attempts;
+      reported_ok_[i] = tx_monitor[i].writes_ok;
+      snapshots_[i].max_rx_gap_ms = snapshots_[i].max_q_velocity_residual_rad = 0.0;
+      tx_monitor_[i].max_gap_ms = 0.0;
+    }
+  }
+  // 打印前释放接收锁；控制线程的监测日志不能阻止接收线程更新反馈。
+  lock.unlock();
+  if (report) {
+    auto oldest = now, newest = std::chrono::steady_clock::time_point{};
+    for (const auto & snapshot : snapshots) {
+      if (!snapshot.online) {continue;}
+      oldest = std::min(oldest, snapshot.received_at);
+      newest = std::max(newest, snapshot.received_at);
+    }
+    imu_log::print(imu_log::Level::Info,
+      "[DM1][RX-TIMING] received_spread_ms=%.3f monitor_only=true\n",
+      newest.time_since_epoch().count() == 0 ? -1.0 :
+      std::chrono::duration<double, std::milli>(newest - oldest).count());
+  }
 
   // 按标定顺序逐个生成反馈，并检查在线状态、反馈年龄和电机健康状态。
-  for (std::size_t i = 0; i < snapshots_.size(); ++i) {
+  for (std::size_t i = 0; i < snapshots.size(); ++i) {
     const auto & address = calibration_[i].address;
-    const auto & snapshot = snapshots_[i];
+    const auto & snapshot = snapshots[i];
     auto & sample = feedback[i];
     sample = {};
     sample.bus = address.bus;
@@ -291,8 +327,7 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
       snapshot.mos_temperature_c >= -20.0F && snapshot.mos_temperature_c <= 120.0F &&
       snapshot.rotor_temperature_c >= -20.0F && snapshot.rotor_temperature_c <= 120.0F;
 
-    // 驱动层只判断快照是否存在以及电机自身健康状态；反馈新鲜度由上层
-    // Dm1MitInterface 使用统一、可配置的超时判断，避免重复的硬编码门槛。
+    // 反馈年龄只监管，不因缓存重复、位置不变或超时新增拒绝/失能路径。
     if (!snapshot.online || !std::isfinite(age) || !sample.health_valid) {
       valid = false;
       // 关键诊断：说清是哪台电机、什么原因不可用。否则上层只看到
@@ -313,6 +348,26 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
           static_cast<double>(snapshot.rotor_temperature_c),
           static_cast<unsigned long long>(snapshot.sequence));
       }
+    }
+    if (report) {
+      const auto & tx = tx_monitor[i];
+      const auto age_ms = [now](auto time) {
+          return time.time_since_epoch().count() == 0 ? -1.0 :
+            std::chrono::duration<double, std::milli>(now - time).count();
+        };
+      imu_log::print(imu_log::Level::Info,
+        "[DM1][IO-MONITOR] joint=%zu bus=%u can_id=0x%02x seq=%llu rx_hz=%.1f age_ms=%.3f "
+        "rx_gap_max_ms=%.3f q_hold_ms=%.3f q_dq_residual_max_rad=%.5f status=0x%02x "
+        "tx_try_hz=%.1f tx_write_ok_hz=%.1f tx_try_age_ms=%.3f tx_ok_age_ms=%.3f "
+        "tx_gap_max_ms=%.3f stale=%s monitor_only=true\n",
+        i, static_cast<unsigned int>(address.bus), static_cast<unsigned int>(address.can_id),
+        static_cast<unsigned long long>(snapshot.sequence),
+        (snapshot.sequence - reported_rx[i]) / window_s, age * 1000.0,
+        snapshot.max_rx_gap_ms, age_ms(snapshot.position_changed_at),
+        snapshot.max_q_velocity_residual_rad, static_cast<unsigned int>(snapshot.status),
+        (tx.attempts - reported_tx[i]) / window_s, (tx.writes_ok - reported_ok[i]) / window_s,
+        age_ms(tx.attempted_at), age_ms(tx.written_at), tx.max_gap_ms,
+        age > 0.010 ? "true" : "false");
     }
   }
   return valid;
@@ -381,6 +436,18 @@ void DmMotorDriver::receive(std::uint8_t bus, const canfd_frame & frame) noexcep
   if (!matchesFeedbackAddress(configured, master_id, decoded)) {return;}
   std::lock_guard<std::mutex> lock(mutex_);
   auto & snapshot = snapshots_[index];
+  const auto received_at = std::chrono::steady_clock::now();
+  if (snapshot.online) {
+    const double dt = std::chrono::duration<double>(received_at - snapshot.received_at).count();
+    snapshot.max_rx_gap_ms = std::max(snapshot.max_rx_gap_ms, dt * 1000.0);
+    // 仅以两次真实回包的间隔计算残差，不能用500Hz缓存读取间隔推算速度。
+    snapshot.max_q_velocity_residual_rad = std::max(snapshot.max_q_velocity_residual_rad,
+      std::abs(decoded.position - snapshot.position -
+      0.5 * (decoded.velocity + snapshot.velocity) * dt));
+  }
+  if (!snapshot.online || decoded.position != snapshot.position) {
+    snapshot.position_changed_at = received_at;
+  }
 
   // 保存当前帧的物理量和健康状态。
   snapshot.position = decoded.position;
@@ -389,7 +456,7 @@ void DmMotorDriver::receive(std::uint8_t bus, const canfd_frame & frame) noexcep
   snapshot.status = decoded.status;
   snapshot.mos_temperature_c = decoded.mos_temperature_c;
   snapshot.rotor_temperature_c = decoded.rotor_temperature_c;
-  snapshot.received_at = std::chrono::steady_clock::now();
+  snapshot.received_at = received_at;
   ++snapshot.sequence;
   // 地址已经匹配，因此该电机被标记为在线。
   snapshot.online = configured.bus == bus && configured.can_id == decoded.motor_id &&
@@ -418,7 +485,19 @@ bool DmMotorDriver::sendMit(const dm1_hardware::MitFrame & frame)
   if (frame.master_id != 0 && frame.master_id != configured.master_id) {return false;}
   const can_frame output = encodeMitFrame(
     configured, frame.position, frame.velocity, frame.kp, frame.kd, frame.torque);
-  return buses_[address.bus].write(&output);
+  const auto attempted_at = std::chrono::steady_clock::now();
+  const bool written = buses_[address.bus].write(&output);
+  const auto written_at = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto & tx = tx_monitor_[index];
+  if (tx.attempts != 0) {
+    tx.max_gap_ms = std::max(tx.max_gap_ms,
+      std::chrono::duration<double, std::milli>(attempted_at - tx.attempted_at).count());
+  }
+  ++tx.attempts;
+  tx.attempted_at = attempted_at;
+  if (written) {++tx.writes_ok; tx.written_at = written_at;}
+  return written;
 }
 
 // 发送一个原始控制命令，例如设置零位、使能或禁用电机。

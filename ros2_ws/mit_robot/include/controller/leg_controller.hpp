@@ -137,7 +137,7 @@ public:
    * @brief 根据关节命令和笛卡尔命令生成一条腿的统一 JointCommand。
    *
    * 总使能关闭、该腿反馈无效或期望值含 NaN/Inf 时，返回的 enabled=false。
-   * 本函数只限制已经计算出的前馈力矩；执行层还必须限制包含 PD 项的最终力矩。
+   * 本函数统一限制包含 PD 项的预计总力矩；执行层仍保留独立保护。
    * @param leg_id 要生成命令的腿。
    * @param timestamp 命令生成时间，单位 s。
    * @return 可交给 MuJoCo 或真实硬件发送层处理的关节命令。
@@ -159,6 +159,7 @@ public:
 private:
   // 每条腿分别维护递增序号，执行层可以用它发现重复命令或丢帧。
   std::array<std::uint64_t, kNumLegs> command_sequences_{};
+  std::uint64_t torque_constraint_events_ = 0;
 };
 
 /**

@@ -395,6 +395,8 @@ TEST(Dm1MitInterfaceTest, OneFailedMotorDoesNotStarveOtherMotors)
   for (const auto & frame : transport.frames) {
     seen[frame.bus * 6 + frame.can_id - 1] = true;
   }
-  for (const bool attempted : seen) {EXPECT_TRUE(attempted);}
+  for (const bool attempted : seen) {
+    EXPECT_TRUE(attempted);
+  }
   EXPECT_EQ(transport.disable_count, 0);
 }

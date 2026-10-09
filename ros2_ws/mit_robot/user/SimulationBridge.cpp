@@ -643,7 +643,19 @@ void runPhysics(
           !(walking_mode == ControlMode::WalkRl && arbiter.motionActive())) {
           runner.setStandingHeight(commanded_height);
         }
+        const FSM_StateName state_before_control = runner.currentStateName();
         const bool control_valid = !control_active || runner.run();
+        if (control_active && control_valid && arbiter.motionActive() &&
+          state_before_control == FSM_StateName::LOCOMOTION &&
+          runner.currentStateName() == FSM_StateName::BALANCE_STAND)
+        {
+          arbiter.stopMotion();
+          runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+          std::fprintf(
+            stderr,
+            "Locomotion safety fallback stopped the active motion; "
+            "BalanceStand remains active until a new motion command\n");
+        }
         if (control_active && control_valid && stand_up_pending &&
           runner.requestStandUp())
         {
