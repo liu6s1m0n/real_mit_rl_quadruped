@@ -86,7 +86,7 @@ bool SocketCAN::open(
 {
   if (isOpen() || interface.empty() || interface.size() >= IFNAMSIZ) {return false;}
   reception_handler_ = std::move(handler);
-  sock_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+  sock_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);//创建 CAN 通信通道
   if (sock_fd_ == -1) {
     // 创建 CAN 套接字失败。
     std::cerr << terminalColor(TerminalColor::Red, stderr) <<
@@ -96,7 +96,7 @@ bool SocketCAN::open(
   int enable_canfd = 1;
   if (setsockopt(
       sock_fd_, SOL_CAN_RAW, CAN_RAW_FD_FRAMES, &enable_canfd,
-      sizeof(enable_canfd)) != 0)
+      sizeof(enable_canfd)) != 0)//允许这个通道处理 CAN-FD 帧
   {
     std::cerr << terminalColor(TerminalColor::Red, stderr) <<
       "[ERROR] Failed to enable CAN FD support on socket" << terminalColorReset(stderr) <<

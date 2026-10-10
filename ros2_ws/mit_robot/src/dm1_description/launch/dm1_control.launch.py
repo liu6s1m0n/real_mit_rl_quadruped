@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -37,19 +37,40 @@ def generate_launch_description():
             description="OpenGL renderer selection: auto or nvidia",
         ),
         DeclareLaunchArgument(
+            "hardware_sim",
+            default_value="false",
+            description="Run the complete hardware driver/controller path against simulated devices",
+        ),
+        DeclareLaunchArgument(
+            "torque_limit",
+            default_value="88",
+            description="Hardware simulation torque limit; match the hardware_main run",
+        ),
+        DeclareLaunchArgument(
             "walk_mode",
             default_value="mpc",
             # 换模型要修改的地方：launch 参数说明中的模型编号
             description="Walking controller selection: mpc or rl (model_4210/model_4245)",
         ),
         *_desktop_session_environment(),
-        Node(
-            package="mymit_robot",
-            executable="mymit_robot_user",
-            arguments=[
-                "--walk-mode", LaunchConfiguration("walk_mode"),
-                "--render-gpu", LaunchConfiguration("render_gpu"),
-            ],
-            output="screen",
-        ),
+        OpaqueFunction(function=_controller_node),
     ])
+
+
+def _controller_node(context):
+    arguments = [
+        "--walk-mode", LaunchConfiguration("walk_mode").perform(context),
+        "--render-gpu", LaunchConfiguration("render_gpu").perform(context),
+    ]
+    hardware_sim = LaunchConfiguration("hardware_sim").perform(context).lower()
+    if hardware_sim not in ("true", "false", "1", "0"):
+        raise ValueError("hardware_sim must be true or false")
+    if hardware_sim in ("true", "1"):
+        arguments += [
+            "--hardware-sim", "--torque-limit",
+            LaunchConfiguration("torque_limit").perform(context),
+        ]
+    return [Node(
+        package="mymit_robot", executable="mymit_robot_user",
+        arguments=arguments, output="screen",
+    )]

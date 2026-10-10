@@ -10,11 +10,13 @@
 #include "controller/RlPolicy.hpp"
 #include "controller/frozen_dwaq_policy.hpp"
 #include "controller/leg_controller.hpp"
+#include "FSM/FSM_State_BalanceStand.h"
 #include "FSM/FSM_State_Locomotion.h"
 #include "hardware/dm1_mit_interface.hpp"
 #include "model/quadruped.hpp"
 #include "model/robot_control_parameters.hpp"
 #include "data/dm1_policy_4210_golden.hpp"
+#include "fsm/fsm_test_support.hpp"
 
 namespace
 {
@@ -93,10 +95,10 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
       Vec3<float>(1.8F, 1.8F, 1.8F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kp.isApprox(
-      Vec3<float>(59.8F, 59.8F, 59.8F)));
+      Vec3<float>(60.0F, 60.0F, 60.0F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kd.isApprox(
-      Vec3<float>(4.95F, 4.95F, 4.95F)));
+      Vec3<float>(4.9F, 4.9F, 4.9F)));
 }
 
 // 所有会被写进 command.kp_joint/kd_joint、最终原样下发给 DM 电机的增益，
@@ -188,6 +190,100 @@ TEST(Dm1Contract, UnsafeLocomotionLatchesBalanceStandWithoutRerunningController)
   EXPECT_EQ(desired.mode, ControlMode::BalanceStand);
   EXPECT_TRUE(locomotion.transition().done);
   EXPECT_TRUE(leg_controller.commands[0].position_desired.isConstant(0.123F));
+}
+
+TEST(Dm1Contract, BalanceStandUsesRawWbcFeedforward)
+{
+  test_support::FsmContext context(0.002F);
+  ASSERT_TRUE(context.initialized);
+  context.parameters.start_in_prone_home = false;
+  context.estimate.position_world.z() = 0.32F;
+  context.desired_state.body_position_world.z() = 0.32F;
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+
+  LocomotionCtrl<float> reference(model::makeFloatingBaseModel(context.quadruped));
+  const auto & parameters = context.parameters;
+  reference.setBodyPositionGains(
+    parameters.balance_body_position_kp, parameters.balance_body_position_kd);
+  reference.setBodyOrientationGains(
+    parameters.balance_body_orientation_kp, parameters.balance_body_orientation_kd);
+  reference.setFloatingBaseWeight(parameters.balance_floating_base_weight);
+  reference.setReactionForceWeight(parameters.balance_reaction_force_weight);
+  reference.setMaxNormalForce(parameters.maximum_normal_force);
+  LocomotionCtrlData<float> input;
+  input.pBody_des = context.desired_state.body_position_world;
+  input.contact_state.setOnes();
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    input.Fr_des[leg].z() = parameters.standing_supported_mass * 9.81F / 4.0F;
+  }
+  ASSERT_TRUE(reference.run(&input, context.estimate, context.joint_states));
+  const auto expected = reference.result().joint_torque;
+
+  FSM_State_BalanceStand<float> standing(&context.data());
+  standing.onEnter();
+  standing.run();
+  ASSERT_TRUE(context.leg_controller.command(LegId::FR).enabled);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_TRUE(context.leg_controller.commands[leg].torque_feedforward.isApprox(
+        expected.segment<3>(static_cast<Eigen::Index>(3 * leg)), 1.0e-5F));
+  }
+}
+
+TEST(Dm1Contract, LocomotionFirstCommandDoesNotDependOnPreviousStandingCommand)
+{
+  const auto model = makeQuadruped<float>(RobotType::DM1);
+  const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
+  const auto first_command = [&](float previous_value) {
+      StateEstimate<float> estimate;
+      estimate.valid = true;
+      estimate.position_world.z() = 0.325F;
+      std::array<JointState<float>, kNumLegs> joints{};
+      LegController<float> controller(model);
+      GaitScheduler<float> gait(0.002F);
+      DesiredState<float> desired;
+      desired.valid = true;
+      desired.mode = ControlMode::Locomotion;
+      desired.body_position_world.z() = 0.32F;
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        joints[leg].leg = static_cast<LegId>(leg);
+        joints[leg].valid = true;
+        joints[leg].position = model.leg(joints[leg].leg).joints.home_position;
+        EXPECT_TRUE(controller.updateData(joints[leg]));
+        auto & command = controller.commands[leg];
+        command.position_desired.setConstant(previous_value);
+        command.velocity_desired.setConstant(previous_value);
+        command.torque_feedforward.setConstant(previous_value);
+        command.kp_joint.setConstant(previous_value);
+        command.kd_joint.setConstant(previous_value);
+      }
+      ControlFSMData<float> data;
+      data.quadruped = &model;
+      data.control_parameters = &parameters;
+      data.state_estimate = &estimate;
+      data.joint_states = &joints;
+      data.leg_controller = &controller;
+      data.gait_scheduler = &gait;
+      data.desired_state = &desired;
+      data.control_time_step = 0.002F;
+      FSM_State_Locomotion<float> locomotion(&data);
+      locomotion.onEnter();
+      locomotion.run();
+      EXPECT_TRUE(controller.command(LegId::FR).enabled);
+      return controller.commands;
+    };
+  const auto first = first_command(0.1F);
+  const auto second = first_command(2.0F);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_TRUE(first[leg].position_desired.isApprox(second[leg].position_desired));
+    EXPECT_TRUE(first[leg].velocity_desired.isApprox(second[leg].velocity_desired));
+    EXPECT_TRUE(first[leg].torque_feedforward.isApprox(second[leg].torque_feedforward));
+    EXPECT_TRUE(first[leg].kp_joint.isApprox(second[leg].kp_joint));
+    EXPECT_TRUE(first[leg].kd_joint.isApprox(second[leg].kd_joint));
+    EXPECT_GT(first[leg].torque_feedforward.norm(), 1.0F);
+  }
 }
 
 TEST(Dm1Contract, CommonLegCommandOutputLimitsTotalTorqueToContinuousRating)

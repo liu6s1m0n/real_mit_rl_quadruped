@@ -14,6 +14,7 @@
 #include "controller/frozen_dwaq_policy.hpp"
 #include "controller/RlPolicy.hpp"
 #include "model/robot_types.hpp"
+#include "HardwareSimulation.hpp"
 
 /** 管理 MuJoCo GUI 与物理对象生命周期，并将其接到 RobotRunner。 */
 class SimulationBridge
@@ -71,6 +72,7 @@ public:
 
   /** @brief 选择 RL 模型；默认使用已验证的 model_4210。 */
   void setRlModel(FrozenDwaqModel model);
+  void setHardwareSimulation(const HardwareSimulationOptions & options);
 
   /** @brief 读取启动时/下一次行走使用的控制器选择。 */
   ControlMode walkingControllerMode() const noexcept {return walking_mode_;}
@@ -105,6 +107,7 @@ private:
   ControlMode walking_mode_ = ControlMode::Locomotion;  ///< MPC 或 frozen RL。
   FrozenDwaqModel rl_model_ = FrozenDwaqModel::Model4210;
   RlPolicyPtr rl_policy_;                    ///< 仅 RL 模式注入，MPC 不触碰。
+  HardwareSimulationOptions hardware_simulation_;
 };
 
 #endif  // MYMIT_ROBOT_USER_SIMULATION_BRIDGE_HPP_

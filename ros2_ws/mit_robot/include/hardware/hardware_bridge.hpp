@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 
 #include "RobotRunner.hpp"
 #include "hardware/dm1_hardware_io.hpp"
@@ -35,6 +36,10 @@ public:
     bool keyboard_control = false;
     bool request_stand_up = false;
     bool set_zero = false;
+    // Optional window/test input port. The same command arbiter handles it.
+    std::function<std::vector<teleop::OperatorCommand>()> command_source;
+    // Optional read-only telemetry; never changes control or send decisions.
+    std::function<void(const RobotRunner &)> control_observer;
     int max_consecutive_cycle_overruns = 3;
     int max_cycle_overruns_in_window = 5;
     double cycle_overrun_window_s = 1.0;

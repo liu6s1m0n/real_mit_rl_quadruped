@@ -9,9 +9,10 @@
 
 Dm1HardwareDriver::Dm1HardwareDriver(
   std::string can0, std::string can1, std::string imu_device,
-  const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration)
+  const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration,
+  DmMotorDriver::CanTransport * transport)
 : can0_(std::move(can0)), can1_(std::move(can1)), imu_device_(std::move(imu_device)),
-  imu_reader_(imu_device_, 921600), motor_driver_(can0_, can1_, calibration)
+  imu_reader_(imu_device_, 921600), motor_driver_(can0_, can1_, calibration, transport)
 {
 }
 

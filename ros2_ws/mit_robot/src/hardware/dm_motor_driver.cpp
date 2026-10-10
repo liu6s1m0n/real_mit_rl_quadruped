@@ -46,8 +46,9 @@ float uintToFloat(std::uint16_t value, float minimum, float maximum, unsigned bi
 
 // 构造驱动器，保存两条 CAN 总线名称和全部电机标定信息，并校验地址唯一性。
 DmMotorDriver::DmMotorDriver(
-  std::string can0, std::string can1, const CalibrationArray & calibration)
-: can_names_{std::move(can0), std::move(can1)}, calibration_(calibration)
+  std::string can0, std::string can1, const CalibrationArray & calibration,
+  CanTransport * transport)
+: transport_(transport), can_names_{std::move(can0), std::move(can1)}, calibration_(calibration)
 {
   // 每个标定项必须使用合法总线、物理 ID、主站 ID 和有限的零位。
   for (std::size_t i = 0; i < calibration_.size(); ++i) {
@@ -172,21 +173,36 @@ std::size_t DmMotorDriver::indexFor(
   return kNumJoints;
 }
 
+bool DmMotorDriver::openBus(std::uint8_t bus)
+{
+  auto receiver = [this, bus](const canfd_frame & frame) {receive(bus, frame);};
+  return transport_ ? transport_->open(bus, std::move(receiver)) :
+    buses_[bus].open(can_names_[bus], std::move(receiver), 0);
+}
+
+bool DmMotorDriver::writeBus(std::uint8_t bus, const can_frame & frame)
+{
+  return transport_ ? transport_->write(bus, frame) : buses_[bus].write(&frame);
+}
+
+void DmMotorDriver::closeBus(std::uint8_t bus)
+{
+  if (transport_) {transport_->close(bus);} else {buses_[bus].close();}
+}
+
 bool DmMotorDriver::open()
 {
   // 已打开时保持幂等；缺少任意一条 CAN 设备名称则无法启动。
   if (opened_.load()) {return true;}
   if (can_names_[0].empty() || can_names_[1].empty()) {return false;}
 
-  const bool first = buses_[0].open(
-    can_names_[0], [this](const canfd_frame & frame) {receive(0, frame);}, 0);
+  const bool first = openBus(0);
   // 第一条总线打开失败时，不继续尝试第二条总线。
   if (!first) {return false;}
-  const bool second = buses_[1].open(
-    can_names_[1], [this](const canfd_frame & frame) {receive(1, frame);}, 0);
+  const bool second = openBus(1);
   if (!second) {
     // 第二条总线打开失败时，回收已经打开的第一条总线。
-    buses_[0].close();
+    closeBus(0);
     return false;
   }
   active_buses_ = {{true, true}};
@@ -212,9 +228,7 @@ bool DmMotorDriver::openSingle(const dm1_hardware::MotorAddress & address)
   if (index >= kNumJoints || address.bus > 1 || can_names_[address.bus].empty()) {
     return false;
   }
-  if (!buses_[address.bus].open(
-      can_names_[address.bus],
-      [this, bus = address.bus](const canfd_frame & frame) {receive(bus, frame);}, 0))
+  if (!openBus(address.bus))
   {
     return false;
   }
@@ -486,7 +500,7 @@ bool DmMotorDriver::sendMit(const dm1_hardware::MitFrame & frame)
   const can_frame output = encodeMitFrame(
     configured, frame.position, frame.velocity, frame.kp, frame.kd, frame.torque);
   const auto attempted_at = std::chrono::steady_clock::now();
-  const bool written = buses_[address.bus].write(&output);
+  const bool written = writeBus(address.bus, output);
   const auto written_at = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(mutex_);
   auto & tx = tx_monitor_[index];
@@ -520,7 +534,7 @@ bool DmMotorDriver::sendCommand(
     return false;
   }
   const can_frame output = encodeCommandFrame(configured, command);
-  return buses_[address.bus].write(&output);
+  return writeBus(address.bus, output);
 }
 
 bool DmMotorDriver::writeParameter(
@@ -544,7 +558,7 @@ bool DmMotorDriver::writeParameter(
   output.data[5] = static_cast<std::uint8_t>((value >> 8) & 0xFFU);
   output.data[6] = static_cast<std::uint8_t>((value >> 16) & 0xFFU);
   output.data[7] = static_cast<std::uint8_t>((value >> 24) & 0xFFU);
-  return buses_[address.bus].write(&output);
+  return writeBus(address.bus, output);
 }
 
 // 检查所有 12 个电机是否都在线，并且反馈状态均为已使能。
@@ -576,7 +590,7 @@ bool DmMotorDriver::enableAll()
     if (!sendCommand(item.address, 0xFC)) {
       imu_log::print(
         imu_log::Level::Error,
-        "DM1 自动失能原因：使能帧发送失败 bus=%u can_id=0x%03x。\n",
+        "DM1 使能帧发送失败 bus=%u can_id=0x%03x；仅报错，不自动失能。\n",
         static_cast<unsigned int>(item.address.bus),
         static_cast<unsigned int>(item.address.can_id));
       result = false;
@@ -584,8 +598,7 @@ bool DmMotorDriver::enableAll()
     std::this_thread::sleep_for(kCommandFrameSpacing);
   }
   if (!result) {
-    // 使能命令未能完整发出时，立即回到禁用状态。
-    disableAll();
+    // 不因使能批次部分失败而撤销其余电机的输出。
     return false;
   }
   // 使能批次与紧随其后的 12 路轮询合计会超过默认发送队列深度。
@@ -596,11 +609,10 @@ bool DmMotorDriver::enableAll()
   const auto deadline = std::chrono::steady_clock::now() + kEnableConfirmationTimeout;
   while (std::chrono::steady_clock::now() < deadline) {
     if (!pollAll()) {
-      // 轮询失败时禁止继续等待并关闭全部输出。
+      // 轮询失败只返回错误，不发送失能命令。
       imu_log::print(
         imu_log::Level::Error,
-        "DM1 自动失能原因：使能确认阶段 pollAll() 失败。\n");
-      disableAll();
+        "DM1 使能确认阶段 pollAll() 失败；仅报错，不自动失能。\n");
       return false;
     }
     if (allMotorsEnabled()) {return true;}
@@ -608,12 +620,11 @@ bool DmMotorDriver::enableAll()
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
 
-  // 超时仍未确认全部电机使能，执行安全禁用。
+  // 超时只报告未确认，不假定成功，也不自动失能。
   imu_log::print(
     imu_log::Level::Error,
-    "DM1 自动失能原因：%lld ms 内未确认全部电机已使能。\n",
+    "DM1 %lld ms 内未确认全部电机已使能；仅报错，不自动失能。\n",
     static_cast<long long>(kEnableConfirmationTimeout.count()));
-  disableAll();
   return false;
 }
 
@@ -690,6 +701,6 @@ void DmMotorDriver::close() noexcept
   opened_.store(false);
   active_buses_ = {{false, false}};
   single_target_.reset();
-  buses_[0].close();
-  buses_[1].close();
+  closeBus(0);
+  closeBus(1);
 }

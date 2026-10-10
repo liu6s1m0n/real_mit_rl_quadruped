@@ -30,8 +30,7 @@ constexpr std::array<const char *, kNumJoints> kJointNames{
 constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(100);
 constexpr float kContinuousTorqueNm = 30.0F;
 constexpr float kPeakTorqueNm = 97.0F;
-// 状态估计/控制保持 500 Hz，MIT 命令与未使能反馈轮询按 125 Hz 下发。
-// 每条总线 6 台电机的命令+反馈约 1500 帧/s，把经典 CAN 占用控制在约 20%。
+// 状态估计/控制与独立 MIT 发送保持 500 Hz；未使能反馈轮询为 125 Hz。
 constexpr std::uint32_t kMotorFrameDivider = 4;
 
 const char * fsmStateLabel(FSM_StateName state) noexcept
@@ -48,14 +47,29 @@ const char * fsmStateLabel(FSM_StateName state) noexcept
   }
 }
 
-bool motorDamageRisk(const dm1_hardware::HardwareSample & sample) noexcept
+void reportMotorFaults(const dm1_hardware::HardwareSample & sample)
 {
-  return std::any_of(
-    sample.motors.begin(), sample.motors.end(), [](const auto & motor) {
-      return (motor.fault_code != 0 && motor.fault_code != 0x0D) || motor.temperature_c > 120.0F ||
-      motor.rotor_temperature_c > 120.0F ||
-      (motor.voltage_valid && motor.voltage_v > 60.0F);
-    });
+  static robot_log::Throttle log(1000);
+  bool reporting = false;
+  for (std::size_t joint = 0; joint < sample.motors.size(); ++joint) {
+    const auto & motor = sample.motors[joint];
+    if (motor.fault_code == 0 && motor.temperature_c <= 120.0F &&
+      motor.rotor_temperature_c <= 120.0F &&
+      (!motor.voltage_valid || (motor.voltage_v >= 18.0F && motor.voltage_v <= 60.0F)))
+    {
+      continue;
+    }
+    if (!reporting && !log.ready()) {return;}
+    reporting = true;
+    imu_log::print(
+      imu_log::Level::Error,
+      "[DM1][MOTOR-FAULT] joint=%s bus=%u can=0x%03x fault=0x%02x "
+      "mos=%.1f rotor=%.1f voltage=%.2f voltage_valid=%s；仅报错，不自动失能。\n",
+      kJointNames[joint], static_cast<unsigned int>(motor.bus),
+      static_cast<unsigned int>(motor.can_id), static_cast<unsigned int>(motor.fault_code),
+      static_cast<double>(motor.temperature_c), static_cast<double>(motor.rotor_temperature_c),
+      static_cast<double>(motor.voltage_v), motor.voltage_valid ? "true" : "false");
+  }
 }
 
 bool publishCommands(
@@ -169,16 +183,21 @@ int HardwareBridge::runKeyboardControl(
     "/tmp/dm1_march_%Y%m%d_%H%M%S.csv", std::localtime(&log_ts));
   std::ofstream csv_log(log_name);
   if (csv_log.is_open()) {
-    csv_log << "t_s,fsm";
+    csv_log << "t_s,fsm,body_roll,body_pitch,body_yaw,body_z";
+    for (const auto * leg : {"FR", "FL", "RR", "RL"}) {
+      csv_log << ',' << leg << "_foot_world_z";
+    }
     for (const auto * name : kJointNames) {
-      csv_log << ',' << name << "_q," << name << "_q_des," << name << "_tau";
+      csv_log << ',' << name << "_q," << name << "_q_des," << name << "_tau,"
+              << name << "_dq," << name << "_dq_des," << name << "_ff,"
+              << name << "_kp," << name << "_kd";
     }
     csv_log << '\n';
     imu_log::print(imu_log::Level::Info, "关节数据记录到 %s\n", log_name);
   }
   // 打开 CAN 并不代表物理电机已经失能；接受键盘输入前先建立失效安全状态。
   hardware_.disableAll();
-  if (!keyboard.start()) {
+  if (!options_.command_source && !keyboard.start()) {
     imu_log::print(
       imu_log::Level::Error,
       "键盘控制需要可用的 TTY；电机保持失能。\n");
@@ -197,7 +216,7 @@ int HardwareBridge::runKeyboardControl(
   int consecutive_cycle_overruns = 0;
   std::deque<std::chrono::steady_clock::time_point> cycle_overruns;
   std::uint32_t motor_frame_phase = 0;
-  // 独立发送线程以125Hz持续续发；通信/控制失败不触发自动失能。
+  // 独立发送线程以500Hz持续续发；通信/控制/电机故障不触发自动失能。
   const auto report_control_failure = [&](const char * reason) {
       static robot_log::Throttle failure_log(5000);
       if (failure_log.ready()) {
@@ -219,8 +238,15 @@ int HardwareBridge::runKeyboardControl(
     next_cycle += period;
     const auto cycle_start = std::chrono::steady_clock::now();
     const double now_s = std::chrono::duration<double>(cycle_start - start).count();
-    arbiter.applyBatch(keyboard.consume());
-    if (keyboard.available() && !keyboard.healthy() && !keyboard_fault_reported) {
+    auto commands = options_.command_source ? options_.command_source() : keyboard.consume();
+    const bool input_failed = std::any_of(commands.begin(), commands.end(), [](const auto & command) {
+        return command.type == teleop::CommandType::KeyboardFailure;
+      }) || (keyboard.available() && !keyboard.healthy());
+    commands.erase(std::remove_if(commands.begin(), commands.end(), [](const auto & command) {
+        return command.type == teleop::CommandType::KeyboardFailure;
+      }), commands.end());
+    arbiter.applyBatch(commands);
+    if (input_failed && !keyboard_fault_reported) {
       keyboard_fault_reported = true;
       imu_log::print(
         imu_log::Level::Warning,
@@ -263,33 +289,15 @@ int HardwareBridge::runKeyboardControl(
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
-    if (!hardware_.read(sample, now_s)) {
+    const bool hardware_read_valid = hardware_.read(sample, now_s);
+    reportMotorFaults(sample);
+    if (!hardware_read_valid) {
       report_control_failure("hardware.read(IMU/电机快照)");
-      if (output_enabled) {
-        if (motorDamageRisk(sample)) {
-          imu_log::print(
-            imu_log::Level::Error, "DM1 检测到电机损坏风险；执行失能。\n");
-          sender.pause();
-          hardware_.disableAll();
-          result = 3;
-          break;
-        }
-      }
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
     if (!mit_.updateFeedback(sample.motors, now_s)) {
       report_control_failure("mit.updateFeedback(12路反馈校验)");
-      if (output_enabled) {
-        if (motorDamageRisk(sample)) {
-          imu_log::print(
-            imu_log::Level::Error, "DM1 检测到电机损坏风险；执行失能。\n");
-          sender.pause();
-          hardware_.disableAll();
-          result = 3;
-          break;
-        }
-      }
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
@@ -300,21 +308,22 @@ int HardwareBridge::runKeyboardControl(
       continue;
     }
     const bool enable_requested =
-      arbiter.state() == teleop::MotorOutputState::Enabling &&
-      arbiter.takeEnableRequest();
+      arbiter.state() == teleop::MotorOutputState::Enabling;
     if (enable_requested) {
+      arbiter.takeEnableRequest();
       const bool safe_to_enable = stationaryLevelSample(sample) &&
         mit_.feedbackValid();
       if (!safe_to_enable || !hardware_.enableAll()) {
-        imu_log::print(
-          imu_log::Level::Error,
-          "键盘解锁被拒绝：反馈、IMU、水平/静止状态或硬件使能检查失败；"
-          "电机零位未改变。\n");
-        arbiter.markFault();
-        sender.pause();
-        hardware_.disableAll();
-        result = 8;
-        break;
+        static robot_log::Throttle enable_error_log(1000);
+        if (enable_error_log.ready()) {
+          imu_log::print(
+            imu_log::Level::Error,
+            "键盘解锁未确认：反馈、IMU、水平/静止状态或硬件使能检查失败；"
+            "仅报错，下轮重试，不发送失能帧。\n");
+        }
+        next_cycle = std::chrono::steady_clock::now();
+        std::this_thread::sleep_until(next_cycle + period);
+        continue;
       }
       arbiter.markEnabled();
       output_enabled = true;
@@ -366,7 +375,7 @@ int HardwareBridge::runKeyboardControl(
         const auto velocity = teleop::velocityForMotion(arbiter.motion());
         runner_.setLocomotionVelocityCommand(
           velocity.forward, velocity.lateral, velocity.yaw);
-        // 2 号原地踏步用对角小跑（TROT，0.5 s/50% 支撑）。
+        // 2 号原地踏步保留 TROT 请求；行走状态统一执行 TROT_WALK（0.5 s，支撑 60%、摆动 40%）。
         GaitType gait = GaitType::TROT_WALK;
         if (arbiter.motion() == teleop::Motion::MarchInPlace) {
           gait = GaitType::TROT;
@@ -424,9 +433,24 @@ int HardwareBridge::runKeyboardControl(
       report_control_failure("MIT命令校验/发布失败");
     }
     // 每个控制周期写一行 CSV：12 个关节的实际位置、期望位置和反馈力矩。
+    if (control_active && control_valid && options_.control_observer) {
+      options_.control_observer(runner_);
+    }
     if (control_active && csv_log.is_open()) {
       csv_log << std::fixed << std::setprecision(4) << now_s
               << ',' << fsmStateLabel(runner_.currentStateName());
+      const auto & estimate = runner_.stateEstimate();
+      csv_log << ',' << estimate.rpy.x() << ',' << estimate.rpy.y()
+              << ',' << estimate.rpy.z() << ',' << estimate.position_world.z();
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        const auto leg_id = static_cast<LegId>(leg);
+        Vec3<float> foot_from_hip;
+        computeLegJacobianAndPosition(runner_.quadruped(), log_js[leg].position,
+          static_cast<Mat3<float> *>(nullptr), &foot_from_hip, leg_id);
+        csv_log << ',' << (estimate.position_world +
+          estimate.rotation_world_from_body *
+          (runner_.quadruped().hipLocation(leg_id) + foot_from_hip)).z();
+      }
       const auto & cmds = runner_.jointCommands();
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
@@ -436,7 +460,11 @@ int HardwareBridge::runKeyboardControl(
           const float q_des = cmds[leg].position_desired[ji];
           const float tau = idx < sample.motors.size() ?
             sample.motors[idx].torque : 0.0F;
-          csv_log << ',' << q << ',' << q_des << ',' << tau;
+          csv_log << ',' << q << ',' << q_des << ',' << tau
+                  << ',' << log_js[leg].velocity[ji]
+                  << ',' << cmds[leg].velocity_desired[ji]
+                  << ',' << cmds[leg].torque_feedforward[ji]
+                  << ',' << cmds[leg].kp[ji] << ',' << cmds[leg].kd[ji];
         }
       }
       csv_log << '\n';
@@ -882,15 +910,10 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
     const bool send_motor_frame = (motor_frame_phase++ % kMotorFrameDivider) == 0;
 
     const bool hardware_read_valid = hardware_.read(sample, now_s);
+    reportMotorFaults(sample);
     const bool motor_feedback_valid = hardware_read_valid &&
       mit_.updateFeedback(sample.motors, now_s);
     if (!motor_feedback_valid) {
-      if (output_enabled && motorDamageRisk(sample)) {
-        imu_log::print(
-          imu_log::Level::Error, "DM1 检测到电机损坏风险；执行失能。\n");
-        result = 3;
-        break;
-      }
       ++consecutive_output_failures;
       if (consecutive_output_failures == 1 ||
         (consecutive_output_failures % 500) == 0)
@@ -939,20 +962,24 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
     }
 
     if (!output_enabled) {
+      static robot_log::Throttle enable_error_log(1000);
       // 首个控制器帧必须完整且通过协议安全检查后，才能使能物理输出。
       if (!mit_.validateCommands(runner_.jointCommands(), now_s)) {
-        imu_log::print(
-          imu_log::Level::Error,
-          "DM1 自动失能原因：初始控制指令校验失败。\n");
-        result = 8;
-        break;
+        if (enable_error_log.ready()) {
+          imu_log::print(imu_log::Level::Error,
+            "DM1 初始控制指令校验失败；仅报错，等待有效命令，不发送失能帧。\n");
+        }
+        std::this_thread::sleep_until(next_cycle);
+        continue;
       }
       if (!hardware_.enableAll()) {
-        imu_log::print(
-          imu_log::Level::Error,
-          "DM1 自动失能原因：首轮硬件使能失败。\n");
-        result = 8;
-        break;
+        if (enable_error_log.ready()) {
+          imu_log::print(imu_log::Level::Error,
+            "DM1 硬件使能未确认；仅报错，下轮重试，不发送失能帧。\n");
+        }
+        next_cycle = std::chrono::steady_clock::now();
+        std::this_thread::sleep_until(next_cycle + period);
+        continue;
       }
       output_enabled = true;
       sender.arm();

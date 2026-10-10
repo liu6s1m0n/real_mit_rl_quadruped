@@ -39,6 +39,9 @@
 #include "model/robot_control_parameters.hpp"
 #include "teleop/keyboard_teleop.hpp"
 #include "teleop/operator_command.hpp"
+#include "hardware/hardware_bridge.hpp"
+#include "hardware/dm1_hardware_driver.hpp"
+#include "hardware/motor_calibration.hpp"
 
 namespace mj = ::mujoco;
 
@@ -54,19 +57,15 @@ namespace
 class TeleopGlfwAdapter final : public mj::GlfwAdapter
 {
 public:
-  explicit TeleopGlfwAdapter(teleop::KeyboardTeleop * keyboard)
-  : keyboard_(keyboard) {}
+  explicit TeleopGlfwAdapter(teleop::KeyboardTeleop * keyboard, bool hardware_mode = false)
+  : keyboard_(keyboard), hardware_mode_(hardware_mode) {}
 
 protected:
   void OnKey(int key, int scancode, int action) override
   {
-    mj::GlfwAdapter::OnKey(key, scancode, action);
     (void)scancode;
     // GUI motion is latched. A repeat event must not act as a hidden
     // heartbeat; Space is the explicit stop command.
-    if (keyboard_ == nullptr || action != GLFW_PRESS) {
-      return;
-    }
     int decoded = 0;
     switch (key) {
       case GLFW_KEY_U: decoded = 'U'; break;
@@ -80,15 +79,20 @@ protected:
       case GLFW_KEY_Q: decoded = 'Q'; break;
       case GLFW_KEY_E: decoded = 'E'; break;
       case GLFW_KEY_H: decoded = 'H'; break;
+      case GLFW_KEY_P: decoded = 'P'; break;
       case GLFW_KEY_SPACE: decoded = ' '; break;
       case GLFW_KEY_ESCAPE: decoded = 27; break;
       default: break;
     }
-    if (decoded != 0) {keyboard_->injectKey(decoded);}
+    // MuJoCo also binds Space to Pause. Hardware operator keys must reach only
+    // the actual bridge, otherwise Stop would restart the entire controller.
+    if (!hardware_mode_ || decoded == 0) {mj::GlfwAdapter::OnKey(key, scancode, action);}
+    if (decoded != 0 && keyboard_ != nullptr && action == GLFW_PRESS) {keyboard_->injectKey(decoded);}
   }
 
 private:
   teleop::KeyboardTeleop * keyboard_ = nullptr;
+  bool hardware_mode_ = false;
 };
 
 /** MuJoCo UI 添加函数的原始函数指针类型。 */
@@ -101,6 +105,7 @@ using MjuiEventFunction = mjuiItem * (*)(mjUI *, mjuiState *, const mjrContext *
 double * g_standing_height_slider = nullptr;
 std::atomic<int> * g_pending_motion_command = nullptr;
 std::atomic_bool * g_pending_disable_command = nullptr;
+bool g_hardware_simulation = false;
 
 enum MotionCommand : int
 {
@@ -119,7 +124,7 @@ enum MotionCommand : int
   kDisableMotors = 11,
   kStop = 12,
   kProneDown = 13,
-  /// 原地对角小跑：TROT 接触表，0.5 s 周期、50% 支撑。
+  /// 原地对角小跑：实际执行 TROT_WALK，0.5 s 周期、支撑 60%、摆动 40%。
   kMarchInPlace = 14
 };
 
@@ -229,7 +234,17 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
     {mjITEM_BUTTON, "March in place TROT", 2, nullptr, "", 0},
     {mjITEM_END, "", 0, nullptr, "", 0}
   };
-  add(ui, height_controls);
+  if (g_hardware_simulation) {
+    std::vector<mjuiDef> controls;
+    for (const auto & control : height_controls) {
+      if (std::strcmp(control.name, "Height (m)") == 0 ||
+        std::strcmp(control.name, "Use MPC") == 0 ||
+        std::strcmp(control.name, "Use RL") == 0) {continue;}
+      controls.push_back(control);
+    }
+    std::strcpy(controls.front().name, "Hardware controller");
+    add(ui, controls.data());
+  } else {add(ui, height_controls);}
 }
 
 /**
@@ -722,6 +737,154 @@ void runPhysics(
   if (model != nullptr) {mj_deleteModel(model);}
 }
 
+
+// This loop owns only physics and input. HardwareBridge owns every control decision.
+void runHardwarePhysics(
+  mj::Simulate & simulation, const std::string & scene_path,
+  const HardwareSimulationOptions & settings, std::atomic<int> & pending_command,
+  std::atomic_bool & pending_disable, teleop::KeyboardTeleop & keyboard,
+  std::exception_ptr & failure)
+{
+  using Model = std::unique_ptr<mjModel, decltype(&mj_deleteModel)>;
+  using Data = std::unique_ptr<mjData, decltype(&mj_deleteData)>;
+  std::thread control;
+  std::atomic_bool stop{false}, finished{false};
+  std::exception_ptr control_failure;
+  int result = 0;
+  try {
+    char error[1024]{};
+    Model model(mj_loadXML(scene_path.c_str(), nullptr, error, sizeof(error)), mj_deleteModel);
+    if (!model) {throw std::runtime_error(error);}
+    Data data(mj_makeData(model.get()), mj_deleteData);
+    if (!data) {throw std::runtime_error("cannot allocate MuJoCo data");}
+    const int home = mj_name2id(model.get(), mjOBJ_KEY, "home");
+    if (home < 0) {throw std::runtime_error("DM1 home keyframe is missing");}
+    mj_resetDataKeyframe(model.get(), data.get(), home);
+    mj_forward(model.get(), data.get());
+    const auto calibration = dm1_hardware::loadCalibration(settings.calibration_path);
+    HardwareSimulation devices(model.get(), data.get(), simulation.mtx, calibration, settings);
+    Dm1HardwareDriver driver("sim-can0", "sim-can1", devices.imuDevice(), calibration, &devices);
+    HardwareBridge::Options options;
+    options.keyboard_control = true;
+    // Keep actual hardware timing, heights, safety thresholds and command defaults.
+    options.torque_limit_nm = settings.torque_limit_nm;
+    options.command_source = [&]() {
+      auto commands = keyboard.consumeWindow();
+      auto terminal = keyboard.consume();
+      commands.insert(commands.end(), terminal.begin(), terminal.end());
+      if (pending_disable.exchange(false)) {
+        commands.push_back({teleop::CommandType::DisableMotors});
+      }
+      const int button = pending_command.exchange(kNoMotionCommand);
+      int key = 0;
+      switch (button) {
+        case kEnableMotors: key = 'U'; break;
+        case kDisableMotors: key = '0'; break;
+        case kStand: key = '1'; break;
+        case kMarchInPlace: key = '2'; break;
+        case kProneDown: key = 'P'; break;
+        case kStop: key = ' '; break;
+        case kForwardSlow: key = 'W'; break;
+        case kBackward: key = 'S'; break;
+        case kLeft: key = 'A'; break;
+        case kRight: key = 'D'; break;
+        case kRotateCounterClockwise: key = 'Q'; break;
+        case kRotateClockwise: key = 'E'; break;
+        case kForwardFast: {
+          teleop::OperatorCommand command;
+          command.type = teleop::CommandType::Motion;
+          command.motion = teleop::Motion::ForwardFast;
+          command.received_at = std::chrono::steady_clock::now();
+          commands.push_back(command);
+          break;
+        }
+        default: break;
+      }
+      if (key) {commands.push_back(*teleop::decodeKey(key));}
+      return commands;
+    };
+    auto start_control = [&]() {
+      stop.store(false); finished.store(false); control_failure = nullptr;
+      pending_command.store(kNoMotionCommand); pending_disable.store(false);
+      keyboard.consumeWindow(); keyboard.consume();
+      control = std::thread([&]() {
+        try {
+          HardwareBridge bridge(driver, calibration, options);
+          result = bridge.run(stop);
+        } catch (...) {control_failure = std::current_exception();}
+        finished.store(true);
+      });
+    };
+    auto stop_control = [&]() {
+      stop.store(true);
+      if (control.joinable()) {control.join();}
+      devices.emergencyStop();
+    };
+    simulation.Load(model.get(), data.get(), scene_path.c_str());
+    std::printf(
+      "DM1 HARDWARE SIMULATION: HardwareBridge + Dm1HardwareDriver + DmMotorDriver + "
+      "HardwareImu; torque_limit=%.1f Nm, real control/sender=500 Hz.\n"
+      "Unmeasured device assumptions: command/feedback/IMU delay=%.1f/%.1f/%.1f ms, "
+      "IMU period=%.1f ms, motor response=%.1f ms. No physical CAN device is opened.\n",
+      settings.torque_limit_nm, settings.command_delay_ms, settings.feedback_delay_ms,
+      settings.imu_delay_ms, settings.imu_period_ms, settings.motor_time_constant_ms);
+    start_control();
+    double previous_time = data->time;
+    bool paused = false;
+    bool controller_fault = false;
+    auto next = HardwareSimulation::Clock::now();
+    const auto period = std::chrono::duration_cast<HardwareSimulation::Clock::duration>(
+      std::chrono::duration<double>(model->opt.timestep));
+    try {
+      while (!simulation.exitrequest.load()) {
+        bool running, reset;
+        {
+          std::lock_guard<std::recursive_mutex> lock(simulation.mtx);
+          running = simulation.run != 0;
+          reset = data->time + model->opt.timestep * 0.5 < previous_time;
+          if (reset || (!running && !paused)) {devices.emergencyStop(); stop.store(true);}
+        }
+        if (reset || (!running && !paused)) {
+          stop_control();
+          if (reset) {
+            std::lock_guard<std::recursive_mutex> lock(simulation.mtx);
+            mj_resetDataKeyframe(model.get(), data.get(), home);
+            mj_forward(model.get(), data.get());
+            controller_fault = false;
+            std::printf("Hardware simulation reset: entire hardware bridge restarted; motors locked.\n");
+          }
+          paused = true;
+        }
+        if (running && paused) {start_control(); paused = false;}
+        if (!paused && finished.load() && !controller_fault) {
+          if (control_failure) {std::rethrow_exception(control_failure);}
+          if (result == 0) {simulation.exitrequest.store(1);}
+          else {
+            controller_fault = true;
+            devices.emergencyStop();
+            std::fprintf(stderr, "HardwareBridge stopped with code %d; inspect scene/logs, then Reset.\n", result);
+          }
+        }
+        {
+          std::lock_guard<std::recursive_mutex> lock(simulation.mtx);
+          devices.tick(running);
+          if (running) {mj_step(model.get(), data.get());}
+          else {mj_forward(model.get(), data.get());}
+          previous_time = data->time;
+        }
+        next += period;
+        const auto now = HardwareSimulation::Clock::now();
+        if (next < now) {next = now;}
+        std::this_thread::sleep_until(next);
+      }
+    } catch (...) {stop_control(); throw;}
+    stop_control();
+  } catch (...) {
+    failure = std::current_exception();
+    simulation.exitrequest.store(1);
+  }
+}
+
 }  // namespace
 
 /**
@@ -817,6 +980,12 @@ void SimulationBridge::setRlModel(FrozenDwaqModel model)
  * 主线程执行 RenderLoop，物理线程执行 runPhysics。RenderLoop 返回后等待
  * 物理线程结束，再清理全局回调指针；如果物理线程捕获到异常，此处重新抛出。
  */
+void SimulationBridge::setHardwareSimulation(const HardwareSimulationOptions & options)
+{
+  options.validate();
+  hardware_simulation_ = options;
+}
+
 int SimulationBridge::run()
 {
   // 在创建线程和窗口前尽早检查配置错误。
@@ -837,7 +1006,7 @@ int SimulationBridge::run()
   // GlfwAdapter 负责创建 GLFW/OpenGL 窗口，Simulate 负责后续渲染和 UI。
   teleop::KeyboardTeleop keyboard;
   keyboard.start();
-  auto glfw_adapter = std::make_unique<TeleopGlfwAdapter>(&keyboard);
+  auto glfw_adapter = std::make_unique<TeleopGlfwAdapter>(&keyboard, hardware_simulation_.enabled);
   const auto * gl_vendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
   const auto * gl_renderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
   std::printf(
@@ -857,6 +1026,7 @@ int SimulationBridge::run()
       gl_vendor == nullptr ? "an unknown renderer" : gl_vendor);
   }
   // UI 回调没有 this 指针，因此在 RenderLoop 期间把成员地址注册到文件内全局指针。
+  g_hardware_simulation = hardware_simulation_.enabled;
   g_standing_height_slider = &standing_height_slider_;
   g_pending_motion_command = &pending_motion_command_;
   g_pending_disable_command = &pending_disable_command_;
@@ -866,14 +1036,21 @@ int SimulationBridge::run()
 
   std::exception_ptr failure;
   // 速度参数按值传给物理线程；请求和 UI 状态按引用共享，并通过 atomic 或互斥保护。
-  std::thread physics(
-    runPhysics, std::ref(*simulation), std::cref(scene_path_), robot_type_,
-    std::ref(standing_height_), std::ref(standing_height_slider_),
-    std::ref(pending_motion_command_), std::ref(pending_disable_command_),
-    std::ref(keyboard),
-    slow_walking_forward_speed_,
-    fast_walking_forward_speed_, walking_backward_speed_, walking_lateral_speed_,
-    turning_yaw_rate_, walking_mode_, rl_policy_, std::ref(failure));
+  std::thread physics;
+  if (hardware_simulation_.enabled) {
+    physics = std::thread(runHardwarePhysics, std::ref(*simulation), std::cref(scene_path_),
+      std::cref(hardware_simulation_), std::ref(pending_motion_command_),
+      std::ref(pending_disable_command_), std::ref(keyboard), std::ref(failure));
+  } else {
+    physics = std::thread(
+      runPhysics, std::ref(*simulation), std::cref(scene_path_), robot_type_,
+      std::ref(standing_height_), std::ref(standing_height_slider_),
+      std::ref(pending_motion_command_), std::ref(pending_disable_command_),
+      std::ref(keyboard),
+      slow_walking_forward_speed_,
+      fast_walking_forward_speed_, walking_backward_speed_, walking_lateral_speed_,
+      turning_yaw_rate_, walking_mode_, rl_policy_, std::ref(failure));
+  }
   // 当前线程进入渲染循环，直到用户关闭窗口或物理线程发生异常。
   simulation->RenderLoop();
   physics.join();

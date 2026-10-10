@@ -24,10 +24,13 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
       T(1), std::round(T(0.04) / control_fsm_data->control_time_step)));
   const std::size_t gait_segment_interval = static_cast<std::size_t>(std::max(
       T(1), std::round(T(0.05) / control_fsm_data->control_time_step)));
+  mpc::SolverSettings<T> solver_settings;
+  solver_settings.time_step =
+    control_fsm_data->control_time_step * static_cast<T>(gait_segment_interval);
   //创建 MPC 控制器。传入:机器人模型；控制周期；MPC 步态时间间隔。  
   mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
     *control_fsm_data->quadruped, control_fsm_data->control_time_step,
-    mpc_interval, mpc::SolverSettings<T>{}, gait_segment_interval);
+    mpc_interval, solver_settings, gait_segment_interval);
   //创建 WBC。buildFloatingBaseModel() 会建立一个带浮动基座的机器人动力学模型。
   //浮动基座表示机身不是固定在地面上，而是有：3 个平移自由度 + 3 个旋转自由度
   wbc_ctrl_ = std::make_unique<LocomotionCtrl<T>>(
@@ -403,7 +406,7 @@ void FSM_State_Locomotion<T>::constrainJointTargets(
 template<typename T>
 void FSM_State_Locomotion<T>::LocomotionControlStep()
 {
-  // 同步当前步态请求；未变化时是空操作。
+  // 经典行走从首帧直接使用当周期 MPC/WBC 结果。
   applyRequestedGait(false);
   // MPC 输入必须使用统一的世界坐标系，否则反作用力方向会与 WBC 不一致。
   const auto feet_world = footPositionsWorld();

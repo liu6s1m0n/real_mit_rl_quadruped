@@ -36,6 +36,88 @@ ros2 run mymit_robot mymit_robot_user --render-gpu auto
 `Enable motors`），再按 `1`/点击 `Stand up`，最后按方向键或使用方向按钮。方向命令会
 锁存，按 `Space` 或点击 `Stop` 显式停止。
 
+### 完整实机算法仿真（实机联调优先使用）
+
+```bash
+ros2 run mymit_robot mymit_robot_user --hardware-sim --render-gpu auto
+# ROS launch 等价入口
+ros2 launch mymit_robot dm1_control.launch.py hardware_sim:=true
+```
+
+该模式调用同一个 `HardwareBridge`、`Dm1HardwareDriver`、`DmMotorDriver`、
+`HardwareImu` 和硬件版 `RobotRunner`。共用启动检查、使能确认、零位初始化、
+IMU CRC/启动基准/融合、关节标定、FSM、MPC/WBC、MIT 命令校验/饱和、
+双路独立 500 Hz 发送（帧间隔 250 μs）、反馈缓存与故障/旧命令保持策略。
+真实 `hardware_main` 的算法修改会自动进入这个模式。
+
+MuJoCo 仅提供机械动力学和设备端替身：CAN 字节交给原始电机驱动解码，
+57 字节 DM IMU 包经虚拟串口交给原始 IMU 接收线程。
+不会打开物理 CAN 或真实 IMU，不把 MuJoCo 姿态真值交给控制器。
+默认读取与实机相同的 `config/dm1_hardware_calibration.txt`；
+可用 `--calibration FILE` 指定同格式文件。
+
+操作顺序与实机键盘模式相同：等待启动反馈通过 → `Enable motors`/`U` →
+等待 1.2 秒关节初始化 → `Stand up`/`1` → 站稳后 `2` 或方向按钮；
+`Stop`/空格停止，`0` 失能，Esc 退出。暂停或 Reset 会停止旧硬件桥并清空设备命令；
+继续后重新执行启动检查，电机保持锁定。高度滑块和 RL 选择按钮在该模式不显示，
+因为当前完整实机程序使用固定站起目标和 MPC/WBC。
+
+默认总力矩上限与当前 `hardware_main` 一样为 **88 Nm**；
+复现今天以 30 Nm 进行的实机测试时必须同步指定：
+
+```bash
+ros2 run mymit_robot mymit_robot_user --hardware-sim --torque-limit 30
+```
+
+设备模型包含协议量化、命令保持、速度相关力矩上限和一阶电机响应。
+以下默认时序是**未实测标定的压力测试假设**，不是 DM1 实测参数：
+
+| 参数 | 默认值 | 含义 |
+|---|---:|---|
+| `--sim-command-delay-ms` | 1 | CAN 写入到电机接收 |
+| `--sim-feedback-delay-ms` | 1 | 电机采样到反馈接收 |
+| `--sim-imu-period-ms` | 2 | IMU 数据包产生周期 |
+| `--sim-imu-delay-ms` | 2 | IMU 采样到串口送达 |
+| `--sim-motor-time-constant-ms` | 4 | 电机力矩响应时间常数 |
+
+物理步长为 2 ms，设备送达时间向下一物理 tick 对齐；操作系统调度和渲染也会产生延迟。
+模型的质量、摩擦、柔性、供电压降、温升、电机固件内部保护和传感器噪声仍需实测辨识，
+本模式不保证真实机器与仿真机械运动完全一致。独立发送器保持旧命令的行为也完整保留，
+可从日志的 command_age 和跟踪误差观察后果。
+
+模拟 FL_calf（索引 5）在使能 10 秒后输出丢失，检查“正常发帧但关节不跟踪”：
+
+```bash
+ros2 run mymit_robot mymit_robot_user --hardware-sim --torque-limit 30 \
+  --sim-weak-joint 5 --sim-output-scale 0 --sim-impairment-after-s 10
+```
+
+模拟每 17 次 MIT 写入失败一次，保留实机其余电机发送/下轮重试/旧命令保持行为：
+
+```bash
+ros2 run mymit_robot mymit_robot_user --hardware-sim \
+  --sim-drop-every 17 --sim-impairment-after-s 2
+```
+
+`--sim-output-scale` 取 0～1；异常计时从本轮第一次使能开始。
+索引顺序为 FR/FL/RR/RL，每腿 hip/thigh/calf。
+故障场景是敏感性验证，不能作为已确认的实机故障原因。
+日志沿用实机的 `/tmp/dm1_march_*.csv`，记录估计姿态、关节目标、实际反馈及力矩。
+
+构建并验证完整原始驱动闭环：
+
+```bash
+colcon build --packages-select mymit_robot --symlink-install
+source install/setup.bash
+ctest --test-dir build/mymit_robot \
+  -R '^(test_dm1_full_hardware_simulation|test_hardware_bridge|test_dm_motor_driver|test_imu_driver)$' \
+  --output-on-failure
+```
+
+原有 `test_dm1_hardware_path_comparison` 只比较理想传感器下的 RobotRunner；
+它不覆盖原始驱动和设备时序。新的完整测试覆盖真实串口标定/协议、
+站起/原地小跑/停止、FL 小腿无输出和间歇写入失败。
+
 ### 启动 RL 仿真
 
 ```bash

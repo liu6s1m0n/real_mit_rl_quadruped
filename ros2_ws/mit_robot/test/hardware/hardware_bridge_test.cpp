@@ -1,13 +1,16 @@
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cmath>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "hardware/hardware_bridge.hpp"
+#include "hardware/dm_motor_driver.hpp"
 #include "hardware/periodic_mit_sender.hpp"
 
 namespace
@@ -24,6 +27,10 @@ public:
   {
     std::unique_lock<std::mutex> lock(mutex_);
     ++read_count;
+    if (stop_after_read_count > 0 && read_count >= stop_after_read_count) {
+      disable_count_before_stop = disable_count;
+      stop_requested_.store(true);
+    }
     if (read_count == stall_read_at) {
       sends_before_stall = send_count;
       lock.unlock();
@@ -63,13 +70,23 @@ public:
       }
     }
     if (fail_read_after > 0 && read_count >= fail_read_after) {
-      if (failed_read_count++ == 0) {send_count_at_first_failed_read = send_count;}
-      if (damage_on_failed_read) {sample.motors[0].fault_code = 0x0A;}
+      if (failed_read_count++ == 0) {
+        send_count_at_first_failed_read = send_count;
+        disable_count_at_first_failed_read = disable_count;
+      }
+      if (damage_on_failed_read) {
+        sample.motors[0].fault_code = injected_fault_code;
+        sample.motors[0].temperature_c = injected_mos_temperature;
+        sample.motors[0].rotor_temperature_c = injected_rotor_temperature;
+        sample.motors[0].voltage_valid = injected_voltage != 0.0F;
+        sample.motors[0].voltage_v = injected_voltage;
+      }
       if (communication_fault) {sample.motors[0].fault_code = 0x0D;}
       if (stop_after_failed_reads > 0 && failed_read_count >= stop_after_failed_reads) {
+        disable_count_before_stop = disable_count;
         stop_requested_.store(true);
       }
-      return false;
+      return feedback_read_succeeds;
     }
     return true;
   }
@@ -123,6 +140,10 @@ public:
   bool enableAll() override
   {
     ++enable_count;
+    if (enable_count <= failed_enable_attempts) {
+      disable_count_at_enable_failure = disable_count;
+      return false;
+    }
     if (stop_after_enable) {stop_requested_.store(true);}
     return true;
   }
@@ -147,10 +168,13 @@ public:
   int send_count = 0;
   int imu_read_count = 0;
   int enable_count = 0;
+  int failed_enable_attempts = 0, disable_count_at_enable_failure = 0;
   int fail_read_after = 0;
   int failed_read_count = 0;
+  int stop_after_read_count = 0;
   int stop_after_failed_reads = 0;
   int send_count_at_first_failed_read = 0;
+  int disable_count_at_first_failed_read = 0;
   int action_sequence = 0;
   int first_disable_sequence = 0;
   int first_poll_sequence = 0;
@@ -166,6 +190,10 @@ public:
   bool repeat_sequence = false;
   bool repeat_after_zero = false;
   bool damage_on_failed_read = false;
+  bool feedback_read_succeeds = false;
+  std::uint32_t injected_fault_code = 0x0A;
+  float injected_mos_temperature = 25.0F, injected_rotor_temperature = 25.0F;
+  float injected_voltage = 0.0F;
   bool communication_fault = false;
   bool stale_motor_feedback = false;
   float startup_offset = 0.1F;
@@ -266,7 +294,7 @@ TEST(HardwareBridgeTest, InvalidInitialMitCommandNeverEnablesMotors)
   std::atomic_bool stop_requested{false};
   StartupZeroHardware hardware(stop_requested);
   hardware.startup_offset = 13.0F;
-  hardware.stop_after_enable = true;
+  hardware.stop_after_read_count = 90;
   auto invalid_calibration = calibration();
   for (auto & item : invalid_calibration) {
     item.zero_position = 13.0F;
@@ -275,7 +303,7 @@ TEST(HardwareBridgeTest, InvalidInitialMitCommandNeverEnablesMotors)
   options.enable_output = true;
   HardwareBridge bridge(hardware, invalid_calibration, options);
 
-  EXPECT_EQ(bridge.run(stop_requested), 8);
+  EXPECT_EQ(bridge.run(stop_requested), 0);
   EXPECT_EQ(hardware.enable_count, 0);
 }
 
@@ -418,21 +446,50 @@ TEST(HardwareBridgeTest, EnabledOutputKeepsSendingLastSafeCommandOnReadFailure)
   EXPECT_GT(hardware.send_count, hardware.send_count_at_first_failed_read);
 }
 
-TEST(HardwareBridgeTest, EnabledOutputDisablesForReportedMotorFault)
+TEST(HardwareBridgeTest, MotorFaultsOnlyReportAndKeepSendingUntilExplicitStop)
 {
-  std::atomic_bool stop_requested{false};
-  StartupZeroHardware hardware(stop_requested);
-  hardware.startup_offset = 0.0F;
-  hardware.fail_read_after = 70;
-  hardware.damage_on_failed_read = true;
-  HardwareBridge::Options options;
-  options.control_time_step = 0.02F;
-  options.startup_stable_samples = 1;
-  options.enable_output = true;
-  HardwareBridge bridge(hardware, calibration(), options);
-
-  EXPECT_EQ(bridge.run(stop_requested), 3);
-  EXPECT_GE(hardware.disable_count, 2);
+  for (bool keyboard : {false, true}) {
+    for (bool read_succeeds : {false, true}) {
+      for (int fault = 0; fault < 6; ++fault) {
+        SCOPED_TRACE(::testing::Message() << "keyboard=" << keyboard <<
+          " read_succeeds=" << read_succeeds << " fault=" << fault);
+        std::atomic_bool stop_requested{false};
+        StartupZeroHardware hardware(stop_requested);
+        hardware.startup_offset = 0.0F;
+        hardware.fail_read_after = 70;
+        hardware.stop_after_failed_reads = 20;
+        hardware.damage_on_failed_read = true;
+        hardware.feedback_read_succeeds = read_succeeds;
+        hardware.injected_fault_code = fault == 0 ? 0x09 : (fault == 1 ? 0x0A : 0);
+        if (fault == 2) {hardware.injected_mos_temperature = 125.0F;}
+        if (fault == 3) {hardware.injected_rotor_temperature = 125.0F;}
+        if (fault == 4) {hardware.injected_voltage = 65.0F;}
+        if (fault == 5) {hardware.injected_voltage = 16.0F;}
+        HardwareBridge::Options options;
+        options.control_time_step = 0.002F;
+        options.startup_stable_samples = 1;
+        options.enable_output = !keyboard;
+        options.keyboard_control = keyboard;
+        if (keyboard) {
+          options.command_source = [requested = false]() mutable {
+              std::vector<teleop::OperatorCommand> batch;
+              if (!requested) {
+                teleop::OperatorCommand command;
+                command.type = teleop::CommandType::EnableMotors;
+                batch.push_back(command);
+                requested = true;
+              }
+              return batch;
+            };
+        }
+        HardwareBridge bridge(hardware, calibration(), options);
+        EXPECT_EQ(bridge.run(stop_requested), 0);
+        EXPECT_EQ(hardware.enable_count, 1);
+        EXPECT_GT(hardware.send_count, hardware.send_count_at_first_failed_read);
+        EXPECT_EQ(hardware.disable_count_before_stop, hardware.disable_count_at_first_failed_read);
+      }
+    }
+  }
 }
 
 TEST(HardwareBridgeTest, SenderContinuesWhileControlThreadIsBlocked)
@@ -449,6 +506,108 @@ TEST(HardwareBridgeTest, SenderContinuesWhileControlThreadIsBlocked)
   HardwareBridge bridge(hardware, calibration(), options);
   EXPECT_EQ(bridge.run(stop_requested), 0);
   EXPECT_GE(hardware.sends_during_stall, static_cast<int>(kNumJoints * 2));
+}
+
+TEST(HardwareBridgeTest, FailedEnableReportsAndRetriesWithoutDisableRollback)
+{
+  for (bool keyboard : {false, true}) {
+    SCOPED_TRACE(keyboard);
+    std::atomic_bool stop_requested{false};
+    StartupZeroHardware hardware(stop_requested);
+    hardware.startup_offset = 0.0F;
+    hardware.failed_enable_attempts = 1;
+    hardware.stop_after_send_count = 100;
+    HardwareBridge::Options options;
+    options.control_time_step = 0.002F;
+    options.startup_stable_samples = 1;
+    options.enable_output = !keyboard;
+    options.keyboard_control = keyboard;
+    if (keyboard) {
+      options.command_source = [requested = false]() mutable {
+          std::vector<teleop::OperatorCommand> batch;
+          if (!requested) {
+            teleop::OperatorCommand command;
+            command.type = teleop::CommandType::EnableMotors;
+            batch.push_back(command);
+            requested = true;
+          }
+          return batch;
+        };
+    }
+    HardwareBridge bridge(hardware, calibration(), options);
+    EXPECT_EQ(bridge.run(stop_requested), 0);
+    EXPECT_EQ(hardware.enable_count, 2);
+    EXPECT_GE(hardware.send_count, 100);
+    EXPECT_EQ(hardware.disable_count_before_stop, hardware.disable_count_at_enable_failure);
+  }
+}
+
+TEST(DmMotorDriverReportOnlyTest, EnableFailuresNeverSendAutomaticDisableFrames)
+{
+  class FailingCan final : public DmMotorDriver::CanTransport
+  {
+  public:
+    bool open(std::uint8_t, Receiver) override {return true;}
+    void close(std::uint8_t) noexcept override {}
+    bool write(std::uint8_t bus, const can_frame & frame) override
+    {
+      const bool special = std::all_of(frame.data, frame.data + 7,
+        [](std::uint8_t byte) {return byte == 0xff;});
+      if (special && frame.data[7] == 0xfd) {++disable_frames;}
+      if (failure == 0 && special && frame.data[7] == 0xfc &&
+        bus == 0 && frame.can_id == 1) {return false;}
+      if (failure == 1 && !special) {return false;}
+      // failure=2: writes succeed, but no feedback confirms enable.
+      return true;
+    }
+    int failure = 0;
+    int disable_frames = 0;
+  };
+  for (int failure = 0; failure < 3; ++failure) {
+    SCOPED_TRACE(failure);
+    FailingCan transport;
+    transport.failure = failure;
+    DmMotorDriver driver("virtual0", "virtual1", calibration(), &transport);
+    ASSERT_TRUE(driver.open());
+    EXPECT_FALSE(driver.enableAll());
+    EXPECT_EQ(transport.disable_frames, 0);
+    driver.disableAll();
+    EXPECT_EQ(transport.disable_frames, static_cast<int>(kNumJoints));
+    driver.close();
+  }
+}
+
+TEST(HardwareBridgeTest, KeyboardFailureKeepsOutputUntilExplicitStop)
+{
+  std::atomic_bool stop_requested{false};
+  StartupZeroHardware hardware(stop_requested);
+  hardware.startup_offset = 0.0F;
+  hardware.stop_after_read_count = 90;
+  HardwareBridge::Options options;
+  options.control_time_step = 0.002F;
+  options.keyboard_control = true;
+  int disable_count_before_failure = -1;
+  options.command_source = [&, enabled = false, failed = false]() mutable {
+      std::vector<teleop::OperatorCommand> batch;
+      teleop::OperatorCommand command;
+      if (!enabled) {
+        command.type = teleop::CommandType::EnableMotors;
+        enabled = true;
+        batch.push_back(command);
+      } else if (hardware.read_count >= 70 && !failed) {
+        command.type = teleop::CommandType::KeyboardFailure;
+        failed = true;
+        disable_count_before_failure = hardware.disable_count;
+        batch.push_back(command);
+      }
+      return batch;
+    };
+  HardwareBridge bridge(hardware, calibration(), options);
+  EXPECT_EQ(bridge.run(stop_requested), 0);
+  EXPECT_EQ(hardware.enable_count, 1);
+  EXPECT_GE(disable_count_before_failure, 0);
+  EXPECT_EQ(hardware.disable_count_before_stop, disable_count_before_failure);
+  EXPECT_GT(hardware.send_count, 100);
 }
 
 namespace

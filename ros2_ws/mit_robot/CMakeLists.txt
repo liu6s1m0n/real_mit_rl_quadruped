@@ -312,16 +312,18 @@ install(TARGETS mymit_robot_hardware
 # the complete estimator -> FSM -> MPC/WBC -> LegController control pipeline.
 add_executable(mymit_robot_user
   user/main.cpp
-  user/RobotRunner.cpp
+  user/HardwareSimulation.cpp
   user/SimulationActuatorWriter.cpp
   user/SimulationBridge.cpp
 )
 target_compile_definitions(mymit_robot_user PRIVATE
   MYMIT_ROBOT_DM1_SCENE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
+  MYMIT_ROBOT_DM1_CALIBRATION_PATH="${CMAKE_CURRENT_SOURCE_DIR}/config/dm1_hardware_calibration.txt"
 )
 target_include_directories(mymit_robot_user PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/user
+  ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dm_imu/include
 )
 target_include_directories(mymit_robot_user BEFORE PRIVATE
   "${MYMIT_LOCAL_MUJOCO_INCLUDE}"
@@ -330,6 +332,7 @@ target_include_directories(mymit_robot_user SYSTEM PRIVATE
   /usr/local/include/simulate
 )
 target_link_libraries(mymit_robot_user
+  mymit_robot_hardware
   mymit_robot_model
   mymit_robot_teleop
   Eigen3::Eigen
@@ -340,6 +343,7 @@ target_link_libraries(mymit_robot_user
   glfw
   dl
   pthread
+  util
 )
 # libsimulate.a is distributed with GCC LTO objects. Tell GCC to use the
 # available parallelism when materializing those objects; otherwise lto-wrapper

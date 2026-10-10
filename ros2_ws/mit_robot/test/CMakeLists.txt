@@ -109,6 +109,29 @@ target_include_directories(test_dm1_march_in_place PRIVATE
 target_link_libraries(test_dm1_march_in_place mymit_robot_model Eigen3::Eigen)
 target_link_libraries(test_dm1_march_in_place mymit_robot_teleop)
 
+ament_add_gtest(
+  test_dm1_hardware_path_comparison
+  sim2sim/dm1_hardware_path_comparison_test.cpp
+  ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
+  ${PROJECT_SOURCE_DIR}/user/SimulationActuatorWriter.cpp)
+target_compile_definitions(test_dm1_hardware_path_comparison PRIVATE
+  MYMIT_ROBOT_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
+)
+target_include_directories(test_dm1_hardware_path_comparison PRIVATE
+  ${PROJECT_SOURCE_DIR}/user
+)
+target_link_libraries(test_dm1_hardware_path_comparison mymit_robot_model Eigen3::Eigen)
+
+ament_add_gtest(test_dm1_full_hardware_simulation
+  sim2sim/dm1_full_hardware_simulation_test.cpp
+  ${PROJECT_SOURCE_DIR}/user/HardwareSimulation.cpp TIMEOUT 90)
+target_compile_definitions(test_dm1_full_hardware_simulation PRIVATE
+  MYMIT_ROBOT_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
+  MYMIT_ROBOT_TEST_CALIBRATION_PATH="${PROJECT_SOURCE_DIR}/config/dm1_hardware_calibration.txt")
+target_include_directories(test_dm1_full_hardware_simulation PRIVATE
+  ${PROJECT_SOURCE_DIR}/Middlewares/dm_imu/include)
+target_link_libraries(test_dm1_full_hardware_simulation mymit_robot_hardware util)
+
 ament_add_gtest(test_hardware_bridge
   hardware/hardware_bridge_test.cpp
 )

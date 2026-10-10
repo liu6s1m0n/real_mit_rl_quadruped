@@ -17,7 +17,8 @@ class Dm1HardwareDriver final : public dm1_hardware::Dm1HardwareIo
 public:
   Dm1HardwareDriver(
     std::string can0, std::string can1, std::string imu_device,
-    const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration);
+    const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration,
+    DmMotorDriver::CanTransport * transport = nullptr);
 
   bool open() override;
   bool read(dm1_hardware::HardwareSample & sample, double now_s) override;

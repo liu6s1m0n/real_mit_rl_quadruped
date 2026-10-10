@@ -43,7 +43,7 @@ enum class Motion : std::uint8_t
   Right,
   RotateCounterClockwise,
   RotateClockwise,
-  /// 原地对角小跑：周期 0.5 s、支撑占比 50%，FR+RL 与 FL+RR 交替抬起。
+  /// 原地对角小跑：实际执行 TROT_WALK，周期 0.5 s、支撑 60%、摆动 40%，FR+RL 与 FL+RR 交替抬起。
   MarchInPlace,
 };
 
