@@ -1,6 +1,6 @@
 /**
  * @file dm1_march_in_place_test.cpp
- * @brief 原地踏步回归：2 号 TROT 必须形成真实步态。
+ * @brief 原地踏步诊断：3 号入口四脚支撑；2 号与 TROT_WALK 保留摆腿回归。
  *
  * 现场问题：两个原地踏步模式都表现为腿部乱抖/机身前扑，看不出步态。该测试
  * 用无界面 MuJoCo 复现同一控制链，检查
@@ -24,6 +24,9 @@
 #include "RobotRunner.hpp"
 #include "SimulationActuatorWriter.hpp"
 #include "teleop/operator_command.hpp"
+#include "FSM/FSM_State_Locomotion.h"
+#include "model/floating_base_model_factory.hpp"
+#include "../fsm/fsm_test_support.hpp"
 
 namespace
 {
@@ -202,6 +205,8 @@ MarchReport runMarch(
     }
     if (concurrent_swing >= 3) {++report.frames_with_three_or_more_swing;}
     ++report.frames;
+    // 四脚诊断在首次回退时结束观察，避免把倒地后的无效命令计入阶段①。
+    if (gait_at(index) == GaitType::STAND && report.fallbacks > 0) {break;}
     mj_step(model, data);
   }
   report.net_x = data->qpos[0] - start_x;
@@ -258,8 +263,77 @@ void expectHealthyMarch(
 
 constexpr std::size_t kMarchSteps = 10000;  // 20 s
 
-/** 2 号原地对角小跑（TROT，0.5 s/50% 支撑）：对角腿同步抬起，支撑与摆动各占半周期。 */
-TEST(Dm1MarchInPlace, TrotStaysBalancedAndEveryLegSteps)
+TEST(Dm1MarchInPlace, Key3UsesUnmodifiedWalkingWbcWithFourContactsAndZeroVelocity)
+{
+  const auto command = teleop::decodeKey('3');
+  ASSERT_TRUE(command.has_value());
+  EXPECT_EQ(command->type, teleop::CommandType::Motion);
+  EXPECT_EQ(command->motion, teleop::Motion::FourContactDiagnostic);
+  const auto velocity = teleop::velocityForMotion(command->motion);
+  EXPECT_FLOAT_EQ(velocity.forward, 0.0F);
+  EXPECT_FLOAT_EQ(velocity.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(velocity.yaw, 0.0F);
+
+  test_support::FsmContext context(0.002F);
+  context.estimate.position_world.z() = 0.32F;
+  context.estimate.velocity_world.x() = 0.08F;
+  context.desired_state.mode = ControlMode::Locomotion;
+  context.desired_state.body_position_world.z() = 0.32F;
+  context.data().locomotion_gait = GaitType::STAND;
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  const auto & p = context.parameters;
+  LocomotionCtrl<float> reference(model::makeFloatingBaseModel(context.quadruped));
+  LegController<float> reference_commands(context.quadruped);
+  reference.setBodyOrientationGains(p.locomotion_body_orientation_kp, p.locomotion_body_orientation_kd);
+  reference.setJointGains(p.locomotion_joint_kp, p.locomotion_joint_kd);
+  reference.setMaxNormalForce(p.maximum_normal_force);
+  mpc::SolverSettings<float> settings;
+  settings.time_step = 0.05F;
+  mpc::ConvexMPCLocomotion<float> planner(context.quadruped, 0.002F, 20, settings, 25);
+  planner.initialize();
+  planner.setGait(GaitType::STAND);
+  std::array<Vec3<float>, kNumLegs> feet{};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    feet[leg] = context.estimate.position_world +
+      context.quadruped.hipLocation(static_cast<LegId>(leg)) + context.leg_controller.datas[leg].p;
+  }
+  FSM_State_Locomotion<float> diagnostic(&context.data());
+  diagnostic.onEnter();
+  for (int frame = 0; frame < 1000; ++frame) {
+    // 遗留非零速度不能让诊断模式运动；也不能让 MPC 恢复摆腿。
+    diagnostic.setVelocityCommand(0.18F, 0.1F, 0.2F);
+    context.gait_scheduler.step();
+    const auto result = planner.run(context.estimate, context.desired_state, feet);
+    ASSERT_TRUE(result.valid);
+    LocomotionCtrlData<float> input;
+    input.pBody_des = result.command.body_position_world;
+    input.pBody_RPY_des = result.command.body_rpy;
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      input.contact_state[leg] = 1.0F;
+      input.Fr_des[leg] = result.reaction_forces_world[leg];
+    }
+    ASSERT_TRUE(reference.runAndApply(&input, context.estimate, context.joint_states, reference_commands));
+    diagnostic.run();
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const auto id = static_cast<LegId>(leg);
+      EXPECT_TRUE(context.gait_scheduler.gait_data.contactScheduled(id));
+      EXPECT_FALSE(diagnostic.swingLegActive(id));
+      const auto & actual = context.leg_controller.commands[leg];
+      const auto & expected = reference_commands.commands[leg];
+      EXPECT_TRUE(actual.torque_feedforward.isApprox(expected.torque_feedforward, 1.0e-5F));
+      EXPECT_TRUE(actual.position_desired.isApprox(expected.position_desired, 1.0e-5F));
+      EXPECT_TRUE(actual.velocity_desired.isApprox(expected.velocity_desired, 1.0e-5F));
+      EXPECT_TRUE(actual.kp_joint.isApprox(p.locomotion_joint_kp));
+      EXPECT_TRUE(actual.kd_joint.isApprox(p.locomotion_joint_kd));
+    }
+  }
+}
+
+/** 3 号入口阶段①的物理验收：沿用踏步控制，要求四脚贴地、机身稳定。 */
+TEST(Dm1MarchInPlace, FourContactDiagnosticStaysGroundedWithoutAutomaticProgression)
 {
   auto model = loadModel();
   auto data = makeData(model.get());
@@ -269,13 +343,38 @@ TEST(Dm1MarchInPlace, TrotStaysBalancedAndEveryLegSteps)
 
   const auto report = runMarch(
     model.get(), data.get(), runner, writer,
-    [](std::size_t) {return GaitType::TROT;}, kMarchSteps);
-  printReport("march_trot  ", report);
+    [](std::size_t) {return GaitType::STAND;}, kMarchSteps);
+  printReport("four_contact", report);
+  EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
+  EXPECT_EQ(report.fallbacks, 0U);
+  EXPECT_EQ(report.concurrent_swing_max, 0U);
+  EXPECT_GT(report.body_height_min, 0.30);
+  EXPECT_LT(report.maximum_roll, 0.05);
+  EXPECT_LT(report.maximum_pitch, 0.05);
+  EXPECT_LT(std::abs(report.net_x), 0.02);
+  EXPECT_LT(std::abs(report.net_y), 0.02);
+  const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_EQ(report.liftoffs[leg], 0U);
+    EXPECT_LT(report.maximum_foot_height[leg], 0.002);
+    EXPECT_TRUE(runner.jointCommands()[leg].kp.isApprox(parameters.locomotion_joint_kp));
+    EXPECT_TRUE(runner.jointCommands()[leg].kd.isApprox(parameters.locomotion_joint_kd));
+  }
+}
 
-  // 50% TROT规划始终保留两脚支撑；接触检测在交接瞬间可能多计一条未接触腿。
+/** 2 号原地踏步保留原有 TROT_WALK（0.5 s/60% 支撑）执行行为。 */
+TEST(Dm1MarchInPlace, TrotStaysBalancedAndEveryLegSteps)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  const auto report = runMarch(model.get(), data.get(), runner, writer,
+    [](std::size_t) {return GaitType::TROT;}, kMarchSteps);
+  printReport("march_trot", report);
   expectHealthyMarch(report, 3U, 0.50, 0.30, 20U, 45U);
-  EXPECT_LT(
-    static_cast<double>(report.frames_with_three_or_more_swing) /
+  EXPECT_LT(static_cast<double>(report.frames_with_three_or_more_swing) /
     static_cast<double>(report.frames), 0.05);
 }
 

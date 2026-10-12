@@ -3,7 +3,13 @@
 #include <atomic>
 #include <cstdint>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <mutex>
+#include <optional>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -238,6 +244,105 @@ TEST(HardwareBridgeTest, ReadOnlyStartupDoesNotResetMotorZeros)
   EXPECT_EQ(hardware.poll_count, 1);
   ASSERT_GT(hardware.first_poll_sequence, 0);
   EXPECT_LT(hardware.first_disable_sequence, hardware.first_poll_sequence);
+}
+
+TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTargets)
+{
+  struct LogDirectory
+  {
+    std::filesystem::path path = std::filesystem::temp_directory_path() /
+      ("dm1_csv_contract_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::optional<std::string> old;
+    LogDirectory()
+    {
+      if (const char * value = std::getenv("DM1_LOG_DIR")) {old = value;}
+      setenv("DM1_LOG_DIR", path.c_str(), 1);
+    }
+    ~LogDirectory()
+    {
+      if (old) {setenv("DM1_LOG_DIR", old->c_str(), 1);} else {unsetenv("DM1_LOG_DIR");}
+      std::filesystem::remove_all(path);
+    }
+  };
+  const auto split = [](const std::string & line) {
+      std::istringstream input(line);
+      std::vector<std::string> fields;
+      for (std::string field; std::getline(input, field, ',');) {fields.push_back(field);}
+      return fields;
+    };
+  for (bool rejected : {false, true}) {
+    SCOPED_TRACE(rejected);
+    LogDirectory logs;
+    std::atomic_bool stop{false};
+    StartupZeroHardware hardware(stop);
+    hardware.startup_offset = rejected ? -0.1F : 0.02F;
+    hardware.stop_after_read_count = 30;
+    auto motor_calibration = calibration();
+    if (!rejected) {
+      for (std::size_t joint = 0; joint < kNumJoints; ++joint) {
+        motor_calibration[joint].direction = joint % 2 ? -1 : 1;
+      }
+    }
+    HardwareBridge::Options options;
+    options.keyboard_control = true;
+    options.command_source = [sent = false]() mutable {
+        if (sent) {return std::vector<teleop::OperatorCommand>{};}
+        sent = true;
+        return std::vector<teleop::OperatorCommand>{*teleop::decodeKey('U')};
+      };
+    HardwareBridge bridge(hardware, motor_calibration, options);
+    ASSERT_EQ(bridge.run(stop), 0);
+    ASSERT_TRUE(std::filesystem::is_directory(logs.path));
+    std::vector<std::filesystem::path> files;
+    for (const auto & file : std::filesystem::directory_iterator(logs.path)) {
+      if (file.path().extension() == ".csv") {files.push_back(file.path());}
+    }
+    ASSERT_EQ(files.size(), 1U);
+    std::ifstream input(files.front());
+    std::string line;
+    ASSERT_TRUE(static_cast<bool>(std::getline(input, line)));
+    const auto header = split(line);
+    std::map<std::string, std::size_t> columns;
+    for (std::size_t i = 0; i < header.size(); ++i) {columns[header[i]] = i;}
+    std::size_t rows = 0, accepted = 0, held = 0;
+    std::vector<std::string> last_published;
+    for (; std::getline(input, line);) {
+      const auto fields = split(line);
+      ASSERT_EQ(fields.size(), header.size());
+      ++rows;
+      const auto number = [&](const std::string & name) {return std::stod(fields.at(columns.at(name)));};
+      const bool published = number("publish_ok") != 0;
+      const bool valid = number("published_valid") != 0;
+      if (rejected) {
+        EXPECT_FALSE(published);
+        EXPECT_FALSE(valid);
+        EXPECT_TRUE(std::isnan(number("FR_calf_q_published")));
+        EXPECT_TRUE(std::isnan(number("published_age_s")));
+      } else {
+        EXPECT_TRUE(valid);
+        const char * legs[] = {"FR", "FL", "RR", "RL"};
+        const char * joints[] = {"hip", "thigh", "calf"};
+        for (const auto * leg : legs) {
+          for (const auto * joint : joints) {
+            const std::string name = std::string(leg) + "_" + joint;
+            const double pos = number(name + "_kp") * (number(name + "_q_des") - number(name + "_q"));
+            const double vel = number(name + "_kd") * (number(name + "_dq_des") - number(name + "_dq"));
+            EXPECT_NEAR(number(name + "_tau_pos"), pos, 1.0e-5);
+            EXPECT_NEAR(number(name + "_tau_vel"), vel, 1.0e-5);
+            EXPECT_NEAR(number(name + "_tau_total"), pos + vel + number(name + "_ff"), 1.0e-5);
+            if (published) {EXPECT_NEAR(number(name + "_q_published"), number(name + "_q_des"), 1.0e-6);}
+            else if (!last_published.empty()) {
+              EXPECT_EQ(fields.at(columns.at(name + "_q_published")), last_published.at(columns.at(name + "_q_published")));
+            }
+          }
+        }
+        if (published) {++accepted; last_published = fields;}
+        else {++held; EXPECT_GT(number("published_age_s"), 0.0);}
+      }
+    }
+    EXPECT_GT(rows, 5U);
+    if (!rejected) {EXPECT_GT(accepted, 5U); EXPECT_GT(held, 0U);}
+  }
 }
 
 TEST(HardwareBridgeTest, SetZeroExplicitlyResetsAllMotorZeros)

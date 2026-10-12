@@ -3,6 +3,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -253,6 +256,25 @@ bool WBC_Ctrl<T>::runAndApply(
   if (elapsed_ms > timing_window_max_ms_) {timing_window_max_ms_ = elapsed_ms;}
   const bool overrun = elapsed_ms > kControlCycleBudgetMs;
   if (overrun) {++timing_window_overruns_;}
+
+  // 只读诊断，覆盖所有 WBC 调用者；任务误差与原始目标在 FSM 改写前记录。
+  const char * diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS");
+  if (success && diagnostics && diagnostics[0] == '1' &&
+    (iteration_ <= 10 || iteration_ % 10 == 0))
+  {
+    std::ostringstream line;
+    line << std::setprecision(9) << "[WBC][DIAGNOSTIC] t_s=" << estimate.timestamp
+         << " iteration=" << iteration_ << " floating_weight=" << floating_base_weight_
+         << " contacts=" << contacts_.size() << " body_z=" << estimate.position_world.z()
+         << " body_rpy=[" << estimate.rpy.transpose() << ']';
+    for (std::size_t task = 0; task < tasks_.size(); ++task) {
+      line << " task" << task << "_error=[" << tasks_[task]->getPosError().transpose() << ']';
+    }
+    line << " q_wbc=[" << (result_.joint_position - model_.getJointPositionOffsets()).transpose()
+         << "] dq_wbc=[" << result_.joint_velocity.transpose()
+         << "] ff_wbc=[" << result_.joint_torque.transpose() << "]\n";
+    std::fputs(line.str().c_str(), stderr);
+  }
 
   if (iteration_ <= 10 || (overrun && timing_window_overruns_ == 1)) {
     std::fprintf(

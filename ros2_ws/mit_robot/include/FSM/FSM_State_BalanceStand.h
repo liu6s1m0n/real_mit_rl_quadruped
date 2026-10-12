@@ -2,7 +2,7 @@
  * @file FSM_State_BalanceStand.h
  * @brief 四足均接触地面时的平衡站立状态。
  *
- * 该状态把期望机身位姿和四足支撑力交给 WBC，并保留关节 PD 作为局部稳定项。
+ * 该状态以零速度、四足支撑运行 MPC，再把机身目标和反力交给 WBC。
  */
 #ifndef MYMIT_ROBOT_FSM_STATE_BALANCE_STAND_H_
 #define MYMIT_ROBOT_FSM_STATE_BALANCE_STAND_H_
@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "FSM/FSM_State.h"
+#include "MPC/ConvexMPCLocomotion.h"
 #include "WBC/LocomotionCtrl/LocomotionCtrl.hpp"
 #include "controller/RlPolicy.hpp"
 
@@ -43,13 +44,13 @@ private:
   void BalanceStandStep();
   //会自动释放，不需要手动 delete。WBC控制器
   std::unique_ptr < LocomotionCtrl < T >> wbc_ctrl_;
+  std::unique_ptr<mpc::ConvexMPCLocomotion<T>> mpc_;
   LocomotionCtrlData < T > wbc_data_;
   //状态运行计数器
   std::size_t iteration_ = 0;
   Vec3 < T > initial_body_position_ = Vec3 < T > ::Zero();
   Vec3 < T > initial_body_rpy_ = Vec3 < T > ::Zero();
   T last_height_command_ = T(0);
-  T body_weight_ = T(0);
   std::array<Vec3<T>, kNumLegs> entry_foot_positions_{};
   std::array<Vec3<T>, kNumLegs> entry_joint_positions_{};
   std::size_t posture_ramp_iteration_ = 0;

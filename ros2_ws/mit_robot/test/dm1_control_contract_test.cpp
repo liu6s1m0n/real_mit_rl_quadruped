@@ -2,7 +2,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <limits>
+#include <optional>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -15,11 +20,41 @@
 #include "hardware/dm1_mit_interface.hpp"
 #include "model/quadruped.hpp"
 #include "model/robot_control_parameters.hpp"
+#include "model/robots/dm1.hpp"
 #include "data/dm1_policy_4210_golden.hpp"
 #include "fsm/fsm_test_support.hpp"
 
 namespace
 {
+class DiagnosticEnvironment
+{
+public:
+  explicit DiagnosticEnvironment(const char * value)
+  {
+    if (const char * old = std::getenv("DM1_CONTROL_DIAGNOSTICS")) {old_ = old;}
+    setenv("DM1_CONTROL_DIAGNOSTICS", value, 1);
+  }
+  ~DiagnosticEnvironment()
+  {
+    if (old_) {setenv("DM1_CONTROL_DIAGNOSTICS", old_->c_str(), 1);}
+    else {unsetenv("DM1_CONTROL_DIAGNOSTICS");}
+  }
+private:
+  std::optional<std::string> old_;
+};
+
+std::vector<float> diagnosticVector(const std::string & log, const char * name)
+{
+  const std::string prefix = std::string(name) + "=[";
+  const auto start = log.find(prefix);
+  if (start == std::string::npos) {return {};}
+  const auto end = log.find(']', start);
+  std::istringstream values(log.substr(start + prefix.size(), end - start - prefix.size()));
+  std::vector<float> result;
+  for (float value; values >> value;) {result.push_back(value);}
+  return result;
+}
+
 class RecordingMitTransport final : public dm1_hardware::MitTransport
 {
 public:
@@ -32,6 +67,233 @@ public:
   std::vector<dm1_hardware::MitFrame> frames;
   bool disabled = false;
 };
+}
+
+TEST(Dm1Contract, WbcDiagnosticsDistinguishRawTargetsFromStandingOverride)
+{
+  DiagnosticEnvironment diagnostics("1");
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.estimate.timestamp = 12.25F;
+  context.estimate.position_world.z() = 0.32F;
+  context.estimate.rpy.y() = -0.0583F;
+  context.estimate.orientation_world_from_body = Eigen::AngleAxisf(-0.0583F, Vec3<float>::UnitY());
+  context.estimate.rotation_world_from_body = context.estimate.orientation_world_from_body.toRotationMatrix();
+  context.desired_state.body_position_world.z() = 0.32F;
+  FSM_State_BalanceStand<float> standing(&context.data());
+  standing.onEnter();
+  ::testing::internal::CaptureStderr();
+  standing.run();
+  const std::string log = ::testing::internal::GetCapturedStderr();
+  ASSERT_TRUE(context.leg_controller.legsEnabled()) << log;
+  ASSERT_NE(log.find("[WBC][DIAGNOSTIC] t_s=12.25"), std::string::npos);
+  EXPECT_NE(log.find("floating_weight=300 contacts=4"), std::string::npos);
+  const auto raw = diagnosticVector(log, "q_wbc");
+  const auto orientation_error = diagnosticVector(log, "task0_error");
+  ASSERT_EQ(raw.size(), kNumJoints);
+  ASSERT_EQ(orientation_error.size(), 3U);
+  EXPECT_NEAR(orientation_error[1], 0.0583F * 0.25F, 1.0e-6F);
+  EXPECT_LT(raw[7], context.joint_states[2].position[1] - 0.01F);
+  EXPECT_FLOAT_EQ(context.leg_controller.commands[2].position_desired[1], context.joint_states[2].position[1]);
+  context.desired_state.mode = ControlMode::Locomotion;
+  context.data().locomotion_gait = GaitType::STAND;
+  FSM_State_Locomotion<float> locomotion(&context.data());
+  locomotion.onEnter();
+  ::testing::internal::CaptureStderr();
+  locomotion.run();
+  const std::string locomotion_log = ::testing::internal::GetCapturedStderr();
+  EXPECT_NE(locomotion_log.find("floating_weight=3000 contacts=4"), std::string::npos);
+  const auto walking_raw = diagnosticVector(locomotion_log, "q_wbc");
+  ASSERT_EQ(walking_raw.size(), kNumJoints);
+  EXPECT_FLOAT_EQ(context.leg_controller.commands[2].position_desired[1], context.joint_states[2].position[1]);
+  EXPECT_GT(std::abs(walking_raw[7] - context.leg_controller.commands[2].position_desired[1]), 0.01F);
+}
+
+TEST(Dm1Contract, ModelLimitTargetsPassMitButAdjacentOutOfRangeTargetsFail)
+{
+  RecordingMitTransport transport;
+  dm1_hardware::Dm1MitInterface::CalibrationArray calibration{};
+  for (std::size_t index = 0; index < kNumJoints; ++index) {
+    calibration[index].address = dm1_hardware::MotorAddress{
+      static_cast<std::uint8_t>(index / 6),
+      static_cast<std::uint16_t>(index % 6 + 1),
+      static_cast<std::uint16_t>(index % 6 + 0x11)};
+    calibration[index].direction = 1;
+  }
+  dm1_hardware::Dm1MitInterface mit(transport, calibration);
+  const auto robot = makeQuadruped<float>(RobotType::DM1);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & limits = robot.leg(static_cast<LegId>(leg)).joints;
+    for (int joint = 0; joint < 3; ++joint) {
+      for (const float bound : {limits.lower_limit[joint], limits.upper_limit[joint]}) {
+        dm1_hardware::Dm1MitInterface::CommandArray commands{};
+        for (std::size_t index = 0; index < kNumLegs; ++index) {
+          commands[index].leg = static_cast<LegId>(index);
+          commands[index].enabled = true;
+        }
+        commands[leg].position_desired[joint] = bound;
+        ASSERT_TRUE(mit.validateCommands(commands, 0.0, false));
+        const float outside = bound == limits.lower_limit[joint] ?
+          -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+        commands[leg].position_desired[joint] = std::nextafter(bound, outside);
+        EXPECT_FALSE(mit.validateCommands(commands, 0.0, false));
+      }
+    }
+  }
+}
+
+TEST(Dm1Contract, StandingJointBoundsClampKneeSupportAndVerticalCalf)
+{
+  const auto robot = robots::dm1::makeModel<double>();
+  const auto & rear = robot.leg(LegId::RR);
+  Vec3<double> home = rear.joints.home_position;
+  ASSERT_TRUE(robots::dm1::clampStanceJointTarget(home));
+  EXPECT_TRUE(home.isApprox(rear.joints.home_position, 1e-12));
+  Vec3<double> unsafe(0.0, -1.23, 2.1);
+  ASSERT_TRUE(robots::dm1::clampStanceJointTarget(unsafe));
+  EXPECT_DOUBLE_EQ(unsafe[1], robots::dm1::kStanceThighLower);
+  EXPECT_DOUBLE_EQ(unsafe[2], robots::dm1::kStanceCalfUpper);
+  const double knee_z = 0.32 + rear.hip_location_body.z() +
+    (Eigen::AngleAxisd(unsafe[1] + rear.joints.zero_offset[1],
+      Vec3<double>::UnitY()) * rear.thigh_to_calf).z();
+  EXPECT_GE(knee_z - robots::dm1::kKneeEnvelopeRadius,
+    robots::dm1::kMinimumKneeClearance);
+  Vec3<double> vertical_calf(0.0, 0.203, 1.338803755111750);
+  ASSERT_TRUE(robots::dm1::clampStanceJointTarget(vertical_calf));
+  EXPECT_LE(vertical_calf[1], robots::dm1::kStanceThighUpper);
+  EXPECT_LE(vertical_calf[2], robots::dm1::kStanceCalfUpper);
+  Vec3<double> invalid = rear.joints.home_position;
+  invalid[1] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(robots::dm1::clampStanceJointTarget(invalid));
+
+  // 0.32 m 工作窗口：机身俯仰 ±0.10 rad，横滚/HAA 各 ±0.03 rad。
+  for (const auto & leg : robot.legs()) {
+    for (const double pitch : {-0.10, 0.0, 0.10}) {
+      for (const double roll : {-0.03, 0.0, 0.03}) {
+        const Mat3<double> body = (Eigen::AngleAxisd(pitch, Vec3<double>::UnitY()) *
+          Eigen::AngleAxisd(roll, Vec3<double>::UnitX())).toRotationMatrix();
+        for (const double haa : {-0.03, 0.0, 0.03}) {
+          const Mat3<double> hip = Eigen::AngleAxisd(haa, Vec3<double>::UnitX())
+            .toRotationMatrix();
+          for (const double thigh : {
+              robots::dm1::kStanceThighLower, robots::dm1::kStanceThighUpper})
+          {
+            const Mat3<double> thigh_rotation =
+              Eigen::AngleAxisd(thigh + leg.joints.zero_offset[1],
+              Vec3<double>::UnitY()).toRotationMatrix();
+            const Vec3<double> knee = body * (leg.hip_location_body + hip *
+              (leg.hip_to_thigh + thigh_rotation * leg.thigh_to_calf));
+            EXPECT_GE(0.32 + knee.z() - robots::dm1::kKneeEnvelopeRadius,
+              robots::dm1::kMinimumKneeClearance - 1e-6);
+            for (const double calf : {
+                robots::dm1::kStanceCalfLower, robots::dm1::kStanceCalfUpper})
+            {
+              const Vec3<double> calf_vector = body * hip * thigh_rotation *
+                Eigen::AngleAxisd(calf + leg.joints.zero_offset[2],
+                Vec3<double>::UnitY()) * leg.calf_to_foot;
+              EXPECT_LE(std::abs(calf_vector.z()) / leg.calf_to_foot.norm(),
+                std::sin(75.0 * 3.141592653589793 / 180.0) + 1e-6);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(Dm1Contract, StandingPosePreservesHeightAndEqualLinkInclinations)
+{
+  const auto robot = robots::dm1::makeModel<double>();
+  for (const auto & leg : robot.legs()) {
+    const Vec3<double> q = leg.joints.home_position;
+    Vec3<double> foot;
+    computeLegJacobianAndPosition(robot, q, static_cast<Mat3<double> *>(nullptr),
+      &foot, leg.leg);
+    const double height = leg.foot_radius - leg.hip_location_body.z() - foot.z();
+    EXPECT_NEAR(height, 0.32, 2e-7);
+    const double thigh_mechanical = q[1] + leg.joints.zero_offset[1];
+    const Vec3<double> knee_from_hip = leg.hip_to_thigh +
+      Eigen::AngleAxisd(thigh_mechanical, Vec3<double>::UnitY()) * leg.thigh_to_calf;
+    EXPECT_GE(height + leg.hip_location_body.z() + knee_from_hip.z() -
+      robots::dm1::kKneeEnvelopeRadius, 0.066);
+    const Vec3<double> thigh = knee_from_hip - leg.hip_to_thigh;
+    const Vec3<double> calf = foot - knee_from_hip;
+    const double thigh_inclination = std::atan2(std::abs(thigh.z()), std::abs(thigh.x()));
+    const double calf_inclination = std::atan2(std::abs(calf.z()), std::abs(calf.x()));
+    EXPECT_NEAR(thigh_inclination, calf_inclination, 2e-6);
+    EXPECT_NEAR(thigh_inclination, 0.5958042448882499, 2e-6);
+    EXPECT_GT(q[1], -0.597);
+  }
+}
+
+TEST(Dm1Contract, SharedOrientationGainPreservesHeightAndDynamicFeedback)
+{
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {joint.valid = true;}
+  auto model = model::makeFloatingBaseModel(context.quadruped);
+  auto state = model::makeFloatingBaseState(context.estimate, context.joint_states);
+  state.q += model.getJointPositionOffsets();
+  model.setState(state);
+  BodyOriTask<float> orientation(model);
+  orientation.setProportionalGain(Vec3<float>(69.0F, 69.0F, 34.0F));
+  orientation.setDerivativeGain(Vec3<float>(11.8F, 11.8F, 5.8F));
+  const Eigen::Quaternionf current(
+    state.bodyOrientation[0], state.bodyOrientation[1],
+    state.bodyOrientation[2], state.bodyOrientation[3]);
+  for (int axis = 0; axis < 3; ++axis) {
+    for (const float angle : {-0.08F, -0.02F, 0.02F, 0.08F}) {
+      const Eigen::Quaternionf desired = current * Eigen::Quaternionf(
+        Eigen::AngleAxisf(angle, Vec3<float>::Unit(axis)));
+      ASSERT_TRUE(orientation.update(desired));
+      Vec3<float> error = Vec3<float>::Zero();
+      error[axis] = angle;
+      EXPECT_TRUE(orientation.getPosError().isApprox(0.25F * error, 1.0e-5F));
+      DVec<float> acceleration;
+      orientation.getCommand(acceleration);
+      EXPECT_TRUE(acceleration.isApprox(
+          orientation.proportionalGain().cwiseProduct(error), 1.0e-5F));
+    }
+  }
+  BodyPosTask<float> position(model);
+  Vec3<float> desired_position = state.bodyPosition;
+  desired_position.z() += 0.01F;
+  ASSERT_TRUE(position.UpdateTask(
+      &desired_position, DVec<float>::Zero(3), DVec<float>::Zero(3)));
+  EXPECT_NEAR(position.getPosError()[2], 0.01F, 1.0e-6F);
+}
+
+TEST(Dm1Contract, EnablingWbcDiagnosticsDoesNotChangeControlCommands)
+{
+  test_support::FsmContext quiet(0.002F), logged(0.002F);
+  for (auto * context : {&quiet, &logged}) {
+    for (auto & joint : context->joint_states) {
+      joint.valid = true;
+      ASSERT_TRUE(context->leg_controller.updateData(joint));
+    }
+    context->estimate.position_world.z() = 0.32F;
+    context->desired_state.body_position_world.z() = 0.32F;
+    context->desired_state.mode = ControlMode::Locomotion;
+    context->data().locomotion_gait = GaitType::STAND;
+  }
+  FSM_State_Locomotion<float> first(&quiet.data()), second(&logged.data());
+  first.onEnter();
+  second.onEnter();
+  {DiagnosticEnvironment diagnostics("0"); first.run();}
+  {DiagnosticEnvironment diagnostics("1"); second.run();}
+  ASSERT_TRUE(quiet.leg_controller.legsEnabled());
+  ASSERT_TRUE(logged.leg_controller.legsEnabled());
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & a = quiet.leg_controller.commands[leg];
+    const auto & b = logged.leg_controller.commands[leg];
+    EXPECT_TRUE(a.position_desired.isApprox(b.position_desired, 1.0e-6F));
+    EXPECT_TRUE(a.velocity_desired.isApprox(b.velocity_desired, 1.0e-6F));
+    EXPECT_TRUE(a.torque_feedforward.isApprox(b.torque_feedforward, 1.0e-6F));
+    EXPECT_TRUE(a.kp_joint.isApprox(b.kp_joint));
+    EXPECT_TRUE(a.kd_joint.isApprox(b.kd_joint));
+  }
 }
 
 TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
@@ -53,7 +315,7 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
     EXPECT_EQ(static_cast<std::size_t>(model.leg(static_cast<LegId>(leg)).leg), leg);
     EXPECT_TRUE(
       model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
-        Vec3<float>(0.0F, -0.597F, 1.004F)));
+      Vec3<float>(0.0F, -0.392804F, 0.959416F)));
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -0.03F);
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 2.72F);
   }
@@ -83,10 +345,10 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
       Vec3<float>(16.0F, 16.0F, 7.0F)));
   EXPECT_TRUE(
     parameters.balance_joint_kp.isApprox(
-      Vec3<float>(85.0F, 85.0F, 100.0F)));
+      Vec3<float>(90.0F, 85.0F, 100.0F)));
   EXPECT_TRUE(
     parameters.balance_joint_kd.isApprox(
-      Vec3<float>(1.8F, 1.8F, 1.8F)));
+      Vec3<float>(3.0F, 2.4F, 2.6F)));
   EXPECT_TRUE(
     parameters.stand_up_joint_kp.isApprox(
       Vec3<float>(80.0F, 80.0F, 90.0F)));
@@ -95,10 +357,10 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
       Vec3<float>(1.8F, 1.8F, 1.8F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kp.isApprox(
-      Vec3<float>(60.0F, 60.0F, 60.0F)));
+      Vec3<float>(55.0F, 25.0F, 65.0F)));
   EXPECT_TRUE(
     parameters.locomotion_joint_kd.isApprox(
-      Vec3<float>(4.9F, 4.9F, 4.9F)));
+      Vec3<float>(4.7F, 4.9F, 4.8F)));
 }
 
 // 所有会被写进 command.kp_joint/kd_joint、最终原样下发给 DM 电机的增益，
@@ -192,13 +454,18 @@ TEST(Dm1Contract, UnsafeLocomotionLatchesBalanceStandWithoutRerunningController)
   EXPECT_TRUE(leg_controller.commands[0].position_desired.isConstant(0.123F));
 }
 
-TEST(Dm1Contract, BalanceStandUsesRawWbcFeedforward)
+TEST(Dm1Contract, BalanceStandUsesZeroVelocityStandingMpcAndRawWbcFeedforward)
 {
   test_support::FsmContext context(0.002F);
   ASSERT_TRUE(context.initialized);
   context.parameters.start_in_prone_home = false;
   context.estimate.position_world.z() = 0.32F;
+  context.estimate.velocity_world.x() = 0.08F;
   context.desired_state.body_position_world.z() = 0.32F;
+  // 站立必须忽略遗留行走速度；实测漂移则由 MPC 反力制动。
+  context.desired_state.body_velocity_world << 0.3F, 0.2F, 0.1F;
+  context.desired_state.body_acceleration_world.setConstant(0.2F);
+  context.desired_state.body_angular_velocity.setConstant(0.1F);
   for (auto & joint : context.joint_states) {
     joint.valid = true;
     ASSERT_TRUE(context.leg_controller.updateData(joint));
@@ -213,26 +480,61 @@ TEST(Dm1Contract, BalanceStandUsesRawWbcFeedforward)
   reference.setFloatingBaseWeight(parameters.balance_floating_base_weight);
   reference.setReactionForceWeight(parameters.balance_reaction_force_weight);
   reference.setMaxNormalForce(parameters.maximum_normal_force);
-  LocomotionCtrlData<float> input;
-  input.pBody_des = context.desired_state.body_position_world;
-  input.contact_state.setOnes();
+  mpc::SolverSettings<float> settings;
+  settings.time_step = 0.05F;
+  mpc::ConvexMPCLocomotion<float> planner(context.quadruped, 0.002F, 20, settings, 25);
+  planner.initialize();
+  planner.setGait(GaitType::STAND);
+  planner.setVelocityCommand(0.0F, 0.0F, 0.0F);
+  auto desired = context.desired_state;
+  desired.body_velocity_world.setZero();
+  desired.body_acceleration_world.setZero();
+  desired.body_angular_velocity.setZero();
+  std::array<Vec3<float>, kNumLegs> feet_world{};
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    input.Fr_des[leg].z() = parameters.standing_supported_mass * 9.81F / 4.0F;
+    feet_world[leg] = context.estimate.position_world +
+      context.estimate.rotation_world_from_body *
+      (context.quadruped.hipLocation(static_cast<LegId>(leg)) +
+      context.leg_controller.datas[leg].p);
   }
-  ASSERT_TRUE(reference.run(&input, context.estimate, context.joint_states));
-  const auto expected = reference.result().joint_torque;
-
   FSM_State_BalanceStand<float> standing(&context.data());
   standing.onEnter();
-  standing.run();
-  ASSERT_TRUE(context.leg_controller.command(LegId::FR).enabled);
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    EXPECT_TRUE(context.leg_controller.commands[leg].torque_feedforward.isApprox(
-        expected.segment<3>(static_cast<Eigen::Index>(3 * leg)), 1.0e-5F));
+  std::size_t updates = 0;
+  for (int frame = 0; frame < 50; ++frame) {
+    const auto result = planner.run(context.estimate, desired, feet_world);
+    ASSERT_TRUE(result.valid);
+    if (result.mpc_updated) {++updates;}
+    EXPECT_TRUE(result.command.body_velocity_world.isZero());
+    EXPECT_TRUE(result.command.body_angular_velocity.isZero());
+    LocomotionCtrlData<float> input;
+    input.pBody_des = result.command.body_position_world;
+    input.pBody_RPY_des = result.command.body_rpy;
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      ASSERT_TRUE(result.contact_state[leg]);
+      EXPECT_FLOAT_EQ(result.swing_time[leg], 0.0F);
+      input.contact_state[leg] = 1.0F;
+      input.Fr_des[leg] = result.reaction_forces_world[leg];
+    }
+    if (frame == 0) {
+      EXPECT_GT(std::abs(input.Fr_des[0].x()), 0.01F);
+    }
+    ASSERT_TRUE(reference.run(&input, context.estimate, context.joint_states));
+    const auto expected = reference.result().joint_torque;
+    standing.run();
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      ASSERT_TRUE(context.leg_controller.command(static_cast<LegId>(leg)).enabled);
+      EXPECT_TRUE(context.leg_controller.commands[leg].torque_feedforward.isApprox(
+          expected.segment<3>(static_cast<Eigen::Index>(3 * leg)), 1.0e-5F));
+      EXPECT_TRUE(context.leg_controller.commands[leg].kp_joint.isApprox(
+          parameters.balance_joint_kp));
+      EXPECT_TRUE(context.leg_controller.commands[leg].kd_joint.isApprox(
+          parameters.balance_joint_kd));
+    }
   }
+  EXPECT_EQ(updates, 3U);
 }
 
-TEST(Dm1Contract, LocomotionFirstCommandDoesNotDependOnPreviousStandingCommand)
+TEST(Dm1Contract, LocomotionFirstCommandIgnoresDisabledPreviousCommands)
 {
   const auto model = makeQuadruped<float>(RobotType::DM1);
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
@@ -283,6 +585,83 @@ TEST(Dm1Contract, LocomotionFirstCommandDoesNotDependOnPreviousStandingCommand)
     EXPECT_TRUE(first[leg].kp_joint.isApprox(second[leg].kp_joint));
     EXPECT_TRUE(first[leg].kd_joint.isApprox(second[leg].kd_joint));
     EXPECT_GT(first[leg].torque_feedforward.norm(), 1.0F);
+  }
+}
+
+TEST(Dm1Contract, ClassicEntryPreservesTotalTorqueAndReleasesStandingCommand)
+{
+  for (const auto gait : {GaitType::STAND, GaitType::TROT, GaitType::TROT_WALK}) {
+    test_support::FsmContext actual(0.002F), reference(0.002F);
+    for (auto * context : {&actual, &reference}) {
+      context->parameters.start_in_prone_home = false;
+      context->estimate.position_world.z() = 0.32F;
+      context->estimate.rpy.y() = -0.035F;
+      context->estimate.orientation_world_from_body =
+        Eigen::AngleAxisf(-0.035F, Vec3<float>::UnitY());
+      context->estimate.rotation_world_from_body =
+        context->estimate.orientation_world_from_body.toRotationMatrix();
+      context->desired_state.body_position_world.z() = 0.32F;
+      for (auto & joint : context->joint_states) {
+        joint.valid = true;
+        joint.position[1] -= 0.015F;
+        joint.position[2] -= 0.025F;
+        joint.velocity << 0.01F, -0.02F, 0.03F;
+        ASSERT_TRUE(context->leg_controller.updateData(joint));
+      }
+      FSM_State_BalanceStand<float> standing(&context->data());
+      standing.onEnter();
+      standing.run();
+      ASSERT_TRUE(context->leg_controller.legsEnabled());
+      context->desired_state.mode = ControlMode::Locomotion;
+      context->data().locomotion_gait = gait;
+    }
+    std::array<JointCommand<float>, kNumLegs> entry;
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      entry[leg] = actual.leg_controller.command(static_cast<LegId>(leg));
+      ASSERT_TRUE(entry[leg].enabled);
+    }
+    reference.leg_controller.setEnabled(false);
+    reference.data().locomotion_gait = GaitType::STAND;
+    FSM_State_Locomotion<float> transitioning(&actual.data()), raw(&reference.data());
+    transitioning.onEnter();
+    raw.onEnter();
+    const auto torque = [](const JointCommand<float> & command,
+        const JointState<float> & feedback) -> Vec3<float> {
+        return command.torque_feedforward +
+               command.kp.cwiseProduct(command.position_desired - feedback.position) +
+               command.kd.cwiseProduct(command.velocity_desired - feedback.velocity);
+      };
+    for (int frame = 0; frame <= 130; ++frame) {
+      if (frame == 101) {reference.data().locomotion_gait = gait;}
+      actual.gait_scheduler.step();
+      reference.gait_scheduler.step();
+      transitioning.run();
+      raw.run();
+      const float progress = std::min(frame * 0.002F / 0.2F, 1.0F);
+      const float alpha = progress * progress * (3.0F - 2.0F * progress);
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        const auto command = actual.leg_controller.command(static_cast<LegId>(leg));
+        const auto target = reference.leg_controller.command(static_cast<LegId>(leg));
+        ASSERT_TRUE(command.enabled);
+        ASSERT_TRUE(target.enabled);
+        const auto & feedback = actual.joint_states[leg];
+        const Vec3<float> expected = (1.0F - alpha) * torque(entry[leg], feedback) +
+          alpha * torque(target, feedback);
+        EXPECT_LT((torque(command, feedback) - expected).cwiseAbs().maxCoeff(), 2.0e-4F);
+        if (frame == 0) {
+          EXPECT_TRUE(command.position_desired.isApprox(entry[leg].position_desired));
+          EXPECT_TRUE(command.kp.isApprox(entry[leg].kp));
+          EXPECT_TRUE(command.kd.isApprox(entry[leg].kd));
+          EXPECT_TRUE(command.torque_feedforward.isApprox(entry[leg].torque_feedforward));
+        }
+        if (frame == 130) {
+          EXPECT_TRUE(command.position_desired.isApprox(target.position_desired));
+          EXPECT_TRUE(command.kp.isApprox(target.kp));
+          EXPECT_TRUE(command.kd.isApprox(target.kd));
+          EXPECT_TRUE(command.torque_feedforward.isApprox(target.torque_feedforward));
+        }
+      }
+    }
   }
 }
 

@@ -9,6 +9,10 @@
 #ifndef MYMIT_ROBOT_MODEL_ROBOTS_DM1_HPP_
 #define MYMIT_ROBOT_MODEL_ROBOTS_DM1_HPP_
 
+#include <algorithm>
+#include <cmath>
+#include <eigen3/Eigen/Geometry>
+
 #include "model/quadruped.hpp"
 
 namespace robots
@@ -17,27 +21,27 @@ namespace dm1
 {
 
 template<typename T>
-JointModelParameters<T> makeJointParameters(bool is_rear)
+JointModelParameters<T> makeJointParameters(bool /*is_rear*/)
 {
   JointModelParameters<T> result;
-  // Home 是正常站姿沿竖直方向降到底的深蹲：HAA 保持中立，膝关节完全
-  // 折叠；大腿角使小腿中心线平行地面，不再只有球形足端承担接触。
   // q 是电机/策略坐标；机械动力学模型通过 zero_offset 还原安装零位。
   // DM1 机械趴姿为 12 个电机角全零；控制器通过 zero_offset 还原机械角。
   // 这些零偏和执行边界与 Isaac 训练 DM1 配置保持一致；固定安装旋转
   // 由 MJCF body quaternion 表达，解析运动学只保留训练侧的关节偏置。
   const T thigh_zero_offset = T(-0.203);
   result.zero_offset << T(0), thigh_zero_offset, T(-2.22);
-  result.lower_limit << T(-1.57), T(-1.57) - thigh_zero_offset, T(-0.03);
-  result.upper_limit << T(1.57), T(2.4) - thigh_zero_offset, T(2.72);
+  // 电机坐标边界使用与 MIT 校验相同的规范值，避免零偏浮点运算造成整帧拒绝。
+  result.lower_limit << T(-1.57), T(-1.367), T(-0.03);
+  result.upper_limit << T(1.57), T(2.603), T(2.72);
   result.velocity_limit << T(6.28318530718), T(6.28318530718), T(6.28318530718);
   result.torque_limit << T(97), T(97), T(97);
   result.damping.setConstant(T(1));
   result.friction_loss.setConstant(T(0.1));
   result.armature.setConstant(T(0.01));
-  // 站姿电机角：将膝关节参数设为 0.32 m 调试高度；前后腿使用同一高度。
+  // 0.32 m 足底站姿：侧视大小腿中心线对水平的倾角均约 34.137 度。
+  // 安装零偏和小腿连杆方向不同，因此电机读数不相等。
   result.home_position <<
-    T(0), T(-0.597), T(1.004);
+    T(0), T(-0.392804), T(0.959416);
   result.joint_axes.col(0) = Vec3<T>::UnitX();
   result.joint_axes.col(1) = Vec3<T>::UnitY();
   result.joint_axes.col(2) = Vec3<T>::UnitY();
@@ -89,6 +93,24 @@ LegModelParameters<T> makeLeg(LegId leg_id, bool is_left, bool is_rear)
     T(0.270521), Vec3<T>(T(-0.010235), T(0.000248), T(-0.054204)),
     T(0.000977), T(0.005321), T(0.004367));
   return result;
+}
+
+// 名义 0.32 m 站姿的固定软件角度范围；机械硬限位与标定保持原值。
+// 大腿下界阻止膝部继续下压，上界配合小腿上界避开小腿竖直姿态。
+constexpr double kKneeEnvelopeRadius = 0.080;
+constexpr double kMinimumKneeClearance = 0.020;
+constexpr double kStanceThighLower = -0.40;
+constexpr double kStanceThighUpper = -0.10;
+constexpr double kStanceCalfLower = -0.03;
+constexpr double kStanceCalfUpper = 1.20;
+
+template<typename T>
+bool clampStanceJointTarget(Vec3<T> & q)
+{
+  if (!q.allFinite()) {return false;}
+  q[1] = std::clamp(q[1], T(kStanceThighLower), T(kStanceThighUpper));
+  q[2] = std::clamp(q[2], T(kStanceCalfLower), T(kStanceCalfUpper));
+  return true;
 }
 
 /** @brief 创建完整 DM1 参数模型。 */

@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "model/robots/dm1.hpp"
+
 namespace
 {
 constexpr std::array<LegId, kNumLegs> kLegOrder{
@@ -489,6 +491,7 @@ void RobotRunner::reset()
   motion_start_hold_release_pending_ = false;
   joint_initialization_start_time_ = 0.0F;
   standing_height_command_initialized_ = false;
+  stance_joint_limits_armed_ = false;
   desired_state_initialized_ = false;
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
@@ -627,6 +630,28 @@ void RobotRunner::holdMotionStartPosture()
 //从 LegController 生成四条腿最终输出命令。
 bool RobotRunner::collectJointCommands()
 {
+  const auto state = control_fsm_->currentStateName();
+  if (standing_height_target_ <= 0.33F && state == FSM_StateName::BALANCE_STAND &&
+    state_estimate_.position_world.z() >= 0.30F)
+  {stance_joint_limits_armed_ = true;}
+  // 固定软件角度限位只用于 1 站立与 3 四足零速站立。
+  if (stance_joint_limits_armed_ && standing_height_target_ <= 0.33F &&
+    !prone_down_active_ && leg_controller_.legsEnabled() &&
+    ((state == FSM_StateName::BALANCE_STAND &&
+      !control_fsm_->data.rl_entry_posture_active) ||
+    (state == FSM_StateName::LOCOMOTION &&
+      control_fsm_->data.locomotion_gait == GaitType::STAND)))
+  {
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      auto & command = leg_controller_.commands[leg];
+      const Vec3<float> original = command.position_desired;
+      if (!robots::dm1::clampStanceJointTarget(command.position_desired))
+      {disableCommands(); return false;}
+      if (!command.position_desired.isApprox(original, 1e-6F)) {
+        command.velocity_desired.setZero();
+      }
+    }
+  }
   bool commands_valid = true;
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     /*调用 LegController::command()：

@@ -19,6 +19,17 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
   }
   this->turnOnAllSafetyChecks();
   this->checkPDesFoot = false;
+  // 与行走保持一致：MPC 每 40 ms 求解，预测接触表每段 50 ms。
+  const auto mpc_interval = static_cast<std::size_t>(std::max(
+      T(1), std::round(T(0.04) / control_fsm_data->control_time_step)));
+  const auto gait_segment_interval = static_cast<std::size_t>(std::max(
+      T(1), std::round(T(0.05) / control_fsm_data->control_time_step)));
+  mpc::SolverSettings<T> solver_settings;
+  solver_settings.time_step =
+    control_fsm_data->control_time_step * static_cast<T>(gait_segment_interval);
+  mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
+    *control_fsm_data->quadruped, control_fsm_data->control_time_step,
+    mpc_interval, solver_settings, gait_segment_interval);
   //创建WBC
   wbc_ctrl_ = std::make_unique<LocomotionCtrl<T>>(
     model::makeFloatingBaseModel(*control_fsm_data->quadruped));
@@ -43,6 +54,9 @@ void FSM_State_BalanceStand<T>::onEnter()
   this->transitionData.zero();
   //请求站立步态
   this->_data->gait_scheduler->requestGait(GaitType::STAND);
+  mpc_->initialize();
+  mpc_->setGait(GaitType::STAND);
+  mpc_->setVelocityCommand(T(0), T(0), T(0));
 
   // 进入状态时锁定当前水平位置和姿态，避免突然跳到世界原点。
   //这样子就到导致了步行时刻突然切换站立直接翻到
@@ -60,7 +74,6 @@ void FSM_State_BalanceStand<T>::onEnter()
   // 世界航向沿用进入状态时的实测值，但站立目标始终保持机身水平。不能把
   // 切换瞬间的 roll/pitch 锁存为目标，否则已有倾斜会被 WBC 永久维持。
   initial_body_rpy_ << T(0), T(0), this->_data->state_estimate->rpy.z();
-  body_weight_ = this->_data->control_parameters->standing_supported_mass * T(9.81);
   posture_ramp_iteration_ = 0;
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     entry_foot_positions_[leg] = this->_data->leg_controller->datas[leg].p;
@@ -129,9 +142,6 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
   if (desired.valid) {
     wbc_data_.pBody_des = desired.body_position_world;
     wbc_data_.pBody_RPY_des = desired.body_rpy;
-    wbc_data_.vBody_des = desired.body_velocity_world;
-    wbc_data_.aBody_des = desired.body_acceleration_world;
-    wbc_data_.vBody_Ori_des = desired.body_angular_velocity;
   }
   // 额外限制单周期下降量，防止高度滑块快速下拉造成腿部瞬时折叠。
   // 参数2 高度变化率
@@ -145,16 +155,41 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
   }
   last_height_command_ = wbc_data_.pBody_des.z();
 
-  // 静态站立时先把体重平均分配给四只脚，WBIC 会在动力学约束下修正它。
+  DesiredState<T> standing_command = desired;
+  standing_command.valid = true;
+  standing_command.body_position_world = wbc_data_.pBody_des;
+  standing_command.body_rpy = wbc_data_.pBody_RPY_des;
+  standing_command.body_velocity_world.setZero();
+  standing_command.body_acceleration_world.setZero();
+  standing_command.body_angular_velocity.setZero();
+  std::array<Vec3<T>, kNumLegs> feet_world{};
+  const auto & estimate = *this->_data->state_estimate;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    feet_world[leg] = estimate.position_world + estimate.rotation_world_from_body *
+      (this->_data->quadruped->hipLocation(static_cast<LegId>(leg)) +
+      this->_data->leg_controller->datas[leg].p);
+  }
+  const auto result = mpc_->run(estimate, standing_command, feet_world);
+  if (!result.valid) {
+    std::fprintf(stderr,
+      "[FSM][BALANCE_STAND] MPC 求解无效，iteration=%zu。\n", iteration_);
+    return;
+  }
+  wbc_data_.pBody_des = result.command.body_position_world;
+  wbc_data_.pBody_RPY_des = result.command.body_rpy;
+  wbc_data_.vBody_des = result.command.body_velocity_world;
+  wbc_data_.aBody_des = result.command.body_acceleration_world;
+  wbc_data_.vBody_Ori_des = result.command.body_angular_velocity;
+  // STAND 接触表始终四腿支撑；期望反力由 MPC 求解，WBIC 再修正。
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     // 足端目标必须从入场时的实测腿坐标开始；清零会把目标瞬间移到髋部，
     // 在状态切换帧给 WBC 施加不必要的腿部冲击。
     wbc_data_.pFoot_des[leg] = entry_foot_positions_[leg];
     wbc_data_.vFoot_des[leg].setZero();
     wbc_data_.aFoot_des[leg].setZero();
-    wbc_data_.Fr_des[leg] = Vec3<T>(T(0), T(0), body_weight_ / T(4));
+    wbc_data_.Fr_des[leg] = result.reaction_forces_world[leg];
     //标记为接触腿
-    wbc_data_.contact_state[leg] = T(1);
+    wbc_data_.contact_state[leg] = result.contact_state[leg] ? T(1) : T(0);
   }
   //调用WBC
   /*&wbc_data_ 机身想去哪里；机身想保持什么姿态；四只脚是否接触；期望反力是多少。*/

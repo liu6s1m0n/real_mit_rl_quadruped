@@ -16,6 +16,15 @@
 /ros2_ws/screenshot*.png
 /MUJOCO_LOG.TXT
 /symlink_install_manifest.txt
+/ros2_ws/symlink_install_manifest.txt
+
+# 本地实机/仿真诊断及原始输出，不进入代码提交
+/dm1_diagnostics/
+/ros2_ws/dm1_diagnostics/
+*.csv
+*.scv
+*.log
+*.log.*
 
 # CMake 和编译产物
 **/CMakeCache.txt

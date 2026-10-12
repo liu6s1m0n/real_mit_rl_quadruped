@@ -11,9 +11,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <deque>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <stdexcept>
 #include <thread>
@@ -74,10 +76,13 @@ void reportMotorFaults(const dm1_hardware::HardwareSample & sample)
 
 bool publishCommands(
   dm1_hardware::Dm1MitInterface & mit, dm1_hardware::PeriodicMitSender & sender,
-  const dm1_hardware::Dm1MitInterface::CommandArray & commands, double now_s)
+  const dm1_hardware::Dm1MitInterface::CommandArray & commands, double now_s,
+  dm1_hardware::PeriodicMitSender::Frames * published = nullptr)
 {
   dm1_hardware::PeriodicMitSender::Frames frames{};
-  return mit.prepareFrames(commands, now_s, frames) && sender.publish(frames);
+  if (!mit.prepareFrames(commands, now_s, frames) || !sender.publish(frames)) {return false;}
+  if (published) {*published = frames;}
+  return true;
 }
 
 void reportSendFailures(const dm1_hardware::PeriodicMitSender & sender)
@@ -179,9 +184,18 @@ int HardwareBridge::runKeyboardControl(
   // q（实际位置）、q_des（期望位置）和 tau（反馈力矩），用于步态分析。
   std::time_t log_ts = std::time(nullptr);
   char log_name[128];
-  std::strftime(log_name, sizeof(log_name),
-    "/tmp/dm1_march_%Y%m%d_%H%M%S.csv", std::localtime(&log_ts));
-  std::ofstream csv_log(log_name);
+  std::strftime(log_name, sizeof(log_name), "dm1_march_%Y%m%d_%H%M%S", std::localtime(&log_ts));
+  const char * configured_log_dir = std::getenv("DM1_LOG_DIR");
+  const std::filesystem::path log_dir(configured_log_dir ? configured_log_dir : "dm1_diagnostics/real_tests");
+  std::error_code log_error;
+  std::filesystem::create_directories(log_dir, log_error);
+  const auto log_path = log_dir / (std::string(log_name) + "_" +
+    std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".csv");
+  std::ofstream csv_log;
+  if (!log_error) {csv_log.open(log_path);}
+  if (!csv_log.is_open()) {
+    imu_log::print(imu_log::Level::Error, "诊断 CSV 无法写入 %s；仅报错。\n", log_path.c_str());
+  }
   if (csv_log.is_open()) {
     csv_log << "t_s,fsm,body_roll,body_pitch,body_yaw,body_z";
     for (const auto * leg : {"FR", "FL", "RR", "RL"}) {
@@ -190,10 +204,14 @@ int HardwareBridge::runKeyboardControl(
     for (const auto * name : kJointNames) {
       csv_log << ',' << name << "_q," << name << "_q_des," << name << "_tau,"
               << name << "_dq," << name << "_dq_des," << name << "_ff,"
-              << name << "_kp," << name << "_kd";
+              << name << "_kp," << name << "_kd," << name << "_tau_pos,"
+              << name << "_tau_vel," << name << "_tau_total," << name << "_q_published,"
+              << name << "_dq_published," << name << "_ff_published,"
+              << name << "_kp_published," << name << "_kd_published";
     }
-    csv_log << '\n';
-    imu_log::print(imu_log::Level::Info, "关节数据记录到 %s\n", log_name);
+    csv_log << ",publish_attempted,publish_ok,published_valid,published_age_s,tx_failed_frames,"
+            << "imu_qw,imu_qx,imu_qy,imu_qz,imu_ax,imu_ay,imu_az,model_body_z_contact\n";
+    imu_log::print(imu_log::Level::Info, "关节数据记录到 %s（published 表示已入发送队列，不代表电机执行确认）\n", log_path.c_str());
   }
   // 打开 CAN 并不代表物理电机已经失能；接受键盘输入前先建立失效安全状态。
   hardware_.disableAll();
@@ -208,6 +226,8 @@ int HardwareBridge::runKeyboardControl(
   bool control_active = false;
   bool stand_up_pending = false;
   dm1_hardware::PeriodicMitSender sender(hardware_, stop_requested);
+  dm1_hardware::PeriodicMitSender::Frames published_frames{};
+  double last_published_s = -1.0;
   bool keyboard_fault_reported = false;
   auto next_cycle = std::chrono::steady_clock::now();
   const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -231,7 +251,7 @@ int HardwareBridge::runKeyboardControl(
   imu_log::print(
     imu_log::Level::Info,
     "键盘控制已启动：电机初始处于锁定状态。按 Shift+U/0 使能/失能，1 站立，"
-    "2 原地小跑，P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
+    "2 原地踏步，3 四脚零速度诊断（禁止摆腿），P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
 
   while (!stop_requested.load()) {
     reportSendFailures(sender);
@@ -256,7 +276,7 @@ int HardwareBridge::runKeyboardControl(
     if (arbiter.takeHelpRequest()) {
       imu_log::print(
         imu_log::Level::Info,
-        "按键：Shift+U 使能，0 失能，1 站立，2 原地小跑（TROT 0.5 s/50% 支撑），"
+        "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，3 四脚零速度诊断（阶段①，不摆腿），"
         "P 趴下，W/S 前进/后退，A/D 左移/右移，Q/E 旋转，"
         "空格停止，Esc 退出，H 帮助。\n");
     }
@@ -278,6 +298,7 @@ int HardwareBridge::runKeyboardControl(
       control_active = false;
       stand_up_pending = false;
       sender.pause();
+      last_published_s = -1.0;
     }
 
     dm1_hardware::HardwareSample sample;
@@ -375,10 +396,12 @@ int HardwareBridge::runKeyboardControl(
         const auto velocity = teleop::velocityForMotion(arbiter.motion());
         runner_.setLocomotionVelocityCommand(
           velocity.forward, velocity.lateral, velocity.yaw);
-        // 2 号原地踏步保留 TROT 请求；行走状态统一执行 TROT_WALK（0.5 s，支撑 60%、摆动 40%）。
+        // 2 号踏步保留原控制；3 号仅改变接触计划，复用踏步 MPC/WBC。
         GaitType gait = GaitType::TROT_WALK;
         if (arbiter.motion() == teleop::Motion::MarchInPlace) {
           gait = GaitType::TROT;
+        } else if (arbiter.motion() == teleop::Motion::FourContactDiagnostic) {
+          gait = GaitType::STAND;
         }
         runner_.setLocomotionGait(gait);
         runner_.setControlMode(ControlMode::Locomotion);
@@ -427,9 +450,12 @@ int HardwareBridge::runKeyboardControl(
       std::this_thread::sleep_until(next_cycle);
       continue;
     }
-    if (control_active && arbiter.state() == teleop::MotorOutputState::Enabled &&
-      output_enabled && !publishCommands(mit_, sender, runner_.jointCommands(), now_s))
-    {
+    const bool publish_attempted = control_active &&
+      arbiter.state() == teleop::MotorOutputState::Enabled && output_enabled;
+    const bool publish_ok = publish_attempted &&
+      publishCommands(mit_, sender, runner_.jointCommands(), now_s, &published_frames);
+    if (publish_ok) {last_published_s = now_s;}
+    if (publish_attempted && !publish_ok) {
       report_control_failure("MIT命令校验/发布失败");
     }
     // 每个控制周期写一行 CSV：12 个关节的实际位置、期望位置和反馈力矩。
@@ -437,11 +463,12 @@ int HardwareBridge::runKeyboardControl(
       options_.control_observer(runner_);
     }
     if (control_active && csv_log.is_open()) {
-      csv_log << std::fixed << std::setprecision(4) << now_s
+      csv_log << std::fixed << std::setprecision(9) << now_s
               << ',' << fsmStateLabel(runner_.currentStateName());
       const auto & estimate = runner_.stateEstimate();
       csv_log << ',' << estimate.rpy.x() << ',' << estimate.rpy.y()
               << ',' << estimate.rpy.z() << ',' << estimate.position_world.z();
+      float model_body_z = 0.0F;
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         const auto leg_id = static_cast<LegId>(leg);
         Vec3<float> foot_from_hip;
@@ -450,6 +477,9 @@ int HardwareBridge::runKeyboardControl(
         csv_log << ',' << (estimate.position_world +
           estimate.rotation_world_from_body *
           (runner_.quadruped().hipLocation(leg_id) + foot_from_hip)).z();
+        model_body_z += (runner_.quadruped().leg(leg_id).foot_radius -
+          (estimate.rotation_world_from_body *
+          (runner_.quadruped().hipLocation(leg_id) + foot_from_hip)).z()) / kNumLegs;
       }
       const auto & cmds = runner_.jointCommands();
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
@@ -465,9 +495,29 @@ int HardwareBridge::runKeyboardControl(
                   << ',' << cmds[leg].velocity_desired[ji]
                   << ',' << cmds[leg].torque_feedforward[ji]
                   << ',' << cmds[leg].kp[ji] << ',' << cmds[leg].kd[ji];
+          const float tau_pos = cmds[leg].kp[ji] * (q_des - q);
+          const float tau_vel = cmds[leg].kd[ji] * (cmds[leg].velocity_desired[ji] - log_js[leg].velocity[ji]);
+          csv_log << ',' << tau_pos << ',' << tau_vel << ',' << (tau_pos + tau_vel + cmds[leg].torque_feedforward[ji]);
+          // prepareFrames 按关节交错 FR/RR/FL/RL；此排列也是其逆排列。
+          constexpr std::array<std::size_t, kNumLegs> frame_leg_order{0, 2, 1, 3};
+          const auto & frame = published_frames[joint * kNumLegs + frame_leg_order[leg]];
+          const auto & calibration = calibration_[idx];
+          const float published_q = calibration.direction * (frame.position - calibration.zero_position);
+          for (const float value : {published_q, calibration.direction * frame.velocity,
+            calibration.direction * frame.torque, frame.kp, frame.kd})
+          {
+            csv_log << ',' << (last_published_s >= 0 ? value : std::nanf(""));
+          }
         }
       }
-      csv_log << '\n';
+      const auto & imu = sample.imu;
+      csv_log << ',' << publish_attempted << ',' << publish_ok << ',' << (last_published_s >= 0)
+              << ',' << (last_published_s >= 0 ? now_s - last_published_s : std::nan(""))
+              << ',' << sender.failedFrames() << ',' << imu.orientation_world_from_body.w()
+              << ',' << imu.orientation_world_from_body.x() << ',' << imu.orientation_world_from_body.y()
+              << ',' << imu.orientation_world_from_body.z() << ',' << imu.acceleration_body.transpose().format(Eigen::IOFormat(Eigen::StreamPrecision, 0, ",", ","))
+              << ',' << model_body_z << '\n';
+      if (motor_frame_phase % 50 == 0) {csv_log.flush();}
     }
     const auto finished = std::chrono::steady_clock::now();
     if (finished > next_cycle) {

@@ -27,8 +27,14 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   EXPECT_FLOAT_EQ(march_velocity.lateral, 0.0F);
   EXPECT_FLOAT_EQ(march_velocity.yaw, 0.0F);
 
-  // 80% 原地步态已撤下，3 不再产生操作命令。
-  EXPECT_FALSE(teleop::decodeKey('3').has_value());
+  const auto diagnostic = teleop::decodeKey('3');
+  ASSERT_TRUE(diagnostic.has_value());
+  EXPECT_EQ(diagnostic->type, CommandType::Motion);
+  EXPECT_EQ(diagnostic->motion, teleop::Motion::FourContactDiagnostic);
+  const auto diagnostic_velocity = teleop::velocityForMotion(diagnostic->motion);
+  EXPECT_FLOAT_EQ(diagnostic_velocity.forward, 0.0F);
+  EXPECT_FLOAT_EQ(diagnostic_velocity.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(diagnostic_velocity.yaw, 0.0F);
 
   const auto prone_down = teleop::decodeKey('P');
   ASSERT_TRUE(prone_down.has_value());

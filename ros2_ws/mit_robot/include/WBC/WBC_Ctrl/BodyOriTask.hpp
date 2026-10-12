@@ -58,7 +58,8 @@ private:
   static void validateGain(const Vec3<T> & gain);
 
   const FloatingBaseModel<T> * model_;  ///< 非拥有型浮动基模型指针。
-  Vec3<T> kp_kinematic_ = Vec3<T>::Ones();       ///< 运动学姿态误差增益。
+  // 所有共享 WBC 调用者统一减弱姿态位置修正；动力学 Kp/Kd 独立设置。
+  Vec3<T> kp_kinematic_ = Vec3<T>::Constant(T(0.25)); ///< 运动学姿态误差增益。
   Vec3<T> kp_ = Vec3<T>::Constant(T(50));        ///< 姿态比例增益。
   Vec3<T> kd_ = Vec3<T>::Ones();                 ///< 角速度微分增益。
 };

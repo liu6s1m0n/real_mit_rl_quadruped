@@ -210,6 +210,7 @@ private:
   bool motion_start_hold_release_pending_ = false;
   /*是否已经根据当前估计高度初始化过高度命令*/
   bool standing_height_command_initialized_ = false;
+  bool stance_joint_limits_armed_ = false;
   /*是否已经建立首次闭环期望状态*/
   bool desired_state_initialized_ = false;
   bool rl_posture_transition_pending_ = false;

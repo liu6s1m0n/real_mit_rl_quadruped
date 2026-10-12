@@ -72,6 +72,7 @@ protected:
       case GLFW_KEY_0: decoded = '0'; break;
       case GLFW_KEY_1: decoded = '1'; break;
       case GLFW_KEY_2: decoded = '2'; break;
+      case GLFW_KEY_3: decoded = '3'; break;
       case GLFW_KEY_W: decoded = 'W'; break;
       case GLFW_KEY_S: decoded = 'S'; break;
       case GLFW_KEY_A: decoded = 'A'; break;
@@ -577,7 +578,7 @@ void runPhysics(
       arbiter.expireMotion(std::chrono::steady_clock::now());
       if (arbiter.takeHelpRequest()) {
         std::printf(
-          "Keys: U enable, 0 disable, 1 stand, 2 march TROT, "
+          "Keys: U enable, 0 disable, 1 stand, 2 march, 3 four-contact diagnostic, "
           "P prone down, W/S forward/back, A/D left/right, "
           "Q/E rotate, Space stop, Esc exit, H help\n");
       }
@@ -643,6 +644,9 @@ void runPhysics(
           if (motion == teleop::Motion::MarchInPlace) {
             walking_mode = ControlMode::Locomotion;
             gait = GaitType::TROT;
+          } else if (motion == teleop::Motion::FourContactDiagnostic) {
+            walking_mode = ControlMode::Locomotion;
+            gait = GaitType::STAND;
           }
           runner.setLocomotionGait(gait);
           runner.setControlMode(walking_mode);

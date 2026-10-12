@@ -45,6 +45,8 @@ enum class Motion : std::uint8_t
   RotateClockwise,
   /// 原地对角小跑：实际执行 TROT_WALK，周期 0.5 s、支撑 60%、摆动 40%，FR+RL 与 FL+RR 交替抬起。
   MarchInPlace,
+  /// 四脚接触、零速度、不摆腿；使用踏步 MPC/WBC 的阶段①诊断。
+  FourContactDiagnostic,
 };
 
 struct VelocityCommand

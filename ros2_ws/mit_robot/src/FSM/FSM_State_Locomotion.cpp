@@ -71,8 +71,17 @@ void FSM_State_Locomotion<T>::onEnter()
   rl_policy_counter_ = 0;
   safety_fallback_transition_ = false;
   prev_joint_target_initialized_ = false;
-  /*步态由 ControlFSMData::locomotion_gait 选择；经典运动统一落到
-    TROT_WALK（60% 支撑，0.5 s 周期），保留四足重叠换载区。
+  entry_transition_time_ = T(0);
+  auto & controller = *this->_data->leg_controller;
+  entry_transition_active_ = !isRlMode() && controller.legsEnabled();
+  for (std::size_t leg = 0; leg < kNumLegs && entry_transition_active_; ++leg) {
+    entry_joint_commands_[leg] = controller.command(static_cast<LegId>(leg));
+    entry_transition_active_ = entry_joint_commands_[leg].enabled;
+    prev_joint_position_desired_[leg] = entry_joint_commands_[leg].position_desired;
+  }
+  prev_joint_target_initialized_ = entry_transition_active_;
+  /*步态由 ControlFSMData::locomotion_gait 选择；3 号入口请求 STAND
+    做四脚接触诊断，踏步和方向运动保留 TROT_WALK（60% 支撑，0.5 s 周期）。
     MPC 与 GaitScheduler 必须同时设置：只改一个就会出现"MPC 认为后腿支撑、
     GaitScheduler 认为后腿摆动"的错相，导致 WBC 约束错误、足端轨迹漂移。*/
   applyRequestedGait(true);
@@ -82,7 +91,9 @@ void FSM_State_Locomotion<T>::onEnter()
 template<typename T>
 void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
 {
-  const GaitType requested = this->_data->locomotion_gait;
+  // 承重交接时四脚保持支撑，避免旧站立命令作用于已被规划为摆动的腿。
+  const GaitType requested = entry_transition_active_ ?
+    GaitType::STAND : this->_data->locomotion_gait;
   if (!force && gait_applied_ && requested == applied_gait_) {return;}
   // 中途换步态：MPC 的相位由内部周期计数换算，而 GaitScheduler 换步态时会把
   // 相位重置到各自的 phase_offset。这里把 MPC 一起归零，两者才不会错相。
@@ -90,10 +101,16 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   if (switching) {mpc_->initialize();}
   applied_gait_ = requested;
   gait_applied_ = true;
-  // 实机经典步态统一使用带四足重叠区的 60% 支撑率。外部保留 TROT 请求
-  // 兼容现有按键/API，但不再进入无承重余量的 50% 支撑分支。
-  mpc_->setGait(GaitType::TROT_WALK);
-  this->_data->gait_scheduler->requestGait(GaitType::TROT_WALK);
+  // STAND 是 3 号四脚诊断入口：本轮仅运行阶段①，保持全部接触。
+  // MPC 和 WBC 求解、关节目标及 PD 均沿用踏步控制，不自动进入换载/摆腿。
+  const GaitType effective = requested == GaitType::STAND ?
+    GaitType::STAND : GaitType::TROT_WALK;
+  mpc_->setGait(effective);
+  this->_data->gait_scheduler->requestGait(effective);
+  if (this->_data->locomotion_gait == GaitType::STAND) {
+    std::fprintf(stderr,
+      "[FSM][MARCH-DIAGNOSTIC] stage=1 zero_velocity=true planned_contacts=4 swing=false；四脚控制诊断，不自动换载。\n");
+  }
 }
 
 /*每个控制周期直接执行一次完整行走控制。*/
@@ -107,7 +124,7 @@ void FSM_State_Locomotion<T>::run()
 template<typename T>
 void FSM_State_Locomotion<T>::setForwardVelocity(T velocity)
 {
-  mpc_->setForwardVelocity(velocity);
+  setVelocityCommand(velocity, rl_velocity_command_.y(), rl_velocity_command_.z());
 }
 
 template<typename T>
@@ -404,10 +421,47 @@ void FSM_State_Locomotion<T>::constrainJointTargets(
 }
 
 template<typename T>
+void FSM_State_Locomotion<T>::applyEntryTransition()
+{
+  if (!entry_transition_active_) {return;}
+  constexpr T duration = T(0.2);
+  const T progress = std::clamp(entry_transition_time_ / duration, T(0), T(1));
+  const T alpha = progress * progress * (T(3) - T(2) * progress);
+  auto & controller = *this->_data->leg_controller;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & previous = entry_joint_commands_[leg];
+    const auto next = controller.commands[leg];
+    auto & command = controller.commands[leg];
+    command.position_desired = previous.position_desired +
+      alpha * (next.position_desired - previous.position_desired);
+    command.velocity_desired = previous.velocity_desired +
+      alpha * (next.velocity_desired - previous.velocity_desired);
+    command.kp_joint = previous.kp + alpha * (next.kp_joint - previous.kp);
+    command.kd_joint = previous.kd + alpha * (next.kd_joint - previous.kd);
+    // 补偿参考与增益同时插值的交叉项，使任意同一反馈下 FF+PD 为两端总命令的插值。
+    command.torque_feedforward = (T(1) - alpha) * previous.torque_feedforward +
+      alpha * next.torque_feedforward + alpha * (T(1) - alpha) * (
+      (next.kp_joint - previous.kp).cwiseProduct(
+        next.position_desired - previous.position_desired) +
+      (next.kd_joint - previous.kd).cwiseProduct(
+        next.velocity_desired - previous.velocity_desired));
+    prev_joint_position_desired_[leg] = command.position_desired;
+  }
+  entry_transition_time_ += this->_data->control_time_step;
+  if (progress >= T(1)) {entry_transition_active_ = false;}
+}
+
+template<typename T>
 void FSM_State_Locomotion<T>::LocomotionControlStep()
 {
-  // 经典行走从首帧直接使用当周期 MPC/WBC 结果。
+  // 每帧求解经典 MPC/WBC；入口输出平滑交接到本周期的新控制结果。
   applyRequestedGait(false);
+  if (applied_gait_ == GaitType::STAND) {
+    mpc_->setVelocityCommand(T(0), T(0), T(0));
+  } else {
+    mpc_->setVelocityCommand(
+      rl_velocity_command_.x(), rl_velocity_command_.y(), rl_velocity_command_.z());
+  }
   // MPC 输入必须使用统一的世界坐标系，否则反作用力方向会与 WBC 不一致。
   const auto feet_world = footPositionsWorld();
   /*MPC 输入：当前状态估计；用户期望状态；当前四个足端的世界坐标。
@@ -475,6 +529,7 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       // 行走层只负责自身的目标范围；所有状态共用的连续力矩约束由
       // LegController 最终命令出口统一执行。
       constrainJointTargets(result.contact_state);
+      applyEntryTransition();
     }
   } else {
     // 关闭 WBC 时的降级路径只发送足端前馈力，主要用于调试算法分层。

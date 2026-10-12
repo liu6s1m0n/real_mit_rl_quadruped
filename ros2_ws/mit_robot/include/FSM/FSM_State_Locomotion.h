@@ -49,6 +49,7 @@ public:
 private:
   //核心函数
   void LocomotionControlStep();
+  void applyEntryTransition();
   void RlControlStep();
   bool isRlMode() const noexcept;
   bool buildRlObservation(
@@ -114,6 +115,9 @@ private:
   // 防止接触融合退出等状态估计跳变时目标瞬间突变产生无法跟踪的大误差。
   std::array<Vec3<T>, kNumLegs> prev_joint_position_desired_ {};
   bool prev_joint_target_initialized_ = false;
+  std::array<JointCommand<T>, kNumLegs> entry_joint_commands_{};
+  T entry_transition_time_ = T(0);
+  bool entry_transition_active_ = false;
   /*当前已下发给 MPC/GaitScheduler 的步态，用于检测中途换步态。*/
   GaitType applied_gait_ = GaitType::TROT;
   bool gait_applied_ = false;

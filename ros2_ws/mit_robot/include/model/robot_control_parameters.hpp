@@ -90,7 +90,7 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     // BalanceStand 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd；不是电机 MIT-PD。
     Vec3<T>(T(90), T(90), T(35)), Vec3<T>(T(16), T(16), T(7)),
     // BalanceStand 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    Vec3<T>(T(85), T(85), T(100)), Vec3<T>(T(1.8), T(1.8), T(1.8)),
+    Vec3<T>(T(90), T(85), T(100)), Vec3<T>(T(3.0), T(2.4), T(2.6)),
     // WBC浮动基权重、反力权重、单脚最大法向力、模型支撑质量。
     T(300), T(1), T(150), T(14.705035),
     // StandUp 趴卧展开时长、大腿速度比例、机械关节目标姿态。
@@ -102,9 +102,8 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     // Locomotion 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd。
     Vec3<T>(T(69), T(69), T(34)), Vec3<T>(T(11.8), T(11.8), T(5.8)),
     // Locomotion 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    // hip Kp 从 99.5 降至 60，与 thigh/calf 对齐，避免接触融合退出等
-    // 状态估计跳变时 hip 单帧产生过大 PD 冲量（原最大可达 ~180 Nm）。
-    Vec3<T>(T(60), T(60), T(60)), Vec3<T>(T(4.9), T(4.9), T(4.9)),
+    // 分别整定关节阻抗：大腿保留较低刚度，髋和小腿兼顾支撑及扰动响应。
+    Vec3<T>(T(55), T(25), T(65)), Vec3<T>(T(4.7), T(4.9), T(4.8)),
     // 摆腿高度、足端最大横向偏移。
     T(0.035), T(0.24),
     // RL周期、观测维数、历史长度、动作比例、滤波常数、单步变化、速度和力矩限制。
