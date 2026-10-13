@@ -63,6 +63,7 @@ void ConvexMPCLocomotion<T>::initialize() noexcept
   commanded_velocity_body_.setZero();
   commanded_yaw_rate_ = T(0);
   command_yaw_ = T(0);
+  position_offset_world_.setZero();
   // 清除上一周期的反力、接触状态和求解有效性缓存。
   cached_reaction_forces_world_ = {};
   cached_contact_state_ = {};
@@ -102,6 +103,15 @@ void ConvexMPCLocomotion<T>::setVelocityCommand(
   }
   velocity_body_ = linear_velocity;
   yaw_rate_ = yaw_rate;
+}
+
+template<typename T>
+void ConvexMPCLocomotion<T>::setPositionOffsetWorld(const Vec2<T> & offset)
+{
+  if (!offset.allFinite() || offset.norm() > T(0.05)) {
+    throw std::invalid_argument("position offset must be finite and within 5 cm");
+  }
+  position_offset_world_ = offset;
 }
 
 /**
@@ -163,6 +173,7 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
   }
   command_position_world_.z() = desired.body_position_world.z();
   command.body_position_world = command_position_world_;
+  command.body_position_world.template head<2>() += position_offset_world_;
 
   command.valid = desired.valid && command.body_position_world.allFinite() &&
     command.body_velocity_world.allFinite() && command.body_rpy.allFinite() &&
@@ -256,7 +267,7 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
     // 一次抬落的整段预测，结束后保持四脚接触，不循环。
     for (std::size_t step = 0; step < solver_.settings().horizon; ++step) {
       const T predicted_time = time + static_cast<T>(step) * solver_.settings().time_step;
-      const bool swing = predicted_time >= T(0.6) && predicted_time < T(0.78);
+      const bool swing = predicted_time >= T(0.6) && predicted_time < T(0.84);
       for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
         contact_table[step * kNumLegs + leg] = swing ? 0 : 1;
       }
@@ -278,9 +289,9 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
     if (gait_type_ == GaitType::STAND_CYCLE) {
       result.contact_phase[leg] = result.contact_state[leg] ? T(0.5) : T(0);
       result.swing_phase[leg] = result.contact_state[leg] ? T(0) :
-        std::clamp((time - T(0.6)) / T(0.18), T(0), T(1));
-      result.stance_time[leg] = leg == 1 || leg == 2 ? T(0.8) : T(0.98);
-      result.swing_time[leg] = leg == 1 || leg == 2 ? T(0.18) : T(0);
+        std::clamp((time - T(0.6)) / T(0.24), T(0), T(1));
+      result.stance_time[leg] = leg == 1 || leg == 2 ? T(0.8) : T(1.04);
+      result.swing_time[leg] = leg == 1 || leg == 2 ? T(0.24) : T(0);
     }
   }
 

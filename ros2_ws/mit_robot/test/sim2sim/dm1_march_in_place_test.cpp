@@ -223,7 +223,7 @@ MarchReport runMarch(
     std::size_t concurrent_swing = 0;
     const bool early_force_window = index >= 100 && index < 200;
     const bool late_force_window = index + 700 >= steps && index + 300 < steps;
-    const bool swing_force_window = index >= 430 && index < 460;
+    const bool swing_force_window = index >= 455 && index < 485;
     report.early_force_samples += early_force_window ? 1U : 0U;
     report.late_force_samples += late_force_window ? 1U : 0U;
     report.swing_force_samples += swing_force_window ? 1U : 0U;
@@ -431,10 +431,38 @@ TEST(Dm1MarchInPlace, Key4LiftsOnceThenRestoresFourLegSupport)
   RobotRunner runner(model.get(), data.get(), RobotType::DM1);
   SimulationActuatorWriter writer(model.get());
   ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  const int trunk = mj_name2id(model.get(), mjOBJ_BODY, "trunk");
+  const double start_z = data->xpos[3 * trunk + 2];
+  std::array<int, kNumJoints> joint_qpos{};
+  std::array<double, kNumJoints> start_q{};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+      const auto name = std::string(kLegNames[leg]) +
+        (joint == 0 ? "_hip_joint" : joint == 1 ? "_thigh_joint" : "_calf_joint");
+      const std::size_t slot = leg * kJointsPerLeg + joint;
+      joint_qpos[slot] = model->jnt_qposadr[mj_name2id(model.get(), mjOBJ_JOINT, name.c_str())];
+      start_q[slot] = data->qpos[joint_qpos[slot]];
+    }
+  }
 
   const auto report = runMarch(model.get(), data.get(), runner, writer,
     [](std::size_t) {return GaitType::STAND_CYCLE;}, 5000);
   printReport("load_transfer", report);
+  // 两脚支撑期间质心必须落在 FR-RL 支撑线上：不掉高、不绕对角线倾倒，
+  // 抬落结束后姿态、关节角和水平位置都回到抬腿前。
+  double joint_drift = 0.0;
+  for (std::size_t slot = 0; slot < kNumJoints; ++slot) {
+    joint_drift = std::max(joint_drift, std::abs(data->qpos[joint_qpos[slot]] - start_q[slot]));
+  }
+  std::printf("one_step height_drop=%.4f m joint_drift=%.4f rad end_z=%.4f\n",
+    start_z - report.body_height_min, joint_drift, data->xpos[3 * trunk + 2]);
+  EXPECT_LT(start_z - report.body_height_min, 0.01);
+  EXPECT_LT(report.maximum_roll, 0.05);
+  EXPECT_LT(report.maximum_pitch, 0.05);
+  EXPECT_LT(joint_drift, 0.05);
+  EXPECT_NEAR(data->xpos[3 * trunk + 2], start_z, 0.005);
+  EXPECT_LT(std::abs(report.net_x), 0.01);
+  EXPECT_LT(std::abs(report.net_y), 0.01);
   ASSERT_GT(report.early_force_samples, 0U);
   ASSERT_GT(report.late_force_samples, 0U);
   EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
@@ -450,8 +478,8 @@ TEST(Dm1MarchInPlace, Key4LiftsOnceThenRestoresFourLegSupport)
   }
   for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
     EXPECT_EQ(report.liftoffs[leg], 1U) << kLegNames[leg];
-    EXPECT_GT(report.maximum_foot_height[leg], 0.005) << kLegNames[leg];
-    EXPECT_LT(report.maximum_foot_height[leg], 0.02) << kLegNames[leg];
+    EXPECT_GT(report.maximum_foot_height[leg], 0.01) << kLegNames[leg];
+    EXPECT_LT(report.maximum_foot_height[leg], 0.03) << kLegNames[leg];
   }
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     EXPECT_TRUE(report.final_contact[leg]) << kLegNames[leg];
@@ -511,7 +539,7 @@ TEST(Dm1MarchInPlace, Key4PlannerSchedulerAndEstimatorAgreeOnOneLift)
     const auto probabilities = context.gait_scheduler.gait_data.estimatorContactProbabilities();
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       const auto & gait = context.gait_scheduler.gait_data;
-      const bool expected_contact = !(leg == 1 || leg == 2) || frame < 300 || frame >= 390;
+      const bool expected_contact = !(leg == 1 || leg == 2) || frame < 300 || frame >= 420;
       EXPECT_EQ(result.contact_state[leg], expected_contact);
       EXPECT_EQ(gait.contactScheduled(static_cast<LegId>(leg)), expected_contact);
       liftoffs[leg] += gait.liftoff_scheduled(leg);
@@ -520,13 +548,13 @@ TEST(Dm1MarchInPlace, Key4PlannerSchedulerAndEstimatorAgreeOnOneLift)
         EXPECT_FLOAT_EQ(probabilities[leg], 0.0F);
         EXPECT_NEAR(result.swing_phase[leg], gait.phase_swing(leg), 1.0e-4F);
         EXPECT_LT(result.reaction_forces_world[leg].norm(), 1.0e-3F);
-      } else if (frame >= 490) {
+      } else if (frame >= 520) {
         EXPECT_NEAR(probabilities[leg], 1.0F, 1.0e-4F);
       }
     }
     context.gait_scheduler.step();
   }
-  EXPECT_EQ(swing_frames, (std::array<int, kNumLegs>{0, 90, 90, 0}));
+  EXPECT_EQ(swing_frames, (std::array<int, kNumLegs>{0, 120, 120, 0}));
   EXPECT_EQ(liftoffs, (std::array<int, kNumLegs>{0, 1, 1, 0}));
 }
 
@@ -625,7 +653,8 @@ TEST(Dm1MarchInPlace, Key4RecoversFromAPhysicalPitchAndPositionDisturbance)
       const bool disturb = frame >= 430 && frame < 530;
       data->xfrc_applied[6 * trunk] = disturb ? 4.0 : 0.0;
       data->xfrc_applied[6 * trunk + 3] = disturb ? -0.35 : 0.0;
-      data->xfrc_applied[6 * trunk + 4] = disturb ? -2.0 : 0.0;
+      // 质心平移后原 2 Nm 只能压出约 0.013 rad，加大到 4 Nm 保证扰动可观测。
+      data->xfrc_applied[6 * trunk + 4] = disturb ? -4.0 : 0.0;
       disturbed_frames += disturb ? 1U : 0U;
     });
   printReport("disturbed_one_step", report);
@@ -648,6 +677,40 @@ TEST(Dm1MarchInPlace, Key4RecoversFromAPhysicalPitchAndPositionDisturbance)
     const auto & home = runner.quadruped().leg(static_cast<LegId>(leg)).joints.home_position;
     EXPECT_LT(std::abs(command.position_desired.y() - home.y()), 0.25);
     EXPECT_LT(std::abs(command.position_desired.z() - home.z()), 0.25);
+  }
+}
+
+TEST(Dm1MarchInPlace, Key4RightRearClearsGroundWithAnAdditionalDownwardLoad)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  const int right_rear = mj_name2id(model.get(), mjOBJ_BODY, "RR_foot");
+  const auto report = runMarch(model.get(), data.get(), runner, writer,
+    [](std::size_t) {return GaitType::STAND_CYCLE;}, 5000, {},
+    [&](std::size_t frame) {
+      // 右后脚在换载、抬落阶段额外承受2 N向下外力，检查真实仿真接触。
+      data->xfrc_applied[6 * right_rear + 2] = frame >= 250 && frame < 520 ? -2.0 : 0.0;
+    });
+  printReport("right_rear_loaded_one_step", report);
+  EXPECT_EQ(report.fallbacks, 0U);
+  EXPECT_EQ(report.torque_limit_frames, 0U);
+  EXPECT_GT(report.body_height_min, 0.30);
+  EXPECT_LT(report.maximum_roll, 0.15);
+  EXPECT_LT(report.maximum_pitch, 0.15);
+  for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
+    EXPECT_EQ(report.liftoffs[leg], 1U) << kLegNames[leg];
+    EXPECT_GT(report.maximum_foot_height[leg], 0.01) << kLegNames[leg];
+    EXPECT_LT(report.swing_normal_force[leg] / report.swing_force_samples, 1.0);
+  }
+  for (const std::size_t leg : {std::size_t(0), std::size_t(3)}) {
+    EXPECT_EQ(report.liftoffs[leg], 0U) << kLegNames[leg];
+  }
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_TRUE(report.final_contact[leg]);
+    EXPECT_GT(report.late_normal_force[leg] / report.late_force_samples, 10.0);
   }
 }
 

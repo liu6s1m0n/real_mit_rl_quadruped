@@ -167,7 +167,7 @@ void GaitScheduler<T>::step()
     const T time = std::round(gait_data.initial_phase * gait_data.period_time_nominal / dt_) * dt_;
     for (Eigen::Index foot = 0; foot < static_cast<Eigen::Index>(kNumLegs); ++foot) {
       const bool moving_leg = foot == 1 || foot == 2;
-      const bool swing = moving_leg && time >= T(0.6) && time < T(0.78);
+      const bool swing = moving_leg && time >= T(0.6) && time < T(0.84);
       const int previous = gait_data.contact_state_scheduled(foot);
       gait_data.contact_state_previous(foot) = previous;
       gait_data.contact_state_scheduled(foot) = swing ? 0 : 1;
@@ -175,12 +175,12 @@ void GaitScheduler<T>::step()
       gait_data.touchdown_scheduled(foot) = !swing && previous == 0 ? 1 : 0;
       gait_data.phase_variable(foot) = gait_data.initial_phase;
       gait_data.phase_stance(foot) = swing ? T(1) : !moving_leg ? T(0.5) :
-        time < T(0.6) ? time / T(0.6) : std::clamp((time - T(0.78)) / T(0.4), T(0), T(0.5));
-      gait_data.phase_swing(foot) = swing ? (time - T(0.6)) / T(0.18) : T(0);
-      gait_data.time_stance(foot) = moving_leg ? T(0.8) : T(0.98);
-      gait_data.time_swing(foot) = moving_leg ? T(0.18) : T(0);
+        time < T(0.6) ? time / T(0.6) : std::clamp((time - T(0.84)) / T(0.4), T(0), T(0.5));
+      gait_data.phase_swing(foot) = swing ? (time - T(0.6)) / T(0.24) : T(0);
+      gait_data.time_stance(foot) = moving_leg ? T(0.8) : T(1.04);
+      gait_data.time_swing(foot) = moving_leg ? T(0.24) : T(0);
       gait_data.time_stance_remaining(foot) = moving_leg && time < T(0.6) ? T(0.6) - time : T(0);
-      gait_data.time_swing_remaining(foot) = swing ? T(0.78) - time : T(0);
+      gait_data.time_swing_remaining(foot) = swing ? T(0.84) - time : T(0);
     }
     return;
   }
@@ -334,7 +334,7 @@ void GaitScheduler<T>::createGait()
   /*一次四脚→对角两脚→四脚的短促抬落；末端不循环。*/
     case GaitType::STAND_CYCLE:
       configureGait(
-        "STAND_CYCLE", T(0.98), T(1), all_legs,
+        "STAND_CYCLE", T(1.04), T(1), all_legs,
         Vec4<T>::Zero(), unit_scale, false);
       break;
   /*周期 = 0.5 s  支撑比例 = 0.625  摆动比例 = 0.375 每条腿相位错开，用于平稳行走。*/

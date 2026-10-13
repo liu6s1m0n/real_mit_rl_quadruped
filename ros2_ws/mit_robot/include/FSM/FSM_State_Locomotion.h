@@ -124,6 +124,16 @@ private:
   T load_transfer_elapsed_ = T(0);
   std::size_t load_transfer_bucket_ = static_cast<std::size_t>(-1);
   std::array<Vec3<T>, kNumLegs> load_transfer_foot_position_{};
+  /*4 号一次抬落：整机质心计算模型、起始时机身原点到整机质心的世界系水平
+    偏移，以及把质心移到 FR-RL 支撑线上所需的水平位移。*/
+  std::unique_ptr<FloatingBaseModel<T>> com_model_;
+  Vec2<T> cycle_com_shift_world_ = Vec2<T>::Zero();
+  Vec2<T> cycle_support_shift_world_ = Vec2<T>::Zero();
+  bool cycle_shift_ready_ = false;
+  /** 用全身模型计算当前整机质心世界坐标。 */
+  Vec3<T> wholeBodyComWorld();
+  /** 4 号起始时锁存质心偏移和对角支撑线位移。 */
+  void prepareStandCycleShift(const std::array<Vec3<T>, kNumLegs> & feet_world);
 };
 
 extern template class FSM_State_Locomotion < float >;

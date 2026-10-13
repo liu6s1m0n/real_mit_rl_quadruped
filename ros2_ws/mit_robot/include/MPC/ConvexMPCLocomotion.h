@@ -86,6 +86,19 @@ public:
    */
   void setVelocityCommand(T forward_velocity, T lateral_velocity, T yaw_rate);
   /**
+   * @brief 设置叠加在零速位置锚点上的世界系水平偏移，单位 m。
+   *
+   * 只平移目标，不改写锚点；偏移归零后目标回到原锚点。用于 4 号一次抬落
+   * 把机身移到对角支撑线上。
+   * @throws std::invalid_argument 偏移非有限或超过 5 cm 时抛出。
+   */
+  void setPositionOffsetWorld(const Vec2<T> & offset);
+  /** @brief 返回零速位置锚点；尚未初始化时下一次 run() 会锚定到当前估计。 */
+  Vec3<T> positionAnchorWorld(const StateEstimate<T> & estimate) const noexcept
+  {
+    return command_initialized_ ? command_position_world_ : estimate.position_world;
+  }
+  /**
    * @brief 推进一步运动 MPC。
    * @param estimate 当前状态估计。
    * @param desired 外部期望机身状态。
@@ -134,6 +147,8 @@ private:
   T maximum_yaw_acceleration_ = T(0.8);
   /** @brief 速度遥控模式下用于 MPC 的世界坐标位置锚点。 */
   Vec3<T> command_position_world_ = Vec3<T>::Zero();
+  /** @brief 叠加在位置锚点上的世界系水平偏移。 */
+  Vec2<T> position_offset_world_ = Vec2<T>::Zero();
   /** @brief 是否已经用初始目标初始化过目标偏航角。 */
   bool command_initialized_ = false;
   /** @brief 最近一次有效求解得到的四腿世界系反力。 */
