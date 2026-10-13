@@ -142,7 +142,7 @@ struct GaitData
   std::array<T, kNumLegs> estimatorContactProbabilities() const noexcept
   {
     std::array<T, kNumLegs> probabilities{};
-    if (current_gait == GaitType::STAND || current_gait == GaitType::STAND_CYCLE) {
+    if (current_gait == GaitType::STAND) {
       probabilities.fill(T(1));
       return probabilities;
     }

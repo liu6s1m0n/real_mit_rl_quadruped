@@ -82,12 +82,14 @@ DVec<T> SolverMPC<T>::desiredVector(const DesiredState<T> & desired) const
  * @param contact true 表示支撑脚，false 表示摆动脚。
  */
 template<typename T>
-void SolverMPC<T>::projectForce(Vec3<T> & force, bool contact) const noexcept
+void SolverMPC<T>::projectForce(
+  Vec3<T> & force, bool contact, T minimum_normal_force,
+  T maximum_normal_force) const noexcept
 {
   // 摆动腿不允许产生地面力；支撑腿的力被投影到简化的摩擦锥内。
   if (!contact) {force.setZero(); return;}
   force.z() = std::clamp(
-    force.z(), settings_.minimum_normal_force, settings_.maximum_normal_force);
+    force.z(), minimum_normal_force, maximum_normal_force);
 
   const T tangential_limit = settings_.friction_coefficient * force.z();
   const T tangential_norm = force.template head<2>().norm();
@@ -108,7 +110,8 @@ void SolverMPC<T>::projectForce(Vec3<T> & force, bool contact) const noexcept
 template<typename T>
 SolverResult<T> SolverMPC<T>::solve(
   const RobotState<T> & state, const std::vector<DesiredState<T>> & trajectory,
-  const std::vector<int> & contact_table) const
+  const std::vector<int> & contact_table,
+  const NormalForceBounds<T> * force_bounds) const
 {
   SolverResult<T> result;
   const std::size_t horizon = settings_.horizon;
@@ -121,6 +124,16 @@ SolverResult<T> SolverMPC<T>::solve(
     if (!desired.valid || !desired.body_position_world.allFinite() ||
       !desired.body_velocity_world.allFinite() || !desired.body_rpy.allFinite() ||
       !desired.body_angular_velocity.allFinite()) {return result;}
+  }
+  if (force_bounds != nullptr) {
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const T low = force_bounds->minimum[leg];
+      const T high = force_bounds->maximum[leg];
+      if (!std::isfinite(static_cast<double>(low)) ||
+        !std::isfinite(static_cast<double>(high)) ||
+        low < settings_.minimum_normal_force || high > settings_.maximum_normal_force ||
+        low > high) {return result;}
+    }
   }
 
   constexpr Eigen::Index state_dimension = 12;
@@ -262,7 +275,11 @@ SolverResult<T> SolverMPC<T>::solve(
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         Vec3<T> force = forces.template segment<3>(
           static_cast<Eigen::Index>(step * 12 + leg * 3));
-        projectForce(force, contact_table[step * kNumLegs + leg] != 0);
+        const T low = force_bounds == nullptr ?
+          settings_.minimum_normal_force : force_bounds->minimum[leg];
+        const T high = force_bounds == nullptr ?
+          settings_.maximum_normal_force : force_bounds->maximum[leg];
+        projectForce(force, contact_table[step * kNumLegs + leg] != 0, low, high);
         forces.template segment<3>(static_cast<Eigen::Index>(step * 12 + leg * 3)) = force;
       }
     }

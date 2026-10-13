@@ -72,6 +72,8 @@ void FSM_State_Locomotion<T>::onEnter()
   safety_fallback_transition_ = false;
   prev_joint_target_initialized_ = false;
   entry_transition_time_ = T(0);
+  load_transfer_elapsed_ = T(0);
+  load_transfer_bucket_ = static_cast<std::size_t>(-1);
   auto & controller = *this->_data->leg_controller;
   entry_transition_active_ = !isRlMode() && controller.legsEnabled();
   for (std::size_t leg = 0; leg < kNumLegs && entry_transition_active_; ++leg) {
@@ -99,14 +101,34 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   // 相位重置到各自的 phase_offset。这里把 MPC 一起归零，两者才不会错相。
   const bool switching = gait_applied_ && requested != applied_gait_;
   if (switching) {mpc_->initialize();}
+  if (force || switching) {
+    load_transfer_elapsed_ = T(0);
+    load_transfer_bucket_ = static_cast<std::size_t>(-1);
+    mpc::NormalForceBounds<T> normal;
+    normal.minimum.fill(mpc_->solverSettings().minimum_normal_force);
+    normal.maximum.fill(mpc_->solverSettings().maximum_normal_force);
+    mpc_->setNormalForceBounds(normal);
+    std::array<T, kNumLegs> wbc_min{};
+    std::array<T, kNumLegs> wbc_max{};
+    wbc_max.fill(this->_data->control_parameters->maximum_normal_force);
+    wbc_ctrl_->setNormalForceBounds(wbc_min, wbc_max);
+  }
   applied_gait_ = requested;
   gait_applied_ = true;
   // STAND 是 3 号四脚诊断入口：本轮仅运行阶段①，保持全部接触。
   // MPC 和 WBC 求解、关节目标及 PD 均沿用踏步控制，不自动进入换载/摆腿。
-  const GaitType effective = requested == GaitType::STAND ?
-    GaitType::STAND : GaitType::TROT_WALK;
+  const GaitType effective = requested == GaitType::STAND ||
+    requested == GaitType::STAND_CYCLE ? requested : GaitType::TROT_WALK;
+  this->checkSafeOrientation = effective != GaitType::STAND_CYCLE;
+  wbc_ctrl_->setBodyOrientationGains(
+    this->_data->control_parameters->locomotion_body_orientation_kp,
+    this->_data->control_parameters->locomotion_body_orientation_kd);
+  wbc_ctrl_->setBodyPositionGains(
+    this->_data->control_parameters->balance_body_position_kp,
+    this->_data->control_parameters->balance_body_position_kd);
   mpc_->setGait(effective);
   this->_data->gait_scheduler->requestGait(effective);
+  this->_data->gait_scheduler->modifyGait();
   if (this->_data->locomotion_gait == GaitType::STAND) {
     std::fprintf(stderr,
       "[FSM][MARCH-DIAGNOSTIC] stage=1 zero_velocity=true planned_contacts=4 swing=false；四脚控制诊断，不自动换载。\n");
@@ -195,8 +217,9 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
       "[FSM][LOCOMOTION] 安全回站：状态估计无效。\n");
     return false;
   }
-  if (std::abs(estimate.rpy.x()) > ori::deg2rad(max_roll_degrees) ||
-    std::abs(estimate.rpy.y()) > ori::deg2rad(max_pitch_degrees))
+  if (applied_gait_ != GaitType::STAND_CYCLE &&
+    (std::abs(estimate.rpy.x()) > ori::deg2rad(max_roll_degrees) ||
+    std::abs(estimate.rpy.y()) > ori::deg2rad(max_pitch_degrees)))
   {
     std::fprintf(stderr,
       "[FSM][LOCOMOTION] 安全回站：姿态越界 roll=%.3f pitch=%.3f rad。\n",
@@ -215,6 +238,7 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
         "[FSM][LOCOMOTION] 安全回站：leg=%zu 反馈无效。\n", leg);
       return false;
     }
+    if (applied_gait_ == GaitType::STAND_CYCLE) {continue;}
     const T foot_speed = data.v.norm();
     if (data.p.z() > T(0) ||
       std::abs(data.p.y()) > maximum_lateral_foot_offset_ || foot_speed > T(9))
@@ -276,6 +300,13 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   auto & trajectory = swing_trajectories_.at(leg);
   trajectory.reset();
   trajectory.setInitialPosition(initial_position);
+  if (applied_gait_ == GaitType::STAND_CYCLE) {
+    load_transfer_foot_position_[leg] = initial_position;
+    trajectory.setFinalPosition(load_transfer_foot_position_[leg]);
+    trajectory.setHeight(T(0.01));
+    swing_active_[leg] = true;
+    return;
+  }
 
   // 落脚点必须相对当前机身/髋部规划，不能在上一次世界足点上反复累加步长；
   // 否则机身稍有打滑，脚就会越走越远并最终把腿拉直。
@@ -456,7 +487,8 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
 {
   // 每帧求解经典 MPC/WBC；入口输出平滑交接到本周期的新控制结果。
   applyRequestedGait(false);
-  if (applied_gait_ == GaitType::STAND) {
+  if (applied_gait_ == GaitType::STAND ||
+    applied_gait_ == GaitType::STAND_CYCLE) {
     mpc_->setVelocityCommand(T(0), T(0), T(0));
   } else {
     mpc_->setVelocityCommand(
@@ -464,6 +496,36 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   }
   // MPC 输入必须使用统一的世界坐标系，否则反作用力方向会与 WBC 不一致。
   const auto feet_world = footPositionsWorld();
+  if (applied_gait_ == GaitType::STAND_CYCLE && !entry_transition_active_) {
+    // 一次抬落：0.3 s 保持、0.3 s 卸载、0.18 s 摆腿、0.2 s 恢复承重。
+    constexpr T kHold = T(0.3);
+    constexpr T kRamp = T(0.3);
+    constexpr T kTouchdown = T(0.78);
+    constexpr T kReload = T(0.2);
+    constexpr T kEnd = T(0.98);
+    constexpr T kForceStep = T(0.04);
+    const T time = std::round(load_transfer_elapsed_ / this->_data->control_time_step) *
+      this->_data->control_time_step;
+    const std::size_t bucket = static_cast<std::size_t>(time >= kEnd ?
+      std::ceil(kEnd / kForceStep) : std::floor(time / kForceStep + T(1e-4)));
+    const T phase = std::clamp(time < kTouchdown ?
+      (time - kHold) / kRamp : T(1) - (time - kTouchdown) / kReload, T(0), T(1));
+    const T blend = phase * phase * (T(3) - T(2) * phase);
+    if (bucket != load_transfer_bucket_) {
+      load_transfer_bucket_ = bucket;
+      mpc::NormalForceBounds<T> bounds;
+      bounds.minimum.fill(mpc_->solverSettings().minimum_normal_force);
+      bounds.maximum.fill(mpc_->solverSettings().maximum_normal_force);
+      for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
+        bounds.minimum[leg] = T(0);
+        bounds.maximum[leg] *= T(1) - blend;
+      }
+      mpc_->setNormalForceBounds(bounds);
+      wbc_ctrl_->setNormalForceBounds(bounds.minimum, bounds.maximum);
+    }
+    load_transfer_elapsed_ = std::min(kEnd,
+      load_transfer_elapsed_ + this->_data->control_time_step);
+  }
   /*MPC 输入：当前状态估计；用户期望状态；当前四个足端的世界坐标。
     MPC 输出 LocomotionResult，包括：command:机身期望状态；
     reaction_forces_world：各腿期望地面反作用力；

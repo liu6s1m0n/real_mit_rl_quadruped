@@ -132,6 +132,23 @@ void LocomotionCtrl<T>::setMaxNormalForce(T max_fz)
   for (auto & contact : foot_contacts_) {contact->setMaxFz(max_fz);}
 }
 
+template<typename T>
+void LocomotionCtrl<T>::setNormalForceBounds(
+  const std::array<T, kNumLegs> & minimum,
+  const std::array<T, kNumLegs> & maximum)
+{
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    if (!std::isfinite(static_cast<double>(minimum[leg])) ||
+      !std::isfinite(static_cast<double>(maximum[leg])) ||
+      minimum[leg] < T(0) || maximum[leg] < minimum[leg])
+    {
+      throw std::invalid_argument("invalid WBC per-leg normal force bounds");
+    }
+    foot_contacts_[leg]->setMinFz(minimum[leg]);
+    foot_contacts_[leg]->setMaxFz(maximum[leg]);
+  }
+}
+
 /**
  * @brief 根据上层输入建立本周期的 WBC 任务列表和接触列表。
  * @param input 指向 LocomotionCtrlData<T> 的非空指针。

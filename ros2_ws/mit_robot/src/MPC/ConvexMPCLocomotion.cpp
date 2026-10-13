@@ -48,6 +48,8 @@ ConvexMPCLocomotion<T>::ConvexMPCLocomotion(
   {
     throw std::invalid_argument("invalid convex MPC locomotion timing");
   }
+  normal_force_bounds_.minimum.fill(settings.minimum_normal_force);
+  normal_force_bounds_.maximum.fill(settings.maximum_normal_force);
 }
 
 /** @brief 清零内部计数、限幅命令和上一周期的反力缓存。 */
@@ -115,6 +117,7 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
   DesiredState<T> command = desired;
   if (!command_initialized_) {
     command_yaw_ = desired.body_rpy.z();
+    command_position_world_ = estimate.position_world;
     command_initialized_ = true;
   }
 
@@ -151,11 +154,13 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
 
   command.body_acceleration_world.setZero();
   command.body_angular_velocity << T(0), T(0), commanded_yaw_rate_;
-  // 速度遥控模式不长期积分世界 x/y 目标。每周期从当前实测位置生成短时
-  // 预测轨迹，可避免打滑或跟踪误差累积成不断增大的“追赶位置”，进而让
-  // MPC 把实际速度推到命令速度两倍以上。
-  command_position_world_.template head<2>() =
-    estimate.position_world.template head<2>();
+  // 零速度时保持进入静止时的水平位置，保留抗扰的位置误差。
+  // 运动期间从当前实测位置生成短时预测，避免遥控目标长期积分。
+  if (commanded_velocity_body_.squaredNorm() > T(1e-8) ||
+    std::abs(commanded_yaw_rate_) > T(1e-4))
+  {
+    command_position_world_.template head<2>() = estimate.position_world.template head<2>();
+  }
   command_position_world_.z() = desired.body_position_world.z();
   command.body_position_world = command_position_world_;
 
@@ -173,10 +178,10 @@ template<typename T>
 void ConvexMPCLocomotion<T>::setGait(GaitType gait)
 {
   if (gait != GaitType::STAND && gait != GaitType::TROT &&
-    gait != GaitType::TROT_WALK)
+    gait != GaitType::TROT_WALK && gait != GaitType::STAND_CYCLE)
   {
     throw std::invalid_argument(
-      "MPC locomotion supports STAND, TROT and TROT_WALK");
+      "MPC locomotion supports STAND, STAND_CYCLE, TROT and TROT_WALK");
   }
   const T gait_segment_time = T(0.05);
   iterations_per_gait_segment_ = static_cast<std::size_t>(std::max(
@@ -189,11 +194,37 @@ void ConvexMPCLocomotion<T>::setGait(GaitType gait)
   }
 }
 
+template<typename T>
+void ConvexMPCLocomotion<T>::setNormalForceBounds(
+  const NormalForceBounds<T> & bounds)
+{
+  const auto & settings = solver_.settings();
+  bool changed = false;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    if (!std::isfinite(static_cast<double>(bounds.minimum[leg])) ||
+      !std::isfinite(static_cast<double>(bounds.maximum[leg])) ||
+      bounds.minimum[leg] < settings.minimum_normal_force ||
+      bounds.maximum[leg] > settings.maximum_normal_force ||
+      bounds.minimum[leg] > bounds.maximum[leg])
+    {
+      throw std::invalid_argument("invalid per-leg normal force bounds");
+    }
+    changed = changed || bounds.minimum[leg] != normal_force_bounds_.minimum[leg] ||
+      bounds.maximum[leg] != normal_force_bounds_.maximum[leg];
+  }
+  if (changed) {
+    normal_force_bounds_ = bounds;
+    cached_solution_valid_ = false;
+  }
+}
+
 /** @brief 返回当前步态对象。 */
 template<typename T>
 OffsetDurationGait & ConvexMPCLocomotion<T>::activeGait() noexcept
 {
-  if (gait_type_ == GaitType::STAND) {return stand_;}
+  if (gait_type_ == GaitType::STAND || gait_type_ == GaitType::STAND_CYCLE) {
+    return stand_;
+  }
   if (gait_type_ == GaitType::TROT_WALK) {return trot_walk_;}
   return trot_;
 }
@@ -219,7 +250,18 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
   gait.advance(iteration_, iterations_per_gait_segment_);
   const auto contact_phase = gait.contactPhase();
   const auto swing_phase = gait.swingPhase();
-  const auto & contact_table = gait.contactTable();
+  auto contact_table = gait.contactTable();
+  const T time = static_cast<T>(iteration_) * control_time_step_;
+  if (gait_type_ == GaitType::STAND_CYCLE) {
+    // 一次抬落的整段预测，结束后保持四脚接触，不循环。
+    for (std::size_t step = 0; step < solver_.settings().horizon; ++step) {
+      const T predicted_time = time + static_cast<T>(step) * solver_.settings().time_step;
+      const bool swing = predicted_time >= T(0.6) && predicted_time < T(0.78);
+      for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
+        contact_table[step * kNumLegs + leg] = swing ? 0 : 1;
+      }
+    }
+  }
 
   const T gait_segment_time =
     control_time_step_ * static_cast<T>(iterations_per_gait_segment_);
@@ -233,6 +275,13 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
     // contactPhase 在支撑阶段的第一个采样恰好为零，不能用 phase > 0
     // 判断接触；预测表第一行才是无歧义的当前接触状态。
     result.contact_state[leg] = contact_table[leg] != 0;
+    if (gait_type_ == GaitType::STAND_CYCLE) {
+      result.contact_phase[leg] = result.contact_state[leg] ? T(0.5) : T(0);
+      result.swing_phase[leg] = result.contact_state[leg] ? T(0) :
+        std::clamp((time - T(0.6)) / T(0.18), T(0), T(1));
+      result.stance_time[leg] = leg == 1 || leg == 2 ? T(0.8) : T(0.98);
+      result.swing_time[leg] = leg == 1 || leg == 2 ? T(0.18) : T(0);
+    }
   }
 
   // 500 Hz 控制循环通常每 iterations_between_mpc_ 帧执行一次昂贵的优化。
@@ -268,7 +317,8 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
     const RobotState<T> state =
       RobotState<T>::fromEstimate(estimate, foot_positions_world);
     /*关键函数*/
-    const SolverResult<T> solution = solver_.solve(state, trajectory, contact_table);
+    const SolverResult<T> solution = solver_.solve(
+      state, trajectory, contact_table, &normal_force_bounds_);
     if (solution.valid) {
       cached_reaction_forces_world_ = solution.reaction_forces_world;
       cached_contact_state_ = result.contact_state;

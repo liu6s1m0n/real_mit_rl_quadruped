@@ -121,6 +121,9 @@ private:
   /*当前已下发给 MPC/GaitScheduler 的步态，用于检测中途换步态。*/
   GaitType applied_gait_ = GaitType::TROT;
   bool gait_applied_ = false;
+  T load_transfer_elapsed_ = T(0);
+  std::size_t load_transfer_bucket_ = static_cast<std::size_t>(-1);
+  std::array<Vec3<T>, kNumLegs> load_transfer_foot_position_{};
 };
 
 extern template class FSM_State_Locomotion < float >;

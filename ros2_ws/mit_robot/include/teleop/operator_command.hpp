@@ -47,6 +47,8 @@ enum class Motion : std::uint8_t
   MarchInPlace,
   /// 四脚接触、零速度、不摆腿；使用踏步 MPC/WBC 的阶段①诊断。
   FourContactDiagnostic,
+  /// 四脚零速入场后逐渐将 FL+RR 的负载转给 FR+RL，保持四脚接触。
+  FourContactLoadTransfer,
 };
 
 struct VelocityCommand

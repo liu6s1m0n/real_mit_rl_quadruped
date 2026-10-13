@@ -51,6 +51,13 @@ struct SolverResult
 };
 
 template<typename T>
+struct NormalForceBounds
+{
+  std::array<T, kNumLegs> minimum{};
+  std::array<T, kNumLegs> maximum{};
+};
+
+template<typename T>
 class SolverMPC
 {
 public:
@@ -78,13 +85,16 @@ public:
    */
   SolverResult<T> solve(
     const RobotState<T> & state, const std::vector<DesiredState<T>> & trajectory,
-    const std::vector<int> & contact_table) const;
+    const std::vector<int> & contact_table,
+    const NormalForceBounds<T> * force_bounds = nullptr) const;
 
   const SolverSettings<T> & settings() const noexcept {return settings_;}
 
 private:
   DVec<T> desiredVector(const DesiredState<T> & desired) const;
-  void projectForce(Vec3<T> & force, bool contact) const noexcept;
+  void projectForce(
+    Vec3<T> & force, bool contact, T minimum_normal_force,
+    T maximum_normal_force) const noexcept;
 
   const Quadruped<T> * quadruped_;  ///< 非拥有指针，提供质量和足端几何参数。
   SolverSettings<T> settings_;      ///< 本求解器固定使用的预测和约束参数副本。

@@ -402,6 +402,8 @@ int HardwareBridge::runKeyboardControl(
           gait = GaitType::TROT;
         } else if (arbiter.motion() == teleop::Motion::FourContactDiagnostic) {
           gait = GaitType::STAND;
+        } else if (arbiter.motion() == teleop::Motion::FourContactLoadTransfer) {
+          gait = GaitType::STAND_CYCLE;
         }
         runner_.setLocomotionGait(gait);
         runner_.setControlMode(ControlMode::Locomotion);

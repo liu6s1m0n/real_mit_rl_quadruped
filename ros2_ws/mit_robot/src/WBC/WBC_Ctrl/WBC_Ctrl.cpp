@@ -266,13 +266,18 @@ bool WBC_Ctrl<T>::runAndApply(
     line << std::setprecision(9) << "[WBC][DIAGNOSTIC] t_s=" << estimate.timestamp
          << " iteration=" << iteration_ << " floating_weight=" << floating_base_weight_
          << " contacts=" << contacts_.size() << " body_z=" << estimate.position_world.z()
-         << " body_rpy=[" << estimate.rpy.transpose() << ']';
+         << " body_rpy=[" << estimate.rpy.transpose() << ']'
+         << " body_position=[" << estimate.position_world.transpose() << ']'
+         << " body_velocity=[" << estimate.velocity_world.transpose() << ']'
+         << " body_omega=[" << estimate.angular_velocity_body.transpose() << ']';
     for (std::size_t task = 0; task < tasks_.size(); ++task) {
       line << " task" << task << "_error=[" << tasks_[task]->getPosError().transpose() << ']';
     }
     line << " q_wbc=[" << (result_.joint_position - model_.getJointPositionOffsets()).transpose()
          << "] dq_wbc=[" << result_.joint_velocity.transpose()
-         << "] ff_wbc=[" << result_.joint_torque.transpose() << "]\n";
+         << "] ff_wbc=[" << result_.joint_torque.transpose()
+         << "] reaction_force=[" << result_.reaction_force.transpose()
+         << "] qddot_wbc=[" << result_.generalized_acceleration.transpose() << "]\n";
     std::fputs(line.str().c_str(), stderr);
   }
 

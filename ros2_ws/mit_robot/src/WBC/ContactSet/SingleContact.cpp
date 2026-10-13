@@ -122,6 +122,7 @@ bool SingleContact<T>::_UpdateInequalityVector()
 {
   // Uf*Fr >= ieq_vec；最后一行 -Fz >= -max_Fz 给出法向力上限。
   this->ieq_vec_ = DVec<T>::Zero(_dim_U);
+  this->ieq_vec_[0] = _min_Fz;
   this->ieq_vec_[5] = -_max_Fz;
   return true;
 }

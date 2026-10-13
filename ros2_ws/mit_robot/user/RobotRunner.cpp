@@ -634,7 +634,7 @@ bool RobotRunner::collectJointCommands()
   if (standing_height_target_ <= 0.33F && state == FSM_StateName::BALANCE_STAND &&
     state_estimate_.position_world.z() >= 0.30F)
   {stance_joint_limits_armed_ = true;}
-  // 固定软件角度限位只用于 1 站立与 3 四足零速站立。
+  // 固定站姿角度限位用于站立和 3；4 的两腿换载使用模型关节范围。
   if (stance_joint_limits_armed_ && standing_height_target_ <= 0.33F &&
     !prone_down_active_ && leg_controller_.legsEnabled() &&
     ((state == FSM_StateName::BALANCE_STAND &&

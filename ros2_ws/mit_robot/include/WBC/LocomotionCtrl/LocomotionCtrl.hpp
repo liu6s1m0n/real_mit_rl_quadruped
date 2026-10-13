@@ -83,6 +83,10 @@ public:
    * @param max_fz 最大法向力，单位 N，必须为有限正数。
    */
   void setMaxNormalForce(T max_fz);
+  /** 设置四个支撑足的独立法向力范围。 */
+  void setNormalForceBounds(
+    const std::array<T, kNumLegs> & minimum,
+    const std::array<T, kNumLegs> & maximum);
 
   /**
    * @brief 读取最近一次 WBIC 求解得到的四腿地面反力。

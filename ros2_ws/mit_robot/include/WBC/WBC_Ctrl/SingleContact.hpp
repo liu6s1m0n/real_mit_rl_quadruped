@@ -52,10 +52,12 @@ class SingleContact : public ContactSpec<T> {
    * 新值会在下一次 _UpdateInequalityVector() 调用时写入右端项。
    */
   void setMaxFz(T max_fz) { _max_Fz = max_fz; }
+  void setMinFz(T min_fz) { _min_Fz = min_fz; }
 
  protected:
   /** @brief 足端允许的最大法向力 @f$F_{z,max}@f$。 */
   T _max_Fz;
+  T _min_Fz = T(0);
 
   /** @brief 当前接触点在 FloatingBaseModel 接触点列表中的索引。 */
   std::size_t _contact_pt;

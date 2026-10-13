@@ -99,6 +99,15 @@ struct MarchReport
 {
   std::array<std::size_t, kNumLegs> liftoffs{};
   std::array<double, kNumLegs> maximum_foot_height{};
+  std::array<double, kNumLegs> early_normal_force{};
+  std::array<double, kNumLegs> late_normal_force{};
+  std::array<double, kNumLegs> swing_normal_force{};
+  std::array<bool, kNumLegs> final_contact{};
+  std::size_t early_force_samples = 0;
+  std::size_t late_force_samples = 0;
+  std::size_t swing_force_samples = 0;
+  std::size_t torque_limit_frames = 0;
+  double rear_command_step_max = 0.0;
   std::size_t fallbacks = 0;
   std::size_t concurrent_swing_max = 0;
   std::size_t frames_with_three_or_more_swing = 0;
@@ -123,12 +132,14 @@ MarchReport runMarch(
   const mjModel * model, mjData * data, RobotRunner & runner,
   SimulationActuatorWriter & writer,
   const std::function<GaitType(std::size_t)> & gait_at, std::size_t steps,
-  teleop::VelocityCommand velocity = {})
+  teleop::VelocityCommand velocity = {},
+  const std::function<void(std::size_t)> & before_control = {})
 {
   const int trunk = mj_name2id(model, mjOBJ_BODY, "trunk");
   const int floor_geom = mj_name2id(model, mjOBJ_GEOM, "floor");
   std::array<int, kNumLegs> foot_bodies{};
   std::array<int, kNumLegs> foot_geoms{};
+  std::array<int, 6> rear_joint_dofs{};
   std::array<double, kNumLegs> base_z{};
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     foot_bodies[leg] = mj_name2id(model, mjOBJ_BODY,
@@ -136,19 +147,51 @@ MarchReport runMarch(
     foot_geoms[leg] = mj_name2id(model, mjOBJ_GEOM, kLegNames[leg]);
     base_z[leg] = data->xpos[3 * foot_bodies[leg] + 2];
   }
+  for (std::size_t rear = 0; rear < 2; ++rear) {
+    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+      const auto name = std::string(kLegNames[rear + 2]) +
+        (joint == 0 ? "_hip_joint" : joint == 1 ? "_thigh_joint" : "_calf_joint");
+      const int id = mj_name2id(model, mjOBJ_JOINT, name.c_str());
+      rear_joint_dofs[rear * kJointsPerLeg + joint] = model->jnt_dofadr[id];
+    }
+  }
   const double start_x = data->qpos[0];
   const double start_y = data->qpos[1];
   MarchReport report;
   std::array<bool, kNumLegs> contact{};
+  std::array<double, 6> previous_rear_torque{};
   FSM_StateName previous_state = runner.currentStateName();
 
   for (std::size_t index = 0; index < steps; ++index) {
+    if (before_control) {before_control(index);}
     // 与 GUI 一致：每个控制周期下发一次步态选择，未变化时是空操作。
     runner.setLocomotionGait(gait_at(index));
     runner.setLocomotionVelocityCommand(velocity.forward, velocity.lateral, velocity.yaw);
     runner.setControlMode(ControlMode::Locomotion);
     runner.run();
     writer.write(runner, data, true);
+    if (gait_at(index) == GaitType::STAND_CYCLE) {
+      if (index < 250) {
+        for (std::size_t rear = 0; rear < 2; ++rear) {
+          for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+            const std::size_t slot = rear * kJointsPerLeg + joint;
+            const double torque = data->qfrc_applied[rear_joint_dofs[slot]];
+            if (index != 0) {
+              report.rear_command_step_max = std::max(
+                report.rear_command_step_max,
+                std::abs(torque - previous_rear_torque[slot]));
+            }
+            previous_rear_torque[slot] = torque;
+          }
+        }
+      }
+      for (int dof = 6; dof < model->nv; ++dof) {
+        if (std::abs(data->qfrc_applied[dof]) >= 59.0) {
+          ++report.torque_limit_frames;
+          break;
+        }
+      }
+    }
     const FSM_StateName state = runner.currentStateName();
     if (state == FSM_StateName::BALANCE_STAND &&
       previous_state == FSM_StateName::LOCOMOTION)
@@ -178,6 +221,12 @@ MarchReport runMarch(
     }
 
     std::size_t concurrent_swing = 0;
+    const bool early_force_window = index >= 100 && index < 200;
+    const bool late_force_window = index + 700 >= steps && index + 300 < steps;
+    const bool swing_force_window = index >= 430 && index < 460;
+    report.early_force_samples += early_force_window ? 1U : 0U;
+    report.late_force_samples += late_force_window ? 1U : 0U;
+    report.swing_force_samples += swing_force_window ? 1U : 0U;
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       const int foot = foot_bodies[leg];
       report.maximum_foot_height[leg] = std::max(
@@ -190,6 +239,17 @@ MarchReport runMarch(
           (ct.geom2 == foot_geoms[leg] && ct.geom1 == floor_geom))
         {
           now_contact = true;
+          if (early_force_window || late_force_window || swing_force_window) {
+            mjtNum contact_force[6]{};
+            mj_contactForce(model, data, c, contact_force);
+            if (early_force_window) {
+              report.early_normal_force[leg] += contact_force[0];
+            } else if (late_force_window) {
+              report.late_normal_force[leg] += contact_force[0];
+            } else {
+              report.swing_normal_force[leg] += contact_force[0];
+            }
+          }
           break;
         }
       }
@@ -210,6 +270,7 @@ MarchReport runMarch(
     mj_step(model, data);
   }
   report.net_x = data->qpos[0] - start_x;
+  report.final_contact = contact;
   report.net_y = data->qpos[1] - start_y;
   report.settled_delta_x = report.net_x - report.initial_reposition_x;
   report.settled_delta_y = report.net_y - report.initial_reposition_y;
@@ -287,6 +348,7 @@ TEST(Dm1MarchInPlace, Key3UsesUnmodifiedWalkingWbcWithFourContactsAndZeroVelocit
   const auto & p = context.parameters;
   LocomotionCtrl<float> reference(model::makeFloatingBaseModel(context.quadruped));
   LegController<float> reference_commands(context.quadruped);
+  reference.setBodyPositionGains(p.balance_body_position_kp, p.balance_body_position_kd);
   reference.setBodyOrientationGains(p.locomotion_body_orientation_kp, p.locomotion_body_orientation_kd);
   reference.setJointGains(p.locomotion_joint_kp, p.locomotion_joint_kd);
   reference.setMaxNormalForce(p.maximum_normal_force);
@@ -359,6 +421,233 @@ TEST(Dm1MarchInPlace, FourContactDiagnosticStaysGroundedWithoutAutomaticProgress
     EXPECT_LT(report.maximum_foot_height[leg], 0.002);
     EXPECT_TRUE(runner.jointCommands()[leg].kp.isApprox(parameters.locomotion_joint_kp));
     EXPECT_TRUE(runner.jointCommands()[leg].kd.isApprox(parameters.locomotion_joint_kd));
+  }
+}
+
+TEST(Dm1MarchInPlace, Key4LiftsOnceThenRestoresFourLegSupport)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+
+  const auto report = runMarch(model.get(), data.get(), runner, writer,
+    [](std::size_t) {return GaitType::STAND_CYCLE;}, 5000);
+  printReport("load_transfer", report);
+  ASSERT_GT(report.early_force_samples, 0U);
+  ASSERT_GT(report.late_force_samples, 0U);
+  EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
+  EXPECT_EQ(report.fallbacks, 0U);
+  EXPECT_GT(report.body_height_min, 0.30);
+  EXPECT_LT(report.maximum_roll, 0.15);
+  EXPECT_LT(report.maximum_pitch, 0.15);
+  EXPECT_EQ(report.torque_limit_frames, 0U);
+  EXPECT_LT(report.rear_command_step_max, 8.0);
+  for (const std::size_t leg : {std::size_t(0), std::size_t(3)}) {
+    EXPECT_EQ(report.liftoffs[leg], 0U) << kLegNames[leg];
+    EXPECT_LT(report.maximum_foot_height[leg], 0.002) << kLegNames[leg];
+  }
+  for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
+    EXPECT_EQ(report.liftoffs[leg], 1U) << kLegNames[leg];
+    EXPECT_GT(report.maximum_foot_height[leg], 0.005) << kLegNames[leg];
+    EXPECT_LT(report.maximum_foot_height[leg], 0.02) << kLegNames[leg];
+  }
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_TRUE(report.final_contact[leg]) << kLegNames[leg];
+  }
+  const double early_unload =
+    (report.early_normal_force[1] + report.early_normal_force[2]) /
+    static_cast<double>(report.early_force_samples);
+  const double late_unload =
+    (report.late_normal_force[1] + report.late_normal_force[2]) /
+    static_cast<double>(report.late_force_samples);
+  const double early_support =
+    (report.early_normal_force[0] + report.early_normal_force[3]) /
+    static_cast<double>(report.early_force_samples);
+  const double late_support =
+    (report.late_normal_force[0] + report.late_normal_force[3]) /
+    static_cast<double>(report.late_force_samples);
+  const double swing_unload =
+    (report.swing_normal_force[1] + report.swing_normal_force[2]) /
+    static_cast<double>(report.swing_force_samples);
+  const double swing_support =
+    (report.swing_normal_force[0] + report.swing_normal_force[3]) /
+    static_cast<double>(report.swing_force_samples);
+  std::printf("one_step force unload %.1f -> %.1f -> %.1f N, support %.1f -> %.1f -> %.1f N\n",
+    early_unload, swing_unload, late_unload, early_support, swing_support, late_support);
+  std::printf("one_step torque_limit_frames=%zu rear_command_step_max=%.3f Nm\n",
+    report.torque_limit_frames, report.rear_command_step_max);
+  EXPECT_LT(swing_unload, 1.0);
+  EXPECT_GT(swing_support, (early_unload + early_support) * 0.95);
+  EXPECT_NEAR(late_unload, early_unload, 10.0);
+  EXPECT_NEAR(late_support, early_support, 10.0);
+}
+
+TEST(Dm1MarchInPlace, Key4PlannerSchedulerAndEstimatorAgreeOnOneLift)
+{
+  test_support::FsmContext context(0.002F);
+  context.estimate.position_world.z() = 0.32F;
+  context.desired_state.body_position_world.z() = 0.32F;
+  mpc::SolverSettings<float> settings;
+  settings.time_step = 0.05F;
+  mpc::ConvexMPCLocomotion<float> planner(context.quadruped, 0.002F, 20, settings, 25);
+  planner.initialize();
+  planner.setGait(GaitType::STAND_CYCLE);
+  context.gait_scheduler.step();  // 已站立的入口接触状态。
+  context.gait_scheduler.requestGait(GaitType::STAND_CYCLE);
+  context.gait_scheduler.modifyGait();
+  std::array<Vec3<float>, kNumLegs> feet{};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    feet[leg] = context.estimate.position_world +
+      context.quadruped.hipLocation(static_cast<LegId>(leg)) + context.leg_controller.datas[leg].p;
+  }
+  std::array<int, kNumLegs> swing_frames{};
+  std::array<int, kNumLegs> liftoffs{};
+  for (int frame = 0; frame < 2000; ++frame) {
+    SCOPED_TRACE(frame);
+    const auto result = planner.run(context.estimate, context.desired_state, feet);
+    ASSERT_TRUE(result.valid);
+    const auto probabilities = context.gait_scheduler.gait_data.estimatorContactProbabilities();
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const auto & gait = context.gait_scheduler.gait_data;
+      const bool expected_contact = !(leg == 1 || leg == 2) || frame < 300 || frame >= 390;
+      EXPECT_EQ(result.contact_state[leg], expected_contact);
+      EXPECT_EQ(gait.contactScheduled(static_cast<LegId>(leg)), expected_contact);
+      liftoffs[leg] += gait.liftoff_scheduled(leg);
+      if (!expected_contact) {
+        ++swing_frames[leg];
+        EXPECT_FLOAT_EQ(probabilities[leg], 0.0F);
+        EXPECT_NEAR(result.swing_phase[leg], gait.phase_swing(leg), 1.0e-4F);
+        EXPECT_LT(result.reaction_forces_world[leg].norm(), 1.0e-3F);
+      } else if (frame >= 490) {
+        EXPECT_NEAR(probabilities[leg], 1.0F, 1.0e-4F);
+      }
+    }
+    context.gait_scheduler.step();
+  }
+  EXPECT_EQ(swing_frames, (std::array<int, kNumLegs>{0, 90, 90, 0}));
+  EXPECT_EQ(liftoffs, (std::array<int, kNumLegs>{0, 1, 1, 0}));
+}
+
+TEST(Dm1MarchInPlace, ZeroVelocityKeepsPositionReferenceAfterDisplacement)
+{
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.estimate.position_world << 0.2F, -0.1F, 0.32F;
+  context.desired_state.body_position_world.z() = 0.32F;
+  mpc::SolverSettings<float> settings;
+  settings.time_step = 0.05F;
+  for (const auto gait : {GaitType::STAND, GaitType::STAND_CYCLE, GaitType::TROT_WALK}) {
+    mpc::ConvexMPCLocomotion<float> planner(context.quadruped, 0.002F, 20, settings, 25);
+    planner.initialize();
+    planner.setGait(gait);
+    std::array<Vec3<float>, kNumLegs> feet{};
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      feet[leg] = context.estimate.position_world +
+        context.quadruped.hipLocation(static_cast<LegId>(leg)) + context.leg_controller.datas[leg].p;
+    }
+    const auto anchor = planner.run(context.estimate, context.desired_state, feet).command.body_position_world;
+    context.estimate.position_world.x() += 0.04F;
+    for (int frame = 0; frame < 80; ++frame) {
+      const auto result = planner.run(context.estimate, context.desired_state, feet);
+      ASSERT_TRUE(result.valid);
+      EXPECT_TRUE(result.command.body_position_world.isApprox(anchor));
+    }
+    planner.setVelocityCommand(0.18F, 0.0F, 0.0F);
+    const auto moving = planner.run(context.estimate, context.desired_state, feet);
+    EXPECT_FLOAT_EQ(moving.command.body_position_world.x(), context.estimate.position_world.x());
+    planner.setVelocityCommand(0.0F, 0.0F, 0.0F);
+    for (int frame = 0; frame < 100; ++frame) {
+      ASSERT_TRUE(planner.run(context.estimate, context.desired_state, feet).valid);
+    }
+    const float stop_x = context.estimate.position_world.x();
+    context.estimate.position_world.x() += 0.03F;
+    const auto stopped = planner.run(context.estimate, context.desired_state, feet);
+    EXPECT_FLOAT_EQ(stopped.command.body_position_world.x(), stop_x);
+  }
+}
+
+TEST(Dm1MarchInPlace, CalfGainAddsSupportTorqueWithTheSameWbcReference)
+{
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.estimate.position_world.z() = 0.30F;
+  const auto & p = context.parameters;
+  LocomotionCtrlData<float> input;
+  input.pBody_des.z() = 0.32F;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    input.contact_state[leg] = 1.0F;
+    input.Fr_des[leg].z() = context.quadruped.totalMass() * 9.81F / kNumLegs;
+  }
+  std::array<float, 2> left_rear_calf_torque{};
+  Vec3<float> old_reference = Vec3<float>::Zero();
+  for (std::size_t mode = 0; mode < 2; ++mode) {
+    LocomotionCtrl<float> wbc(model::makeFloatingBaseModel(context.quadruped));
+    wbc.setBodyPositionGains(p.balance_body_position_kp, p.balance_body_position_kd);
+    wbc.setBodyOrientationGains(p.locomotion_body_orientation_kp, p.locomotion_body_orientation_kd);
+    Vec3<float> kp = p.locomotion_joint_kp;
+    if (mode == 0) {kp.z() = 65.0F;}
+    wbc.setJointGains(kp, p.locomotion_joint_kd);
+    LegController<float> output(context.quadruped);
+    ASSERT_TRUE(wbc.runAndApply(&input, context.estimate, context.joint_states, output));
+    const auto & command = output.commands[3];
+    const auto & state = context.joint_states[3];
+    left_rear_calf_torque[mode] = command.torque_feedforward.z() +
+      command.kp_joint.z() * (command.position_desired.z() - state.position.z()) +
+      command.kd_joint.z() * (command.velocity_desired.z() - state.velocity.z());
+    if (mode == 0) {old_reference = command.position_desired;}
+    EXPECT_TRUE(command.position_desired.isApprox(old_reference));
+  }
+  std::printf("calf_support torque Kp65=%.3f Kp90=%.3f Nm\n",
+    left_rear_calf_torque[0], left_rear_calf_torque[1]);
+  EXPECT_GT(left_rear_calf_torque[1], left_rear_calf_torque[0] + 0.5F);
+}
+
+TEST(Dm1MarchInPlace, Key4RecoversFromAPhysicalPitchAndPositionDisturbance)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  const int trunk = mj_name2id(model.get(), mjOBJ_BODY, "trunk");
+  std::size_t disturbed_frames = 0;
+  const auto report = runMarch(model.get(), data.get(), runner, writer,
+    [](std::size_t) {return GaitType::STAND_CYCLE;}, 5000, {},
+    [&](std::size_t frame) {
+      const bool disturb = frame >= 430 && frame < 530;
+      data->xfrc_applied[6 * trunk] = disturb ? 4.0 : 0.0;
+      data->xfrc_applied[6 * trunk + 3] = disturb ? -0.35 : 0.0;
+      data->xfrc_applied[6 * trunk + 4] = disturb ? -2.0 : 0.0;
+      disturbed_frames += disturb ? 1U : 0U;
+    });
+  printReport("disturbed_one_step", report);
+  EXPECT_EQ(disturbed_frames, 100U);
+  EXPECT_EQ(report.fallbacks, 0U);
+  EXPECT_EQ(report.torque_limit_frames, 0U);
+  EXPECT_GT(report.body_height_min, 0.28);
+  EXPECT_LT(report.maximum_roll, 0.2);
+  EXPECT_LT(report.maximum_pitch, 0.2);
+  EXPECT_GT(report.maximum_pitch, 0.02);
+  const mjtNum * rotation = data->xmat + 9 * trunk;
+  EXPECT_LT(std::abs(std::atan2(rotation[7], rotation[8])), 0.03);
+  EXPECT_LT(std::abs(std::atan2(-rotation[6], std::hypot(rotation[0], rotation[3]))), 0.03);
+  EXPECT_LT(std::abs(report.net_x), 0.03);
+  EXPECT_LT(std::abs(report.net_y), 0.03);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_TRUE(report.final_contact[leg]);
+    EXPECT_GT(report.late_normal_force[leg] / report.late_force_samples, 10.0);
+    const auto & command = runner.jointCommands()[leg];
+    const auto & home = runner.quadruped().leg(static_cast<LegId>(leg)).joints.home_position;
+    EXPECT_LT(std::abs(command.position_desired.y() - home.y()), 0.25);
+    EXPECT_LT(std::abs(command.position_desired.z() - home.z()), 0.25);
   }
 }
 

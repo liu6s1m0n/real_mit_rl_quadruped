@@ -69,6 +69,9 @@ public:
   /** @brief 清零周期、命令斜坡和缓存的 MPC 输出。 */
   void initialize() noexcept;
   void setGait(GaitType gait);
+  /** 设置四脚法向力范围；变化时使旧 MPC 反力缓存失效。 */
+  void setNormalForceBounds(const NormalForceBounds<T> & bounds);
+  const SolverSettings<T> & solverSettings() const noexcept {return solver_.settings();}
   /** @brief 设置机身前向速度，单位 m/s。 */
   void setForwardVelocity(T velocity);
   /**
@@ -141,6 +144,7 @@ private:
   bool cached_solution_valid_ = false;
   /** @brief 最近一次缓存求解是否收敛。 */
   bool cached_solution_converged_ = false;
+  NormalForceBounds<T> normal_force_bounds_{};
   /** @brief 底层有限时域接触力 MPC 求解器。 */
   SolverMPC<T> solver_;
   /** @brief 始终四脚支撑的站立步态。 */

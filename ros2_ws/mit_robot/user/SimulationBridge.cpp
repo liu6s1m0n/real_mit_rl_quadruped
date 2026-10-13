@@ -73,6 +73,7 @@ protected:
       case GLFW_KEY_1: decoded = '1'; break;
       case GLFW_KEY_2: decoded = '2'; break;
       case GLFW_KEY_3: decoded = '3'; break;
+      case GLFW_KEY_4: decoded = '4'; break;
       case GLFW_KEY_W: decoded = 'W'; break;
       case GLFW_KEY_S: decoded = 'S'; break;
       case GLFW_KEY_A: decoded = 'A'; break;
@@ -579,6 +580,7 @@ void runPhysics(
       if (arbiter.takeHelpRequest()) {
         std::printf(
           "Keys: U enable, 0 disable, 1 stand, 2 march, 3 four-contact diagnostic, "
+          "4 four-contact load transfer, "
           "P prone down, W/S forward/back, A/D left/right, "
           "Q/E rotate, Space stop, Esc exit, H help\n");
       }
@@ -647,6 +649,9 @@ void runPhysics(
           } else if (motion == teleop::Motion::FourContactDiagnostic) {
             walking_mode = ControlMode::Locomotion;
             gait = GaitType::STAND;
+          } else if (motion == teleop::Motion::FourContactLoadTransfer) {
+            walking_mode = ControlMode::Locomotion;
+            gait = GaitType::STAND_CYCLE;
           }
           runner.setLocomotionGait(gait);
           runner.setControlMode(walking_mode);
