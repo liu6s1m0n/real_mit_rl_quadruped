@@ -5,7 +5,11 @@
 
 #include "MPC/SolverMPC.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -227,8 +231,30 @@ SolverResult<T> SolverMPC<T>::solve(
   const MatD ce = MatD::Zero(n, 0);
   const VecD ce0 = VecD::Zero(0);
   VecD solution = VecD::Zero(n);
+  const bool diagnostics = std::getenv("DM1_MPC_DIAGNOSTICS") != nullptr &&
+    std::getenv("DM1_MPC_DIAGNOSTICS")[0] == '1';
+  const auto qp_start = std::chrono::steady_clock::now();
   const double cost = solve_quadprog(hessian, gradient, ce, ce0, ci, ci0, solution);
-  if (!std::isfinite(cost) || !solution.allFinite()) {return SolverResult<T>{};}
+  const double qp_elapsed_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - qp_start).count();
+  if (!std::isfinite(cost) || !solution.allFinite()) {
+    if (diagnostics) {std::fprintf(stderr, "[MPC][DIAGNOSTIC] solve_failed qp_ms=%.6f\n", qp_elapsed_ms);}
+    return SolverResult<T>{};
+  }
+
+  if (diagnostics) {
+    double minimum_constraint_margin = std::numeric_limits<double>::infinity();
+    for (Eigen::Index constraint = 0; constraint < constraints; ++constraint) {
+      minimum_constraint_margin = std::min(
+        minimum_constraint_margin,
+        ci.col(constraint).dot(solution) + ci0(constraint));
+    }
+    std::fprintf(stderr,
+      "[MPC][DIAGNOSTIC] t_s=%.9g dt_mpc_s=%.9g horizon=%zu contact_variables=%zu cost=%.9g "
+      "min_constraint_margin=%.9g qp_ms=%.6f\n",
+      static_cast<double>(state.timestamp), static_cast<double>(settings_.time_step),
+      horizon, variables.size(), cost, minimum_constraint_margin, qp_elapsed_ms);
+  }
 
   for (std::size_t v = 0; v < variables.size(); ++v) {
     const auto [step, leg] = variables[v];

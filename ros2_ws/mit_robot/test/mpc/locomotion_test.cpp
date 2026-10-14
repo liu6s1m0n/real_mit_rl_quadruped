@@ -47,6 +47,35 @@ TEST(MpcLocomotion, PublishesUnambiguousContactStateAndGaitTiming)
   }
 }
 
+TEST(MpcLocomotion, KeepsFirstStepForcesInsideMitContactConstraints)
+{
+  const auto quadruped = robots::dm1::makeModel<double>();
+  mpc::ConvexMPCLocomotion<double> controller(quadruped, 0.002, 13);
+  controller.setGait(GaitType::TROT);
+
+  const auto result = controller.run(
+    test_support::standingEstimate(), test_support::standingDesired(),
+    test_support::standingFeet());
+  ASSERT_TRUE(result.valid);
+  const auto & settings = controller.solverSettings();
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & force = result.reaction_forces_world[leg];
+    ASSERT_TRUE(force.allFinite());
+    if (!result.contact_state[leg]) {
+      EXPECT_TRUE(force.isApprox(Vec3<double>::Zero(), 1.0e-10));
+      continue;
+    }
+    EXPECT_GE(force.z(), settings.minimum_normal_force - 1.0e-10);
+    EXPECT_LE(force.z(), settings.maximum_normal_force + 1.0e-10);
+    EXPECT_LE(
+      std::abs(force.x()),
+      settings.friction_coefficient * force.z() + 1.0e-10);
+    EXPECT_LE(
+      std::abs(force.y()),
+      settings.friction_coefficient * force.z() + 1.0e-10);
+  }
+}
+
 TEST(MpcLocomotion, SupportsBodyFrameLateralMotionAndYawRotation)
 {
   const auto quadruped = robots::dm1::makeModel<double>();

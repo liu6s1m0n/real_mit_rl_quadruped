@@ -1,10 +1,12 @@
 #include "WBC/WBC_Ctrl/WBC_Ctrl.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -253,6 +255,14 @@ bool WBC_Ctrl<T>::runAndApply(
   LegController<T> & leg_controller)
 {
   constexpr double kControlCycleBudgetMs = 2.0;
+  const char * diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS");
+  const bool trace = diagnostics && diagnostics[0] == '1';
+  // 诊断快照不参与控制；使用同一实例的上一周期，禁止跨实例共享历史。
+  const auto previous = trace ? std::make_unique<Result>(result_) : nullptr;
+  const T previous_timestamp = estimate_.timestamp;
+  const DVec<T> previous_q = trace ? state_.q : DVec<T>{};
+  const DVec<T> previous_qd = trace ? state_.qd : DVec<T>{};
+  const auto previous_contacts = trace ? contacts_ : std::vector<ContactSpec<T> *>{};
   const auto timing_start = std::chrono::steady_clock::now();
   const bool success = run(input, estimate, joint_states);
   applyResult(leg_controller);
@@ -265,7 +275,49 @@ bool WBC_Ctrl<T>::runAndApply(
   if (overrun) {++timing_window_overruns_;}
 
   // 只读诊断，覆盖所有 WBC 调用者；任务误差与原始目标在 FSM 改写前记录。
-  const char * diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS");
+  if (trace) {
+    std::ostringstream line;
+    line << std::setprecision(9) << "[WBC][CONTINUITY] iteration=" << iteration_
+         << " t_s=" << estimate.timestamp << " previous_t_s=" << previous_timestamp
+         << " previous_success=" << previous->valid << " success=" << success
+         << " contact_changed=" << (previous_contacts != contacts_);
+    const T dt = estimate.timestamp - previous_timestamp;
+    const bool comparable = previous->valid && success && dt > T(0);
+    line << " dt_s=" << dt << " comparable=" << comparable;
+    if (comparable) {
+      line << " q_step_norm=" << (state_.q - previous_q).norm()
+           << " q_integration_error_norm=" <<
+        (state_.q - previous_q - T(0.5) * dt * (previous_qd + state_.qd)).norm()
+           << " q_des_step_norm=" << (result_.joint_position - previous->joint_position).norm()
+           << " dq_des_step_norm=" << (result_.joint_velocity - previous->joint_velocity).norm()
+           << " ff_step_norm=" << (result_.joint_torque - previous->joint_torque).norm();
+      if (previous_contacts == contacts_) {
+        line << " force_step_norm=" <<
+          (result_.reaction_force - previous->reaction_force).norm();
+      }
+    }
+    if (success) {
+      DVec<T> residual = mass_matrix_ * result_.generalized_acceleration + coriolis_ + gravity_;
+      residual.tail(kNumJoints) -= result_.joint_torque;
+      T minimum_margin = std::numeric_limits<T>::infinity();
+      Eigen::Index offset = 0;
+      for (const auto * contact : contacts_) {
+        DMat<T> jacobian, uf;
+        DVec<T> bound;
+        contact->getContactJacobian(jacobian);
+        contact->getRFConstraintMtx(uf);
+        contact->getRFConstraintVec(bound);
+        const auto force = result_.reaction_force.segment(offset, contact->getDim());
+        residual -= jacobian.transpose() * force;
+        minimum_margin = std::min(minimum_margin, (uf * force - bound).minCoeff());
+        offset += contact->getDim();
+      }
+      line << " dynamics_residual=[" << residual.transpose()
+           << "] min_constraint_margin=" << minimum_margin;
+    }
+    line << '\n';
+    std::fputs(line.str().c_str(), stderr);
+  }
   if (success && diagnostics && diagnostics[0] == '1' &&
     (iteration_ <= 10 || iteration_ % 10 == 0))
   {

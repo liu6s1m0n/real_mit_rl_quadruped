@@ -18,6 +18,7 @@
 #include "FSM/FSM_State_BalanceStand.h"
 #include "FSM/FSM_State_Locomotion.h"
 #include "hardware/dm1_mit_interface.hpp"
+#include "MPC/SolverMPC.h"
 #include "model/quadruped.hpp"
 #include "model/robot_control_parameters.hpp"
 #include "model/robots/dm1.hpp"
@@ -29,17 +30,19 @@ namespace
 class DiagnosticEnvironment
 {
 public:
-  explicit DiagnosticEnvironment(const char * value)
+  explicit DiagnosticEnvironment(const char * value, const char * name = "DM1_CONTROL_DIAGNOSTICS")
+  : name_(name)
   {
-    if (const char * old = std::getenv("DM1_CONTROL_DIAGNOSTICS")) {old_ = old;}
-    setenv("DM1_CONTROL_DIAGNOSTICS", value, 1);
+    if (const char * old = std::getenv(name_)) {old_ = old;}
+    setenv(name_, value, 1);
   }
   ~DiagnosticEnvironment()
   {
-    if (old_) {setenv("DM1_CONTROL_DIAGNOSTICS", old_->c_str(), 1);}
-    else {unsetenv("DM1_CONTROL_DIAGNOSTICS");}
+    if (old_) {setenv(name_, old_->c_str(), 1);}
+    else {unsetenv(name_);}
   }
 private:
+  const char * name_;
   std::optional<std::string> old_;
 };
 
@@ -294,6 +297,103 @@ TEST(Dm1Contract, EnablingWbcDiagnosticsDoesNotChangeControlCommands)
     EXPECT_TRUE(a.kp_joint.isApprox(b.kp_joint));
     EXPECT_TRUE(a.kd_joint.isApprox(b.kd_joint));
   }
+}
+
+TEST(Dm1Contract, WbcTraceObservesRepeatedTimeFailuresAndRecoveryWithoutChangingCommands)
+{
+  test_support::FsmContext context(0.002F);
+  LocomotionCtrl<float> quiet(model::makeFloatingBaseModel(context.quadruped));
+  LocomotionCtrl<float> logged(model::makeFloatingBaseModel(context.quadruped));
+  LegController<float> quiet_legs(context.quadruped), logged_legs(context.quadruped);
+  LocomotionCtrlData<float> input;
+  input.pBody_des << 0.0F, 0.0F, 0.32F;
+  input.contact_state.setOnes();
+  context.estimate.position_world = input.pBody_des;
+  for (auto & joint : context.joint_states) {joint.valid = true;}
+  for (auto & force : input.Fr_des) {
+    force << 0.0F, 0.0F, context.quadruped.totalMass() * 9.81F / 4.0F;
+  }
+  const std::array<float, 12> times{
+    1.0F, 1.002F, 1.002F, 0.5F, 0.502F, 0.504F,
+    0.506F, 0.508F, 0.510F, 0.512F, 0.514F, 0.516F};
+  for (std::size_t frame = 0; frame < times.size(); ++frame) {
+    SCOPED_TRACE(frame);
+    context.estimate.timestamp = times[frame];
+    for (auto & joint : context.joint_states) {joint.timestamp = times[frame];}
+    context.joint_states[0].position.x() = frame == 4 || frame == 5 ?
+      std::numeric_limits<float>::quiet_NaN() : 0.001F;
+    input.contact_state.setOnes();
+    if (frame == 7) {input.contact_state << 1.0F, 0.0F, 0.0F, 1.0F;}
+    bool quiet_success, logged_success;
+    ::testing::internal::CaptureStderr();
+    {
+      DiagnosticEnvironment diagnostics("0");
+      quiet_success = quiet.runAndApply(&input, context.estimate, context.joint_states, quiet_legs);
+    }
+    (void)::testing::internal::GetCapturedStderr();
+    ::testing::internal::CaptureStderr();
+    {
+      DiagnosticEnvironment diagnostics("1");
+      logged_success = logged.runAndApply(&input, context.estimate, context.joint_states, logged_legs);
+    }
+    const auto log = ::testing::internal::GetCapturedStderr();
+    ASSERT_EQ(logged_success, quiet_success);
+    ASSERT_EQ(logged_success, frame != 4 && frame != 5);
+    EXPECT_EQ(logged_legs.legsEnabled(), quiet_legs.legsEnabled());
+    ASSERT_NE(log.find("[WBC][CONTINUITY]"), std::string::npos) << log;
+    const bool comparable = frame > 0 && frame != 2 && frame != 3 &&
+      frame != 4 && frame != 5 && frame != 6;
+    EXPECT_NE(log.find(comparable ? "comparable=1" : "comparable=0"), std::string::npos);
+    if (frame == 7 || frame == 8) {
+      EXPECT_NE(log.find("contact_changed=1"), std::string::npos);
+      EXPECT_EQ(log.find("force_step_norm="), std::string::npos);
+    }
+    if (logged_success) {
+      const auto residual = diagnosticVector(log, "dynamics_residual");
+      ASSERT_EQ(residual.size(), 6U + kNumJoints);
+      for (const float value : residual) {EXPECT_NEAR(value, 0.0F, 2.0e-4F);}
+    }
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const auto & a = quiet_legs.commands[leg];
+      const auto & b = logged_legs.commands[leg];
+      EXPECT_TRUE(a.position_desired.isApprox(b.position_desired, 1.0e-7F));
+      EXPECT_TRUE(a.velocity_desired.isApprox(b.velocity_desired, 1.0e-7F));
+      EXPECT_TRUE(a.torque_feedforward.isApprox(b.torque_feedforward, 1.0e-7F));
+      EXPECT_TRUE(a.kp_joint.isApprox(b.kp_joint));
+      EXPECT_TRUE(a.kd_joint.isApprox(b.kd_joint));
+    }
+  }
+}
+
+TEST(Dm1Contract, MpcTracePreservesForceTrajectoryAndReportsTimeStep)
+{
+  const auto quadruped = robots::dm1::makeModel<double>();
+  mpc::SolverSettings<double> settings;
+  mpc::SolverMPC<double> solver(quadruped, settings);
+  StateEstimate<double> estimate;
+  estimate.valid = true;
+  estimate.position_world << 0.0, 0.0, 0.27;
+  estimate.timestamp = 2.5;
+  const std::array<Vec3<double>, kNumLegs> feet{
+    Vec3<double>(0.2, -0.13, 0.0), Vec3<double>(0.2, 0.13, 0.0),
+    Vec3<double>(-0.2, -0.13, 0.0), Vec3<double>(-0.2, 0.13, 0.0)};
+  const auto state = mpc::RobotState<double>::fromEstimate(estimate, feet);
+  DesiredState<double> desired;
+  desired.valid = true;
+  desired.body_position_world << 0.0, 0.0, 0.27;
+  const std::vector<DesiredState<double>> trajectory(settings.horizon, desired);
+  std::vector<int> contacts(settings.horizon * kNumLegs, 1);
+  mpc::SolverResult<double> quiet, logged;
+  {DiagnosticEnvironment diagnostics("0", "DM1_MPC_DIAGNOSTICS"); quiet = solver.solve(state, trajectory, contacts);}
+  ::testing::internal::CaptureStderr();
+  {DiagnosticEnvironment diagnostics("1", "DM1_MPC_DIAGNOSTICS"); logged = solver.solve(state, trajectory, contacts);}
+  const auto log = ::testing::internal::GetCapturedStderr();
+  ASSERT_TRUE(quiet.valid);
+  ASSERT_TRUE(logged.valid);
+  EXPECT_EQ(quiet.force_trajectory, logged.force_trajectory);
+  EXPECT_EQ(quiet.cost, logged.cost);
+  EXPECT_NE(log.find("t_s=2.5 dt_mpc_s=0.026"), std::string::npos) << log;
+  EXPECT_NE(log.find("min_constraint_margin="), std::string::npos);
 }
 
 TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)

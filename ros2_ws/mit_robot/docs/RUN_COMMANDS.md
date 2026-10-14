@@ -107,6 +107,7 @@ ros2 run mymit_robot mymit_robot_user --hardware-sim \
 构建并验证完整原始驱动闭环：
 
 ```bash
+source /opt/ros/humble/setup.bash
 colcon build --packages-select mymit_robot --symlink-install
 source install/setup.bash
 ctest --test-dir build/mymit_robot \
