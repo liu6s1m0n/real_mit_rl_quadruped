@@ -24,13 +24,16 @@ FSM_State_LieDown<T>::FSM_State_LieDown(ControlFSMData<T> * control_fsm_data)
   {
     throw std::invalid_argument("lie-down parameters are invalid");
   }
-  const std::size_t mpc_interval = static_cast<std::size_t>(std::max(
-      T(1), std::round(T(0.04) / control_fsm_data->control_time_step)));
-  const std::size_t gait_segment_interval = static_cast<std::size_t>(std::max(
-      T(1), std::round(T(0.05) / control_fsm_data->control_time_step)));
+  // 与行走一致：MPC 每段 dtMPC 求解一次，预测接触表每段 dtMPC。
+  const std::size_t mpc_interval = mpcSegmentIterations(
+    parameters, control_fsm_data->control_time_step);
+  const std::size_t gait_segment_interval = mpc_interval;
+  mpc::SolverSettings<T> solver_settings;
+  solver_settings.time_step =
+    control_fsm_data->control_time_step * static_cast<T>(gait_segment_interval);
   mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
     *control_fsm_data->quadruped, control_fsm_data->control_time_step,
-    mpc_interval, mpc::SolverSettings<T>{}, gait_segment_interval);
+    mpc_interval, solver_settings, gait_segment_interval);
   wbc_ctrl_ = std::make_unique<LocomotionCtrl<T>>(
     model::makeFloatingBaseModel(*control_fsm_data->quadruped));
   // Keep the existing BalanceStand task weighting for the descent. The
@@ -42,7 +45,7 @@ FSM_State_LieDown<T>::FSM_State_LieDown(ControlFSMData<T> * control_fsm_data)
     parameters.locomotion_body_orientation_kp,
     parameters.locomotion_body_orientation_kd);
   wbc_ctrl_->setJointGains(
-    parameters.locomotion_joint_kp, parameters.locomotion_joint_kd);
+    parameters.joint_kp, parameters.joint_kd);
   wbc_ctrl_->setFloatingBaseWeight(parameters.balance_floating_base_weight);
   wbc_ctrl_->setReactionForceWeight(parameters.balance_reaction_force_weight);
   wbc_ctrl_->setMaxNormalForce(parameters.maximum_normal_force);

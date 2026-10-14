@@ -41,7 +41,8 @@ TEST(GaitSchedulerTest, PreservesTrotDiagonalPhasePattern)
   scheduler.step();
 
   EXPECT_EQ(scheduler.gait_data.current_gait, GaitType::TROT);
-  EXPECT_NEAR(scheduler.gait_data.period_time_nominal, 0.5F, kTolerance);
+  // MIT TROT：10 段 x 26 ms，与 MPC 接触表同周期。
+  EXPECT_NEAR(scheduler.gait_data.period_time_nominal, 0.26F, kTolerance);
   EXPECT_NEAR(scheduler.gait_data.switching_phase_nominal, 0.5F, kTolerance);
 
   // 本工程腿序为 FR、FL、RR、RL；对角腿同相。
@@ -80,7 +81,8 @@ TEST(GaitSchedulerTest, EstimatorTrustTapersAtContactTransitions)
   EXPECT_FLOAT_EQ(touchdown[1], 0.0F);
   EXPECT_FLOAT_EQ(touchdown[2], 0.0F);
 
-  for (int step = 0; step < 62; ++step) {scheduler.step();}
+  // 0.26 s 周期下 32 帧约为支撑相中点。
+  for (int step = 0; step < 31; ++step) {scheduler.step();}
   const auto mid_stance = scheduler.gait_data.estimatorContactProbabilities();
   EXPECT_FLOAT_EQ(mid_stance[0], 1.0F);
   EXPECT_FLOAT_EQ(mid_stance[3], 1.0F);

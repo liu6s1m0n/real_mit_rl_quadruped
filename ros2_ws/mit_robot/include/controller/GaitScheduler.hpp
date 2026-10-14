@@ -56,6 +56,8 @@ struct GaitSchedulerParameters
   GaitType gait_type = GaitType::STAND;
   T gait_period_time = T(0.5);       ///< 覆盖步态周期，s。
   T gait_switching_phase = T(0.5);   ///< 覆盖支撑相占整周期的比例。
+  /** TROT/TROT_WALK 周期，s；必须等于 MPC 预测窗 10 段 x dtMPC（MIT 为 0.26）。 */
+  T trot_period_time = T(0.26);
 
   /** @brief 检查枚举、周期和切换相是否可用。 */
   bool isValid() const noexcept;

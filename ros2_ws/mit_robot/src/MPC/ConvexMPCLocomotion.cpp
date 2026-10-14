@@ -34,11 +34,11 @@ ConvexMPCLocomotion<T>::ConvexMPCLocomotion(
   trot_(settings.horizon, {0, settings.horizon / 2, settings.horizon / 2, 0},
     {settings.horizon / 2, settings.horizon / 2,
       settings.horizon / 2, settings.horizon / 2}, "trot"),
-  // 普通方向行走保留已经通过动力学回归的 60% 支撑率。
+  // TROT_WALK 保留命令枚举，但算法与 MIT TROT 共用 50% 支撑率。
   trot_walk_(settings.horizon,
     {0, settings.horizon / 2, settings.horizon / 2, 0},
-    {settings.horizon * 3 / 5, settings.horizon * 3 / 5,
-      settings.horizon * 3 / 5, settings.horizon * 3 / 5}, "trot_walk")
+    {settings.horizon / 2, settings.horizon / 2,
+      settings.horizon / 2, settings.horizon / 2}, "trot_walk")
 {
   // 对角小跑中 LF+RH 与 RF+LH 分成两组，相位相差半个预测时域。
   if (!std::isfinite(static_cast<double>(control_time_step_)) ||
@@ -194,9 +194,8 @@ void ConvexMPCLocomotion<T>::setGait(GaitType gait)
     throw std::invalid_argument(
       "MPC locomotion supports STAND, STAND_CYCLE, TROT and TROT_WALK");
   }
-  const T gait_segment_time = T(0.05);
-  iterations_per_gait_segment_ = static_cast<std::size_t>(std::max(
-      T(1), std::round(gait_segment_time / control_time_step_)));
+  // 步态分段长度由构造参数决定（MIT：13 帧 = dtMPC），此处不得改写，
+  // 否则接触表时间轴会与求解器的预测步长脱节。
   if (gait_type_ != gait) {
     gait_type_ = gait;
     // 接触约束随步态改变，旧反力不能继续沿用。
@@ -310,6 +309,7 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
       solver_.settings().horizon, result.command);
     // 用期望速度外推未来位置和偏航角，形成 MPC 需要的整段参考轨迹。
     for (std::size_t step = 0; step < trajectory.size(); ++step) {
+      // MIT 的预测窗第 0 段就是当前命令，后续段再按 dtMPC 外推。
       const T lookahead = solver_.settings().time_step * static_cast<T>(step + 1);
 
       trajectory[step].body_position_world =

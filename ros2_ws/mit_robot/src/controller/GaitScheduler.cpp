@@ -42,7 +42,8 @@ template<typename T>
 bool GaitSchedulerParameters<T>::isValid() const noexcept
 {
   return overrideModeIsValid(override_mode) && gaitTypeValueIsValid(gait_type) &&
-         timingIsValid(gait_period_time, gait_switching_phase);
+         timingIsValid(gait_period_time, gait_switching_phase) &&
+         timingIsValid(trot_period_time, T(0.5));
 }
 
 template<typename T>
@@ -344,19 +345,17 @@ void GaitScheduler<T>::createGait()
         Vec4<T>(T(0), T(0.5), T(0.25), T(0.75)), unit_scale, true);
       break;
     
-    /*参数含义：0.5 是完整步态周期（秒），0.6 是支撑相占比。
-      当前支撑时间为 0.30 秒、摆动时间为 0.20 秒。这里保持原接触时序，
-      使 GaitScheduler、状态估计器和 MPC 接触表继续严格同步；
-      抬脚响应改由 swing_height_ 和行走关节 PD 提升。*/
+    // 保留 TROT_WALK 按钮/枚举入口，经典控制统一采用 MIT 的 TROT 时序。
     case GaitType::TROT_WALK:
       configureGait(
-        "TROT_WALK", T(0.5), T(0.6), all_legs,
+        "TROT_WALK", parameters_.trot_period_time, T(0.5), all_legs,
         Vec4<T>(T(0), T(0.5), T(0.5), T(0)), unit_scale, true);
       break;
 
+    // 与 MPC 接触表一致：10 段 x dtMPC，50% 支撑；周期由调用方按 MPC 段长设置。
     case GaitType::TROT:
       configureGait(
-        "TROT", T(0.5), T(0.5), all_legs,
+        "TROT", parameters_.trot_period_time, T(0.5), all_legs,
         Vec4<T>(T(0), T(0.5), T(0.5), T(0)), unit_scale, true);
       break;
 

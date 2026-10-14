@@ -1,56 +1,66 @@
 /**
  * @file SolverMPC.cpp
- * @brief 有限时域接触力 MPC 的预测模型、代价函数和投影梯度求解实现。
+ * @brief MIT Cheetah 凸 MPC：13 维线性模型、矩阵指数离散、稠密 QP 和 QuadProg++ 求解。
  */
 
 #include "MPC/SolverMPC.h"
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
-// 凸 MPC 求解器：在预测时域内优化四条腿的地面反作用力，使机身状态跟踪目标轨迹。
-// 新手阅读建议：先看 solve() 中“预测模型 -> 代价函数 -> 约束投影 -> 首步输出”的主线。
+#include <unsupported/Eigen/MatrixFunctions>
+
+#include "Utilities/QuadProg++.hh"
+
+// 与 MIT convexMPC/SolverMPC.cpp 的 ct_ss_mats / c2qp / solve_mpc 一一对应。
+// 内部统一用 double 计算，避免 float 下 B'SB 条件数过大。
 namespace mpc
 {
 namespace
 {
 
-/**
- * @brief 构造叉乘矩阵，使 skew(r)f = r × f。
- * @tparam T 标量类型。
- */
-template<typename T>
-Mat3<T> skew(const Vec3<T> & value)
+using MatD = Eigen::MatrixXd;
+using VecD = Eigen::VectorXd;
+
+constexpr Eigen::Index kStates = 13;
+constexpr Eigen::Index kInputs = 12;
+constexpr double kGravity = 9.81;
+
+Eigen::Matrix3d skew(const Eigen::Vector3d & r)
 {
-  // skew(r) * f 等价于叉乘 r × f，用于把足端力换算为对机身的力矩。
-  Mat3<T> result;
-  result << T(0), -value.z(), value.y(), value.z(), T(0), -value.x(),
-    -value.y(), value.x(), T(0);
+  Eigen::Matrix3d result;
+  result << 0.0, -r.z(), r.y(), r.z(), 0.0, -r.x(), -r.y(), r.x(), 0.0;
   return result;
+}
+
+/** ZYX 欧拉角对应的 body->world 旋转矩阵。 */
+Eigen::Matrix3d rotationFromRpy(const Eigen::Vector3d & rpy)
+{
+  return (Eigen::AngleAxisd(rpy.z(), Eigen::Vector3d::UnitZ()) *
+         Eigen::AngleAxisd(rpy.y(), Eigen::Vector3d::UnitY()) *
+         Eigen::AngleAxisd(rpy.x(), Eigen::Vector3d::UnitX())).toRotationMatrix();
 }
 
 }  // namespace
 
-/**
- * @brief 检查 MPC 预测和接触力约束参数。
- * @return 参数全部有限且满足正值/上下界关系时返回 true。
- */
 template<typename T>
 bool SolverSettings<T>::isValid() const noexcept
 {
-  return horizon > 0 && std::isfinite(static_cast<double>(time_step)) &&
+  bool weights_valid = true;
+  for (const T weight : state_weights) {
+    weights_valid = weights_valid && std::isfinite(static_cast<double>(weight)) &&
+      weight >= T(0);
+  }
+  return horizon > 0 && horizon < 20 && std::isfinite(static_cast<double>(time_step)) &&
     time_step > T(0) && std::isfinite(static_cast<double>(friction_coefficient)) &&
     friction_coefficient > T(0) && minimum_normal_force >= T(0) &&
-    maximum_normal_force >= minimum_normal_force && force_regularization > T(0) &&
-    maximum_iterations > 0 && convergence_tolerance > T(0);
+    maximum_normal_force >= minimum_normal_force &&
+    std::isfinite(static_cast<double>(alpha)) && alpha > T(0) &&
+    std::isfinite(static_cast<double>(x_drag)) && x_drag >= T(0) && weights_valid;
 }
 
-/**
- * @brief 构造并校验接触力 MPC 求解器。
- * @throws std::invalid_argument settings 非法时抛出。
- */
 template<typename T>
 SolverMPC<T>::SolverMPC(
   const Quadruped<T> & quadruped, const SolverSettings<T> & settings)
@@ -59,54 +69,6 @@ SolverMPC<T>::SolverMPC(
   if (!settings_.isValid()) {throw std::invalid_argument("invalid MPC settings");}
 }
 
-/**
- * @brief 将目标状态按求解器约定压缩为 12 维向量。
- *
- * 排列为 @f$[rpy, p, \dot{rpy}, v]@f$。
- */
-template<typename T>
-DVec<T> SolverMPC<T>::desiredVector(const DesiredState<T> & desired) const
-{
-  // 这里的排列必须与 solve() 中的状态向量一致：姿态、位置、RPY 导数、线速度。
-  DVec<T> result(12);
-  result << desired.body_rpy, desired.body_position_world,
-    RobotState<T>::rpyRateFromBodyAngularVelocity(
-      desired.body_rpy, desired.body_angular_velocity),
-    desired.body_velocity_world;
-  return result;
-}
-
-/**
- * @brief 将一只脚的力投影到接触约束和线性摩擦锥内。
- * @param force 待投影的世界系接触力，会被原地修改。
- * @param contact true 表示支撑脚，false 表示摆动脚。
- */
-template<typename T>
-void SolverMPC<T>::projectForce(
-  Vec3<T> & force, bool contact, T minimum_normal_force,
-  T maximum_normal_force) const noexcept
-{
-  // 摆动腿不允许产生地面力；支撑腿的力被投影到简化的摩擦锥内。
-  if (!contact) {force.setZero(); return;}
-  force.z() = std::clamp(
-    force.z(), minimum_normal_force, maximum_normal_force);
-
-  const T tangential_limit = settings_.friction_coefficient * force.z();
-  const T tangential_norm = force.template head<2>().norm();
-
-  if (tangential_norm > tangential_limit && tangential_norm > T(0)) {
-    force.template head<2>() *= tangential_limit / tangential_norm;
-  }
-}
-
-/**
- * @brief 求解预测窗内所有腿的最优接触反力。
- *
- * 目标函数近似为
- * @f$\min_F\frac12\|W(PF+x_0-x_d)\|^2
- * +\frac{\rho}{2}\|F\|^2@f$，每次梯度更新后将各腿反力投影到
- * 接触开关、法向力范围和摩擦锥约束中。
- */
 template<typename T>
 SolverResult<T> SolverMPC<T>::solve(
   const RobotState<T> & state, const std::vector<DesiredState<T>> & trajectory,
@@ -125,179 +87,165 @@ SolverResult<T> SolverMPC<T>::solve(
       !desired.body_velocity_world.allFinite() || !desired.body_rpy.allFinite() ||
       !desired.body_angular_velocity.allFinite()) {return result;}
   }
-  if (force_bounds != nullptr) {
-    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-      const T low = force_bounds->minimum[leg];
-      const T high = force_bounds->maximum[leg];
-      if (!std::isfinite(static_cast<double>(low)) ||
-        !std::isfinite(static_cast<double>(high)) ||
-        low < settings_.minimum_normal_force || high > settings_.maximum_normal_force ||
-        low > high) {return result;}
-    }
+  std::array<double, kNumLegs> force_min{};
+  std::array<double, kNumLegs> force_max{};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    force_min[leg] = static_cast<double>(force_bounds == nullptr ?
+      settings_.minimum_normal_force : force_bounds->minimum[leg]);
+    force_max[leg] = static_cast<double>(force_bounds == nullptr ?
+      settings_.maximum_normal_force : force_bounds->maximum[leg]);
+    if (!std::isfinite(force_min[leg]) || !std::isfinite(force_max[leg]) ||
+      force_min[leg] < static_cast<double>(settings_.minimum_normal_force) ||
+      force_max[leg] > static_cast<double>(settings_.maximum_normal_force) ||
+      force_min[leg] > force_max[leg]) {return result;}
   }
 
-  constexpr Eigen::Index state_dimension = 12;
-  const Eigen::Index input_dimension = static_cast<Eigen::Index>(horizon * 12);
-  // 离散状态转移采用短时间内速度恒定的线性模型。A
-  // 状态顺序为 [rpy, position, rpy_rate, linear_velocity]。
-  DMat<T> transition = DMat<T>::Identity(state_dimension, state_dimension);
-  transition.block(0, 6, 3, 3) = settings_.time_step * Mat3<T>::Identity();
-  transition.block(3, 9, 3, 3) = settings_.time_step * Mat3<T>::Identity();
+  const double mass = static_cast<double>(quadruped_->totalMass());
+  const Eigen::Matrix3d inertia_body =
+    quadruped_->bodyInertia().inertia_com.template cast<double>();
+  if (!std::isfinite(mass) || mass <= 0.0 || !inertia_body.allFinite() ||
+    std::abs(inertia_body.determinant()) <= 1e-12) {return result;}
 
-  const T mass = quadruped_->totalMass();
-  /* L = IW  R^T = R^-1
-     Lworld = R * Lbody
-     Wworld = R * Wbody
-     Iworld = R * Ibody * R^T*/
-  // 模型保存的是机身坐标系惯量，计算世界系角加速度前先旋转到世界坐标系。 惯量的算法跟坐标转化算法不一样
-  const Mat3<T> inertia_world = state.rotation_world_from_body *
-    quadruped_->bodyInertia().inertia_com * state.rotation_world_from_body.transpose();
-  //惯量有效性
-    if (!std::isfinite(static_cast<double>(mass)) || mass <= T(0) ||
-    std::abs(inertia_world.determinant()) <= std::numeric_limits<T>::epsilon())
-  {
+  // ---------- ct_ss_mats：连续时间模型，只用偏航旋转近似 ----------
+  const double yaw = static_cast<double>(state.rpy.z());
+  const Eigen::Matrix3d rotation_yaw =
+    Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  const Eigen::Matrix3d inertia_world =
+    rotation_yaw * inertia_body * rotation_yaw.transpose();
+  const Eigen::Matrix3d inertia_inverse = inertia_world.inverse();
+
+  Eigen::Matrix<double, kStates, kStates> a_ct =
+    Eigen::Matrix<double, kStates, kStates>::Zero();
+  a_ct.block<3, 3>(0, 6) = rotation_yaw.transpose();
+  a_ct.block<3, 3>(3, 9).setIdentity();
+  a_ct(11, 9) = static_cast<double>(settings_.x_drag);
+  a_ct(11, 12) = 1.0;
+
+  Eigen::Matrix<double, kStates, kInputs> b_ct =
+    Eigen::Matrix<double, kStates, kInputs>::Zero();
+  const Eigen::Vector3d body_position = state.position_world.template cast<double>();
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const Eigen::Vector3d lever =
+      state.foot_position_world[leg].template cast<double>() - body_position;
+    const Eigen::Index column = static_cast<Eigen::Index>(leg * 3);
+    b_ct.block<3, 3>(6, column) = inertia_inverse * skew(lever);
+    b_ct.block<3, 3>(9, column) = Eigen::Matrix3d::Identity() / mass;
+  }
+
+  // ---------- c2qp：expm([A B; 0 0] dt) 精确离散 ----------
+  Eigen::Matrix<double, 25, 25> ab_ct = Eigen::Matrix<double, 25, 25>::Zero();
+  ab_ct.block<kStates, kStates>(0, 0) = a_ct;
+  ab_ct.block<kStates, kInputs>(0, kStates) = b_ct;
+  const Eigen::Matrix<double, 25, 25> ab_dt =
+    (static_cast<double>(settings_.time_step) * ab_ct).exp();
+  const Eigen::Matrix<double, kStates, kStates> a_dt = ab_dt.block<kStates, kStates>(0, 0);
+  const Eigen::Matrix<double, kStates, kInputs> b_dt =
+    ab_dt.block<kStates, kInputs>(0, kStates);
+  if (!a_dt.allFinite() || !b_dt.allFinite()) {return result;}
+
+  const Eigen::Index steps = static_cast<Eigen::Index>(horizon);
+  std::vector<Eigen::Matrix<double, kStates, kStates>> powers(horizon + 1);
+  powers[0].setIdentity();
+  for (std::size_t k = 1; k <= horizon; ++k) {powers[k] = a_dt * powers[k - 1];}
+  // A_qp 第 r 块 = Adt^(r+1)；B_qp(r, c) = Adt^(r-c) Bdt，r >= c。
+  std::vector<Eigen::Matrix<double, kStates, kInputs>> input_response(horizon);
+  for (std::size_t k = 0; k < horizon; ++k) {input_response[k] = powers[k] * b_dt;}
+
+  // 初始状态与 MIT 一致：[rpy, p, omega_world, v, -g]。
+  Eigen::Matrix<double, kStates, 1> x0;
+  x0 << state.rpy.template cast<double>(), body_position,
+    state.angular_velocity_world.template cast<double>(),
+    state.velocity_world.template cast<double>(), -kGravity;
+
+  // ---------- 权重 S 与参考轨迹 X_d ----------
+  VecD weights(kStates * steps);
+  VecD free_error(kStates * steps);
+  for (Eigen::Index r = 0; r < steps; ++r) {
+    const auto & desired = trajectory[static_cast<std::size_t>(r)];
+    const Eigen::Vector3d desired_rpy = desired.body_rpy.template cast<double>();
+    Eigen::Matrix<double, kStates, 1> x_desired;
+    x_desired << desired_rpy, desired.body_position_world.template cast<double>(),
+      rotationFromRpy(desired_rpy) * desired.body_angular_velocity.template cast<double>(),
+      desired.body_velocity_world.template cast<double>(), 0.0;
+    for (Eigen::Index i = 0; i < kInputs; ++i) {
+      weights(kStates * r + i) =
+        static_cast<double>(settings_.state_weights[static_cast<std::size_t>(i)]);
+    }
+    weights(kStates * r + 12) = 0.0;
+    free_error.segment<kStates>(kStates * r) =
+      powers[static_cast<std::size_t>(r) + 1] * x0 - x_desired;
+  }
+
+  // ---------- 消去摆动腿变量（MIT 的 var_elim/con_elim）----------
+  std::vector<std::pair<std::size_t, std::size_t>> variables;
+  for (std::size_t step = 0; step < horizon; ++step) {
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      if (contact_table[step * kNumLegs + leg] != 0) {variables.emplace_back(step, leg);}
+    }
+  }
+  result.force_trajectory.assign(horizon * 12, T(0));
+  if (variables.empty()) {
+    result.converged = true;
+    result.valid = true;
     return result;
   }
-  const Mat3<T> inertia_inverse = inertia_world.inverse();
 
-  //构造初始状态
-  DVec<T> initial(state_dimension);
-  initial << state.rpy, state.position_world, state.rpy_rate,
-    state.velocity_world;
-  DVec<T> free_state = initial;
-  /*预测矩阵的含义
-   * prediction 描述“整个力序列对未来状态的影响”，free_prediction 是无足端力时的轨迹。
-   */
-  DMat<T> sensitivity = DMat<T>::Zero(state_dimension, input_dimension);
-  DMat<T> prediction = DMat<T>::Zero(
-    static_cast<Eigen::Index>(horizon) * state_dimension, input_dimension);
-  DVec<T> free_prediction(static_cast<Eigen::Index>(horizon) * state_dimension);
-  DVec<T> desired_prediction(static_cast<Eigen::Index>(horizon) * state_dimension);
-
-  const Vec3<T> gravity(T(0), T(0), T(-9.81));
-  const T sin_roll = std::sin(state.rpy.x());
-  const T cos_roll = std::cos(state.rpy.x());
-  const T cos_pitch = std::cos(state.rpy.y());
-  if (std::abs(cos_pitch) <= T(1e-4)) {return result;}
-  const T tan_pitch = std::tan(state.rpy.y());
-  Mat3<T> body_angular_velocity_to_rpy_rate;
-  body_angular_velocity_to_rpy_rate <<
-    T(1), sin_roll * tan_pitch, cos_roll * tan_pitch,
-    T(0), cos_roll, -sin_roll,
-    T(0), sin_roll / cos_pitch, cos_roll / cos_pitch;
-  const Mat3<T> world_angular_acceleration_to_rpy_acceleration =
-    body_angular_velocity_to_rpy_rate *
-    state.rotation_world_from_body.transpose();
-
-  for (std::size_t step = 0; step < horizon; ++step) {
-  // 逐步展开线性系统，构造预测时域内的状态响应矩阵。
-  //预测无足端力状态
-    free_state = transition * free_state;
-  // 考虑重力对机身的影响
-    free_state.template segment<3>(9) += settings_.time_step * gravity;
-  //更新敏感度矩阵 第 0 步施加的力会影响第 1 步速度；
-  //也会影响第 2 步、第 3 步的位置和姿态。
-    sensitivity = transition * sensitivity;
-    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-      DMat<T> input = DMat<T>::Zero(state_dimension, 3);
-      const Vec3<T> lever = state.foot_position_world[leg] - state.position_world;
-      /*
-      τ = skew(r) * F =  r x F x是叉乘
-        Wworld = （Iworld）^-1 * τ
-        drpy = dt * E(rpy)R^T*Wworld
-      */
-      input.block(6, 0, 3, 3) =
-        settings_.time_step * world_angular_acceleration_to_rpy_acceleration *
-        inertia_inverse * skew(lever);
-      /*
-        ΔVx              1 0 0   Fx
-        ΔVy = (Δt/m)  *  0 1 0 * Fy
-        ΔVz              0 0 1   Fz
-      */
-      input.block(9, 0, 3, 3) = 
-        settings_.time_step * Mat3<T>::Identity() / mass;
-      //把当前输入放入完整敏感度矩阵
-        sensitivity.block(0, static_cast<Eigen::Index>(step * 12 + leg * 3), 12, 3) = input;
-    }
-    /*计算当前预测状态在大向量中的起始位置*/
-    const Eigen::Index row = static_cast<Eigen::Index>(step) * state_dimension;
-    prediction.block(row, 0, state_dimension, input_dimension) = sensitivity;
-    free_prediction.segment(row, state_dimension) = free_state;
-    desired_prediction.segment(row, state_dimension) = desiredVector(trajectory[step]);
-  }
-  /*设置权重*/
-  DVec<T> weights(state_dimension);
-  // 权重越大，代表对应状态的跟踪优先级越高；此处尤其重视机身高度和横滚/俯仰。
-  weights << T(20), T(20), T(10),  /*Roll  Pitch  Yaw*/
-             T(2),  T(2),  T(50),  /*x     y      z*/
-             T(0.2),T(0.2),T(0.2), /*vRoll vPitch vYaw*/
-             T(1),  T(1),  T(2);   /*vx    vy     vz*/
-  DVec<T> repeated_weights(static_cast<Eigen::Index>(horizon) * state_dimension);
-  for (std::size_t step = 0; step < horizon; ++step) {
-    repeated_weights.segment(static_cast<Eigen::Index>(step) * state_dimension, state_dimension) =
-      weights;
-  }
-
-  const DMat<T> weighted_prediction = repeated_weights.asDiagonal() * prediction;
-  const DVec<T> weighted_error = repeated_weights.asDiagonal() *
-    (free_prediction - desired_prediction);
-  DMat<T> hessian = weighted_prediction.transpose() * weighted_prediction;
-  // 正则项抑制过大的地面力，同时让 Hessian 的数值条件更稳定。
-  hessian.diagonal().array() += settings_.force_regularization;
-  const DVec<T> gradient_offset = weighted_prediction.transpose() * weighted_error;
-
-  const T lipschitz = std::max(
-    hessian.template selfadjointView<Eigen::Upper>().eigenvalues().maxCoeff(), T(1e-6));
-  // 以最大特征值的倒数作为投影梯度法步长，避免迭代发散。
-  const T step_size = T(1) / lipschitz;
-  DVec<T> forces = DVec<T>::Zero(input_dimension);
-  // 初值由当前支撑腿平均分担重力，通常比全零初值更快接近可用解。
-  for (std::size_t step = 0; step < horizon; ++step) {
-    std::size_t contacts = 0;
-    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-      contacts += contact_table[step * kNumLegs + leg] != 0 ? 1U : 0U;
-    }
-    if (contacts > 0) {
-      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-        if (contact_table[step * kNumLegs + leg] != 0) {
-          forces[static_cast<Eigen::Index>(step * 12 + leg * 3 + 2)] =
-            mass * T(9.81) / static_cast<T>(contacts);
-        }
-      }
-    }
-  }
-  //迭代函数开始迭代
-  for (std::size_t iteration = 0; iteration < settings_.maximum_iterations; ++iteration) {
-    const DVec<T> previous = forces;
-    // 一次无约束梯度下降后，将每只脚的力重新投影到接触与摩擦约束中。 
-    forces -= step_size * (hessian * forces + gradient_offset);
-    for (std::size_t step = 0; step < horizon; ++step) {
-      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-        Vec3<T> force = forces.template segment<3>(
-          static_cast<Eigen::Index>(step * 12 + leg * 3));
-        const T low = force_bounds == nullptr ?
-          settings_.minimum_normal_force : force_bounds->minimum[leg];
-        const T high = force_bounds == nullptr ?
-          settings_.maximum_normal_force : force_bounds->maximum[leg];
-        projectForce(force, contact_table[step * kNumLegs + leg] != 0, low, high);
-        forces.template segment<3>(static_cast<Eigen::Index>(step * 12 + leg * 3)) = force;
-      }
-    }
-    result.residual = (forces - previous).template lpNorm<Eigen::Infinity>();
-    result.iterations = iteration + 1;
-    if (result.residual <= settings_.convergence_tolerance) {
-      result.converged = true;
-      break;
+  const Eigen::Index n = static_cast<Eigen::Index>(variables.size() * 3);
+  MatD b_red = MatD::Zero(kStates * steps, n);
+  for (std::size_t v = 0; v < variables.size(); ++v) {
+    const auto [column_step, leg] = variables[v];
+    for (std::size_t r = column_step; r < horizon; ++r) {
+      b_red.block(kStates * static_cast<Eigen::Index>(r), static_cast<Eigen::Index>(v * 3),
+        kStates, 3) = input_response[r - column_step].block(
+        0, static_cast<Eigen::Index>(leg * 3), kStates, 3);
     }
   }
 
-  if (!forces.allFinite()) {return SolverResult<T>{};}
-  result.force_trajectory.assign(forces.data(), forces.data() + forces.size());
-  // MPC 采用滚动时域策略：本控制周期只执行优化序列的第一步，下周期重新求解。
+  // qH = 2(B'SB + alpha I)，qg = 2B'S(A_qp x0 - X_d)。
+  const MatD weighted_b = weights.asDiagonal() * b_red;
+  MatD hessian = 2.0 * (b_red.transpose() * weighted_b);
+  hessian.diagonal().array() += 2.0 * static_cast<double>(settings_.alpha);
+  VecD gradient = 2.0 * (weighted_b.transpose() * free_error);
+
+  // 四棱锥摩擦：mu fz ± fx >= 0、mu fz ± fy >= 0；法向力 fmin <= fz <= fmax。
+  // QuadProg++ 约定 CI' x + ci0 >= 0。
+  const double mu = static_cast<double>(settings_.friction_coefficient);
+  const Eigen::Index constraints = static_cast<Eigen::Index>(variables.size() * 6);
+  MatD ci = MatD::Zero(n, constraints);
+  VecD ci0 = VecD::Zero(constraints);
+  for (std::size_t v = 0; v < variables.size(); ++v) {
+    const Eigen::Index x = static_cast<Eigen::Index>(v * 3);
+    const Eigen::Index c = static_cast<Eigen::Index>(v * 6);
+    const std::size_t leg = variables[v].second;
+    ci(x + 2, c) = mu; ci(x, c) = -1.0;
+    ci(x + 2, c + 1) = mu; ci(x, c + 1) = 1.0;
+    ci(x + 2, c + 2) = mu; ci(x + 1, c + 2) = -1.0;
+    ci(x + 2, c + 3) = mu; ci(x + 1, c + 3) = 1.0;
+    ci(x + 2, c + 4) = 1.0; ci0(c + 4) = -force_min[leg];
+    ci(x + 2, c + 5) = -1.0; ci0(c + 5) = force_max[leg];
+  }
+  const MatD ce = MatD::Zero(n, 0);
+  const VecD ce0 = VecD::Zero(0);
+  VecD solution = VecD::Zero(n);
+  const double cost = solve_quadprog(hessian, gradient, ce, ce0, ci, ci0, solution);
+  if (!std::isfinite(cost) || !solution.allFinite()) {return SolverResult<T>{};}
+
+  for (std::size_t v = 0; v < variables.size(); ++v) {
+    const auto [step, leg] = variables[v];
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      result.force_trajectory[step * 12 + leg * 3 + axis] =
+        static_cast<T>(solution(static_cast<Eigen::Index>(v * 3 + axis)));
+    }
+  }
+  // 滚动时域：只执行第一段。
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    result.reaction_forces_world[leg] =
-      forces.template segment<3>(static_cast<Eigen::Index>(leg * 3));
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      result.reaction_forces_world[leg](static_cast<Eigen::Index>(axis)) =
+        result.force_trajectory[leg * 3 + axis];
+    }
   }
+  result.cost = static_cast<T>(cost);
+  result.converged = true;
   result.valid = true;
   return result;
 }

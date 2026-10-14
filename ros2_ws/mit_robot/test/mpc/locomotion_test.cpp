@@ -31,7 +31,8 @@ TEST(MpcLocomotion, RunsWithCurrentStateAndDesiredStateTypes)
 TEST(MpcLocomotion, PublishesUnambiguousContactStateAndGaitTiming)
 {
   const auto quadruped = robots::dm1::makeModel<double>();
-  mpc::ConvexMPCLocomotion<double> controller(quadruped, 0.002, 15);
+  // MIT 时序：13 帧/段，setGait() 不得改写构造时给定的段长。
+  mpc::ConvexMPCLocomotion<double> controller(quadruped, 0.002, 13);
   controller.setGait(GaitType::TROT);
 
   const auto result = controller.run(
@@ -41,8 +42,8 @@ TEST(MpcLocomotion, PublishesUnambiguousContactStateAndGaitTiming)
   EXPECT_DOUBLE_EQ(result.contact_phase[static_cast<std::size_t>(LegId::FR)], 0.0);
   EXPECT_EQ(result.contact_state, (std::array<bool, kNumLegs>{true, false, false, true}));
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    EXPECT_NEAR(result.stance_time[leg], 0.25, 1.0e-6);
-    EXPECT_NEAR(result.swing_time[leg], 0.25, 1.0e-6);
+    EXPECT_NEAR(result.stance_time[leg], 0.13, 1.0e-6);
+    EXPECT_NEAR(result.swing_time[leg], 0.13, 1.0e-6);
   }
 }
 

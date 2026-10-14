@@ -302,7 +302,6 @@ bool RobotRunner::requestProneDown() noexcept
   }
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
-  locomotion_contact_fusion_time_s_ = 0.0F;
   rl_entry_stable_time_s_ = 0.0F;
   control_fsm_->setRlEntryPostureActive(false);
   prone_down_active_ = true;
@@ -496,7 +495,6 @@ void RobotRunner::reset()
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
   locomotion_entry_stable_time_s_ = 0.0F;
-  locomotion_contact_fusion_time_s_ = 0.0F;
   rl_entry_stable_time_s_ = 0.0F;
   prone_down_active_ = false;
   prone_down_complete_ = false;
@@ -703,24 +701,9 @@ bool RobotRunner::run()
   gait_scheduler_.step();
   auto contact_probabilities =
     gait_scheduler_.gait_data.estimatorContactProbabilities();
-  const bool classic_locomotion =
-    control_fsm_->currentStateName() == FSM_StateName::LOCOMOTION &&
-    (desired_state_.mode == ControlMode::Locomotion ||
-    desired_state_.mode == ControlMode::WalkClassic);
-  locomotion_contact_fusion_time_s_ = classic_locomotion ?
-    locomotion_contact_fusion_time_s_ + control_time_step_ : 0.0F;
-  constexpr float kInitialContactFusionDuration = 0.5F;
-  if (classic_locomotion &&
-    locomotion_contact_fusion_time_s_ < kInitialContactFusionDuration &&
-    contact_estimator_->run())
-  {
-    const auto & measured = contact_estimator_->contactProbabilities();
-    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-      // 计划支撑仍是先验；真实足端仍承重或提前触地时不得被立即丢弃。
-      contact_probabilities[leg] = std::max(
-        contact_probabilities[leg], measured[leg]);
-    }
-  }
+  // 经典 MIT 链路直接使用步态调度器的接触先验。实测接触仍由估计器内部
+  // 作为测量更新使用，避免额外的 0.5 s 接触融合阶段改变 MPC/WBC 相位。
+  contact_estimator_->run();
   state_estimator_->setContactProbabilities(contact_probabilities);
   /*运行状态估计器。如果失败：*/
   if (!state_estimator_->run()) {

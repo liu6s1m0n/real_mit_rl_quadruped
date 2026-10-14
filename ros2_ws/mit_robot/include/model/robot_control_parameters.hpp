@@ -5,6 +5,7 @@
 #ifndef MYMIT_ROBOT_MODEL_ROBOT_CONTROL_PARAMETERS_HPP_
 #define MYMIT_ROBOT_MODEL_ROBOT_CONTROL_PARAMETERS_HPP_
 
+#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 
@@ -32,12 +33,11 @@ struct RobotControlParameters
   Vec3<T> balance_body_position_kd;
   Vec3<T> balance_body_orientation_kp;
   Vec3<T> balance_body_orientation_kd;
-  Vec3<T> balance_joint_kp;
-  Vec3<T> balance_joint_kd;
+  Vec3<T> joint_kp;
+  Vec3<T> joint_kd;
   T balance_floating_base_weight;
   T balance_reaction_force_weight;
   T maximum_normal_force;
-  T standing_supported_mass;
 
   T stand_up_duration;
   T stand_up_thigh_speed_scale;
@@ -49,10 +49,11 @@ struct RobotControlParameters
 
   Vec3<T> locomotion_body_orientation_kp;
   Vec3<T> locomotion_body_orientation_kd;
-  Vec3<T> locomotion_joint_kp;
-  Vec3<T> locomotion_joint_kd;
   T locomotion_swing_height;
   T locomotion_max_lateral_foot_offset;
+  // MPC 预测/接触表段长 dtMPC，s。实际段长按控制周期
+  // 取整为整数帧；TROT 周期 = 10 段 x dtMPC，摆动期为其一半。
+  T mpc_time_step;
 
   // RL 部署契约：45 维单帧观测、6 帧历史、50 Hz 策略。
   T rl_policy_period;
@@ -86,13 +87,13 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     // 趴卧保持关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(70), T(70), T(70)), Vec3<T>(T(1.6), T(1.6), T(1.6)),
     // BalanceStand 机身位置 WBC 增益：[x, y, z] 的 Kp、Kd；不是电机 MIT-PD。
-    Vec3<T>(T(40), T(40), T(80)), Vec3<T>(T(7), T(7), T(12)),
+    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(10), T(10), T(10)),
     // BalanceStand 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd；不是电机 MIT-PD。
-    Vec3<T>(T(90), T(90), T(35)), Vec3<T>(T(16), T(16), T(7)),
-    // BalanceStand 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    Vec3<T>(T(90), T(85), T(100)), Vec3<T>(T(3.0), T(2.4), T(2.6)),
-    // WBC浮动基权重、反力权重、单脚最大法向力、模型支撑质量。
-    T(300), T(1), T(150), T(14.705035),
+    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(10), T(10), T(10)),
+    // 经典 WBC（站立/行走/趴下）共用的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
+    Vec3<T>(T(10), T(10), T(10)), Vec3<T>(T(2), T(2), T(2)),
+    // WBC浮动基权重、反力权重、单脚最大法向力。
+    T(1000), T(1), T(120),
     // StandUp 趴卧展开时长、大腿速度比例、机械关节目标姿态。
     T(3.2), T(0.75), Vec3<T>(T(0), T(0.1), T(-2.15)),
     // StandUp 第一阶段直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
@@ -100,15 +101,26 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     // StandUp 非趴卧路径的足端笛卡尔 PD：[x, y, z] 的 Kp、Kd。
     Vec3<T>(T(190), T(190), T(260)), Vec3<T>(T(10), T(10), T(14)),
     // Locomotion 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd。
-    Vec3<T>(T(69), T(69), T(34)), Vec3<T>(T(11.8), T(11.8), T(5.8)),
-    // Locomotion 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
-    // 分别整定关节阻抗：大腿保留较低刚度，髋和小腿兼顾支撑及扰动响应。
-    Vec3<T>(T(55), T(25), T(90)), Vec3<T>(T(4.7), T(4.9), T(4.8)),
-    // 摆腿高度、足端最大横向偏移。
-    T(0.035), T(0.24),
+    Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(10), T(10), T(10)),
+    // 摆腿高度、足端最大横向偏移（扫参选定摆高 0.06 m）。
+    T(0.06), T(0.30),
+    // MPC 预测段长 dtMPC（500 Hz 下 15 帧，扫参选定 0.030 s）。
+    T(0.030),
     // RL周期、观测维数、历史长度、动作比例、滤波常数、单步变化、速度和力矩限制。
     T(0.02), std::size_t(45), std::size_t(6), T(0.25), T(0.05),
     T(0.15), T(3.0), T(30.0), T(97.0)};
+}
+
+/** @brief dtMPC 换算成整数控制帧（MIT iterationsBetweenMPC），至少 1 帧。 */
+template<typename T>
+std::size_t mpcSegmentIterations(
+  const RobotControlParameters<T> & parameters, T control_time_step)
+{
+  if (!(control_time_step > T(0)) || !(parameters.mpc_time_step > T(0))) {
+    throw std::invalid_argument("MPC timing requires positive time steps");
+  }
+  const T frames = std::round(parameters.mpc_time_step / control_time_step);
+  return frames < T(1) ? std::size_t(1) : static_cast<std::size_t>(frames);
 }
 
 #endif  // MYMIT_ROBOT_MODEL_ROBOT_CONTROL_PARAMETERS_HPP_

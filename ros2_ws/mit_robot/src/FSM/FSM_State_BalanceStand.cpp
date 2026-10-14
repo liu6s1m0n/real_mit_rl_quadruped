@@ -19,17 +19,7 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
   }
   this->turnOnAllSafetyChecks();
   this->checkPDesFoot = false;
-  // 与行走保持一致：MPC 每 40 ms 求解，预测接触表每段 50 ms。
-  const auto mpc_interval = static_cast<std::size_t>(std::max(
-      T(1), std::round(T(0.04) / control_fsm_data->control_time_step)));
-  const auto gait_segment_interval = static_cast<std::size_t>(std::max(
-      T(1), std::round(T(0.05) / control_fsm_data->control_time_step)));
-  mpc::SolverSettings<T> solver_settings;
-  solver_settings.time_step =
-    control_fsm_data->control_time_step * static_cast<T>(gait_segment_interval);
-  mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
-    *control_fsm_data->quadruped, control_fsm_data->control_time_step,
-    mpc_interval, solver_settings, gait_segment_interval);
+  // 与 MIT 一致：站立不运行 MPC，四足均分重力作为 WBIC 的期望反力。
   //创建WBC
   wbc_ctrl_ = std::make_unique<LocomotionCtrl<T>>(
     model::makeFloatingBaseModel(*control_fsm_data->quadruped));
@@ -39,8 +29,10 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
   wbc_ctrl_->setBodyOrientationGains(
     parameters.balance_body_orientation_kp,
     parameters.balance_body_orientation_kd);
+  wbc_ctrl_->setFootPositionGains(
+    Vec3<T>::Constant(T(500)), Vec3<T>::Constant(T(10)));
   wbc_ctrl_->setJointGains(
-    parameters.balance_joint_kp, parameters.balance_joint_kd);
+    parameters.joint_kp, parameters.joint_kd);
   wbc_ctrl_->setFloatingBaseWeight(parameters.balance_floating_base_weight);
   wbc_ctrl_->setReactionForceWeight(parameters.balance_reaction_force_weight);
   wbc_ctrl_->setMaxNormalForce(parameters.maximum_normal_force);
@@ -54,9 +46,6 @@ void FSM_State_BalanceStand<T>::onEnter()
   this->transitionData.zero();
   //请求站立步态
   this->_data->gait_scheduler->requestGait(GaitType::STAND);
-  mpc_->initialize();
-  mpc_->setGait(GaitType::STAND);
-  mpc_->setVelocityCommand(T(0), T(0), T(0));
 
   // 进入状态时锁定当前水平位置和姿态，避免突然跳到世界原点。
   //这样子就到导致了步行时刻突然切换站立直接翻到
@@ -76,7 +65,6 @@ void FSM_State_BalanceStand<T>::onEnter()
   initial_body_rpy_ << T(0), T(0), this->_data->state_estimate->rpy.z();
   posture_ramp_iteration_ = 0;
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    entry_foot_positions_[leg] = this->_data->leg_controller->datas[leg].p;
     entry_joint_positions_[leg] = this->_data->leg_controller->datas[leg].q;
   }
 }
@@ -130,18 +118,18 @@ void FSM_State_BalanceStand<T>::onExit()
 template<typename T>
 void FSM_State_BalanceStand<T>::BalanceStandStep()
 {
-  // 如果外部期望无效，就继续保持进入状态时记录的位姿。
+  // MIT BalanceStand：水平位置与航向锁定入场值，roll/pitch 保持水平，
+  // 仅高度跟随外部目标；速度、加速度目标均为零。
   wbc_data_.pBody_des = initial_body_position_;
   wbc_data_.vBody_des.setZero();
   wbc_data_.aBody_des.setZero();
   wbc_data_.pBody_RPY_des = initial_body_rpy_;
   wbc_data_.vBody_Ori_des.setZero();
-  
-  //读取外部期望状态
+
+  //读取外部期望高度
   const DesiredState<T> & desired = *this->_data->desired_state;
   if (desired.valid) {
-    wbc_data_.pBody_des = desired.body_position_world;
-    wbc_data_.pBody_RPY_des = desired.body_rpy;
+    wbc_data_.pBody_des.z() = desired.body_position_world.z();
   }
   // 额外限制单周期下降量，防止高度滑块快速下拉造成腿部瞬时折叠。
   // 参数2 高度变化率
@@ -155,41 +143,20 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
   }
   last_height_command_ = wbc_data_.pBody_des.z();
 
-  DesiredState<T> standing_command = desired;
-  standing_command.valid = true;
-  standing_command.body_position_world = wbc_data_.pBody_des;
-  standing_command.body_rpy = wbc_data_.pBody_RPY_des;
-  standing_command.body_velocity_world.setZero();
-  standing_command.body_acceleration_world.setZero();
-  standing_command.body_angular_velocity.setZero();
-  std::array<Vec3<T>, kNumLegs> feet_world{};
+  // 四腿始终接触；期望反力取 mg/4 竖直分量，由 WBIC 在摩擦锥内修正。
   const auto & estimate = *this->_data->state_estimate;
+  const T support_force =
+    this->_data->quadruped->totalMass() * T(9.81) / static_cast<T>(kNumLegs);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    feet_world[leg] = estimate.position_world + estimate.rotation_world_from_body *
+    // 接触腿在 WBC 中只使用反力；足端目标取当前世界系落脚点，便于诊断。
+    wbc_data_.pFoot_des[leg] = estimate.position_world +
+      estimate.rotation_world_from_body *
       (this->_data->quadruped->hipLocation(static_cast<LegId>(leg)) +
       this->_data->leg_controller->datas[leg].p);
-  }
-  const auto result = mpc_->run(estimate, standing_command, feet_world);
-  if (!result.valid) {
-    std::fprintf(stderr,
-      "[FSM][BALANCE_STAND] MPC 求解无效，iteration=%zu。\n", iteration_);
-    return;
-  }
-  wbc_data_.pBody_des = result.command.body_position_world;
-  wbc_data_.pBody_RPY_des = result.command.body_rpy;
-  wbc_data_.vBody_des = result.command.body_velocity_world;
-  wbc_data_.aBody_des = result.command.body_acceleration_world;
-  wbc_data_.vBody_Ori_des = result.command.body_angular_velocity;
-  // STAND 接触表始终四腿支撑；期望反力由 MPC 求解，WBIC 再修正。
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    // 足端目标必须从入场时的实测腿坐标开始；清零会把目标瞬间移到髋部，
-    // 在状态切换帧给 WBC 施加不必要的腿部冲击。
-    wbc_data_.pFoot_des[leg] = entry_foot_positions_[leg];
     wbc_data_.vFoot_des[leg].setZero();
     wbc_data_.aFoot_des[leg].setZero();
-    wbc_data_.Fr_des[leg] = result.reaction_forces_world[leg];
-    //标记为接触腿
-    wbc_data_.contact_state[leg] = result.contact_state[leg] ? T(1) : T(0);
+    wbc_data_.Fr_des[leg] = Vec3<T>(T(0), T(0), support_force);
+    wbc_data_.contact_state[leg] = T(1);
   }
   //调用WBC
   /*&wbc_data_ 机身想去哪里；机身想保持什么姿态；四只脚是否接触；期望反力是多少。*/
@@ -208,6 +175,18 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
     return;
   }
 
+  const Mat3<T> rotation_body_from_world =
+    estimate.rotation_world_from_body.transpose();
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    auto & command = this->_data->leg_controller->commands[leg];
+    command.foot_position_desired = rotation_body_from_world *
+      (wbc_data_.pFoot_des[leg] - estimate.position_world) -
+      this->_data->quadruped->hipLocation(static_cast<LegId>(leg));
+    command.foot_velocity_desired = rotation_body_from_world * wbc_data_.vFoot_des[leg];
+    command.kp_cartesian = Mat3<T>::Zero();
+    command.kd_cartesian = Mat3<T>::Identity() * T(7);
+  }
+
   // 站立与行走统一直接使用 WBC 前馈，保持求解器给出的动力学比例。
   T maximum_feedforward_torque = T(0);
   for (const auto & command : this->_data->leg_controller->commands) {
@@ -222,35 +201,27 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
       static_cast<double>(maximum_feedforward_torque));
   }
 
-  // 机身任务和四足接触不能唯一确定 12 个关节角，KinWBC 仍存在姿态零空间。
-  // 因此根据目标高度构造对称腿姿，并用较弱关节阻抗抑制零空间漂移；
-  // WBIC 计算的全身前馈力矩和地面反力仍然保留。
+  // 四足接触（12 维约束）加机身 6 维任务已唯一确定构型，KinWBC 不存在
+  // 零空间漂移，因此与 MIT 一致直接使用 WBC 的 q_des/qd_des 与前馈力矩。
+  ++posture_ramp_iteration_;
+  if (desired.mode != ControlMode::WalkRl &&
+    !this->_data->rl_entry_posture_active)
+  {
+    return;
+  }
+
+  // RL 入场单独处理：RL 的第一帧历史必须建立在训练默认姿态上，因此把关节
+  // 参考从入场姿态平滑过渡到 RL 默认姿态；WBIC 前馈与反力仍保留。
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    //遍历四条腿
     const LegId leg_id = static_cast<LegId>(leg);
-    //该腿的最终关节命令。
     auto & command = this->_data->leg_controller->commands[leg];
-    //也就是该腿的模型参数，包括：关节上下限；home姿态；扭矩上限；连杆长度。
     const auto & leg_model = this->_data->quadruped->leg(leg_id);
-    // DM1 默认站姿来自唯一模型契约。
-    Vec3<T> home = leg_model.joints.home_position;
-    if (desired.mode == ControlMode::WalkRl ||
-      this->_data->rl_entry_posture_active)
-    {
-      // RL 的第一帧历史必须建立在训练默认姿态上，而不是 BalanceStand/MIT
-      // 的另一套关节参考。这里仅改变 WalkRl 入场过渡，MPC 和楼梯 RL 不变。
-      for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-        home[static_cast<Eigen::Index>(joint)] =
-          static_cast<T>(kDm1RlDefaultJointPosition[
-            leg * kJointsPerLeg + joint]);
-      }
+    Vec3<T> home;
+    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+      home[static_cast<Eigen::Index>(joint)] =
+        static_cast<T>(kDm1RlDefaultJointPosition[
+          leg * kJointsPerLeg + joint]);
     }
-    // During prone stand-up, the prepare pose is the support pose captured by
-    // StandUp.  Blending it toward the nominal home pose while the body is
-    // still rising makes the null-space PD retract the legs and unload the
-    // contacts.  Keep that pose until the body has completed the height ramp.
-    // For ordinary BalanceStand entries, retain the normal home-pose nullspace
-    // target.
     const T posture_alpha = this->_data->control_parameters->start_in_prone_home ?
       std::clamp(static_cast<T>(posture_ramp_iteration_) / T(2000), T(0), T(1)) :
       T(1);
@@ -261,10 +232,9 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
     command.position_desired = command.position_desired.cwiseMax(
       leg_model.joints.lower_limit).cwiseMin(leg_model.joints.upper_limit);
     command.velocity_desired.setZero();
-    command.kp_joint = this->_data->control_parameters->balance_joint_kp;
-    command.kd_joint = this->_data->control_parameters->balance_joint_kd;
+    command.kp_joint = this->_data->control_parameters->joint_kp;
+    command.kd_joint = this->_data->control_parameters->joint_kd;
   }
-  ++posture_ramp_iteration_;
 }
 
 template class FSM_State_BalanceStand<float>;

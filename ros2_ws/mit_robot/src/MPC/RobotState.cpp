@@ -58,6 +58,8 @@ RobotState<T> RobotState<T>::fromEstimate(
   // MPC 状态直接积分 RPY，因此这里必须使用欧拉角导数，不能用世界角速度替代。
   result.rpy_rate = rpyRateFromBodyAngularVelocity(
     estimate.rpy, estimate.angular_velocity_body);
+  result.angular_velocity_world =
+    estimate.rotation_world_from_body * estimate.angular_velocity_body;
   result.foot_position_world = feet_world;
   result.timestamp = estimate.timestamp;
   result.valid = estimate.valid;
@@ -74,6 +76,7 @@ bool RobotState<T>::isValid() const noexcept
 {
   if (!valid || !position_world.allFinite() || !velocity_world.allFinite() ||
     !rpy.allFinite() || !rpy_rate.allFinite() ||
+    !angular_velocity_world.allFinite() ||
     !rotation_world_from_body.allFinite() ||
     !std::isfinite(static_cast<double>(timestamp)))
   {

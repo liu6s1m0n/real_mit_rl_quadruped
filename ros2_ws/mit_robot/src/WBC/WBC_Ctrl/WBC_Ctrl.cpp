@@ -232,6 +232,14 @@ void WBC_Ctrl<T>::applyResult(LegController<T> & leg_controller) const
       model_.getJointPositionOffsets().segment(offset, kJointsPerLeg);
     command.velocity_desired = result_.joint_velocity.segment(offset, kJointsPerLeg);
     command.torque_feedforward = result_.joint_torque.segment(offset, kJointsPerLeg);
+    // MIT 的膝关节 barrier；DM1 电机坐标中伸膝方向同样对应较小 calf
+    // 角度，阈值取 0.3 rad，避免摆动或零空间解把膝盖推入地面。
+    if (command.position_desired[2] < T(0.3) && joint_states_[leg].position[2] < T(0.3)) {
+      command.position_desired[2] = T(0.3);
+      const T knee_position = joint_states_[leg].position[2];
+      command.torque_feedforward[2] +=
+        T(1) / (knee_position * knee_position + T(0.02));
+    }
     // 最终关节命令 = 前馈力矩 + 对 WBC 运动参考的关节 PD 修正。
     command.kp_joint = kp_joint_;
     command.kd_joint = kd_joint_;
@@ -281,7 +289,8 @@ bool WBC_Ctrl<T>::runAndApply(
     std::fputs(line.str().c_str(), stderr);
   }
 
-  if (iteration_ <= 10 || (overrun && timing_window_overruns_ == 1)) {
+  if (diagnostics && diagnostics[0] == '1' &&
+    (iteration_ <= 10 || (overrun && timing_window_overruns_ == 1))) {
     std::fprintf(
       stderr,
       "[WBC][TIMING] iteration=%zu elapsed_ms=%.6f budget_ms=%.3f "
@@ -289,7 +298,7 @@ bool WBC_Ctrl<T>::runAndApply(
       iteration_, elapsed_ms, kControlCycleBudgetMs, overrun ? "true" : "false",
       success ? "true" : "false", tasks_.size(), contacts_.size());
   }
-  if (timing_window_samples_ >= 500) {
+  if (diagnostics && diagnostics[0] == '1' && timing_window_samples_ >= 500) {
     std::fprintf(
       stderr,
       "[WBC][TIMING][SUMMARY] end_iteration=%zu samples=%zu avg_ms=%.6f "

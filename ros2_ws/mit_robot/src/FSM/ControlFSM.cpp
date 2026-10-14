@@ -41,11 +41,11 @@ public:
       controller.commands[leg].kp_joint =
         this->_data->control_parameters->start_in_prone_home ?
         this->_data->control_parameters->prone_home_joint_kp :
-        this->_data->control_parameters->balance_joint_kp;
+        this->_data->control_parameters->joint_kp;
       controller.commands[leg].kd_joint =
         this->_data->control_parameters->start_in_prone_home ?
         this->_data->control_parameters->prone_home_joint_kd :
-        this->_data->control_parameters->balance_joint_kd;
+        this->_data->control_parameters->joint_kd;
     }
   }
   
@@ -89,6 +89,12 @@ ControlFSM<T>::ControlFSM(
   data.desired_state = &desired_state;
   data.control_time_step = control_time_step;
   if (!data.valid()) {throw std::invalid_argument("invalid ControlFSM dependencies");}
+  // 估计器的接触先验必须与 MPC 接触表同周期：10 段 x 整数帧 dtMPC。
+  auto gait_parameters = gait_scheduler.parameters();
+  gait_parameters.trot_period_time =
+    static_cast<T>(mpc::SolverSettings<T>{}.horizon) * control_time_step *
+    static_cast<T>(mpcSegmentIterations(*control_parameters_, control_time_step));
+  gait_scheduler.setParameters(gait_parameters);
 
   statesList.passive = std::make_unique<FSM_State_Passive<T>>(&data);
   statesList.joint_pd = std::make_unique<JointPdState<T>>(&data);

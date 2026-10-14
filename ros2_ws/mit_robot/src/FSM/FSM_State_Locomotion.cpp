@@ -18,12 +18,11 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   if (control_fsm_data == nullptr || !control_fsm_data->valid()) {
     throw std::invalid_argument("locomotion state requires valid FSM data");
   }
-  // MPC 优化仍以约25 Hz刷新；经典步态的10段接触周期在 setGait() 中同步，
-  // 每段50 ms。
-  const std::size_t mpc_interval = static_cast<std::size_t>(std::max(
-      T(1), std::round(T(0.04) / control_fsm_data->control_time_step)));
-  const std::size_t gait_segment_interval = static_cast<std::size_t>(std::max(
-      T(1), std::round(T(0.05) / control_fsm_data->control_time_step)));
+  // MIT 时序：MPC 每段求解一次，预测接触表每段 dtMPC，10 段构成 TROT 周期；
+  // GaitScheduler 的 TROT 周期由 ControlFSM 按同一参数设置。
+  const std::size_t mpc_interval = mpcSegmentIterations(
+    *control_fsm_data->control_parameters, control_fsm_data->control_time_step);
+  const std::size_t gait_segment_interval = mpc_interval;
   mpc::SolverSettings<T> solver_settings;
   solver_settings.time_step =
     control_fsm_data->control_time_step * static_cast<T>(gait_segment_interval);
@@ -45,8 +44,12 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   wbc_ctrl_->setBodyOrientationGains(
     parameters.locomotion_body_orientation_kp,
     parameters.locomotion_body_orientation_kd);
+  wbc_ctrl_->setFootPositionGains(
+    Vec3<T>::Constant(T(500)), Vec3<T>::Constant(T(10)));
   wbc_ctrl_->setJointGains(
-    parameters.locomotion_joint_kp, parameters.locomotion_joint_kd);
+    parameters.joint_kp, parameters.joint_kd);
+  wbc_ctrl_->setFloatingBaseWeight(T(0.1));
+  wbc_ctrl_->setReactionForceWeight(T(1));
   wbc_ctrl_->setMaxNormalForce(parameters.maximum_normal_force);
   com_model_ = std::make_unique<FloatingBaseModel<T>>(
     model::makeFloatingBaseModel(*control_fsm_data->quadruped));
@@ -65,28 +68,21 @@ void FSM_State_Locomotion<T>::onEnter()
     目标位置；约束和缓存。*/
   mpc_->initialize();
   resetSwingTrajectories();
-  startup_step_blend_.fill(T(0.4));
   active_mode_ = this->_data->desired_state->mode;
   rl_history_.fill(0.0F);
   rl_history_initialized_ = false;
   rl_previous_action_.fill(0.0F);
   rl_policy_counter_ = 0;
   safety_fallback_transition_ = false;
-  prev_joint_target_initialized_ = false;
   entry_transition_time_ = T(0);
   load_transfer_elapsed_ = T(0);
   load_transfer_bucket_ = static_cast<std::size_t>(-1);
   cycle_shift_ready_ = false;
-  auto & controller = *this->_data->leg_controller;
-  entry_transition_active_ = !isRlMode() && controller.legsEnabled();
-  for (std::size_t leg = 0; leg < kNumLegs && entry_transition_active_; ++leg) {
-    entry_joint_commands_[leg] = controller.command(static_cast<LegId>(leg));
-    entry_transition_active_ = entry_joint_commands_[leg].enabled;
-    prev_joint_position_desired_[leg] = entry_joint_commands_[leg].position_desired;
-  }
-  prev_joint_target_initialized_ = entry_transition_active_;
+  // 保留 0.2 s 的步态启动保持，使按键动作从完整支撑相开始；不再插值
+  // 关节目标、增益或前馈，进入 Locomotion 后直接使用 MIT WBC 输出。
+  entry_transition_active_ = !isRlMode();
   /*步态由 ControlFSMData::locomotion_gait 选择；3 号入口请求 STAND
-    做四脚接触诊断，踏步和方向运动保留 TROT_WALK（60% 支撑，0.5 s 周期）。
+    做四脚接触诊断，踏步和方向运动统一使用 MIT TROT（50% 支撑，0.26 s 周期）。
     MPC 与 GaitScheduler 必须同时设置：只改一个就会出现"MPC 认为后腿支撑、
     GaitScheduler 认为后腿摆动"的错相，导致 WBC 约束错误、足端轨迹漂移。*/
   applyRequestedGait(true);
@@ -113,7 +109,7 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
     normal.maximum.fill(mpc_->solverSettings().maximum_normal_force);
     mpc_->setNormalForceBounds(normal);
     std::array<T, kNumLegs> wbc_min{};
-    std::array<T, kNumLegs> wbc_max{};
+        std::array<T, kNumLegs> wbc_max{};
     wbc_max.fill(this->_data->control_parameters->maximum_normal_force);
     wbc_ctrl_->setNormalForceBounds(wbc_min, wbc_max);
   }
@@ -122,8 +118,11 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   // STAND 是 3 号四脚诊断入口：本轮仅运行阶段①，保持全部接触。
   // MPC 和 WBC 求解、关节目标及 PD 均沿用踏步控制，不自动进入换载/摆腿。
   const GaitType effective = requested == GaitType::STAND ||
-    requested == GaitType::STAND_CYCLE ? requested : GaitType::TROT_WALK;
+    requested == GaitType::STAND_CYCLE ? requested : GaitType::TROT;
   this->checkSafeOrientation = effective != GaitType::STAND_CYCLE;
+  // 普通行走使用较低的浮动基修正权重；按键 4 是独立的静态换载动作，
+  // 使用 BalanceStand 权重避免 WBIC 擅自重新分配卸载腿的反力。
+  wbc_ctrl_->setFloatingBaseWeight(effective == GaitType::STAND_CYCLE ? T(1000) : T(3));
   wbc_ctrl_->setBodyOrientationGains(
     this->_data->control_parameters->locomotion_body_orientation_kp,
     this->_data->control_parameters->locomotion_body_orientation_kd);
@@ -373,7 +372,9 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   if (applied_gait_ == GaitType::STAND_CYCLE) {
     load_transfer_foot_position_[leg] = initial_position;
     trajectory.setFinalPosition(load_transfer_foot_position_[leg]);
-    trajectory.setHeight(T(0.02));
+    // 按键 4 保持单次抬两腿语义；DM1 足端接触几何下使用 3.5 cm，
+    // 足底完全离开地面，同时不改变按钮时序。
+    trajectory.setHeight(T(0.035));
     swing_active_[leg] = true;
     return;
   }
@@ -418,138 +419,46 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   const Vec2<T> nominal_foot_world =
     estimate.position_world.template head<2>() +
     yaw_rotation * centered_nominal_foot_body;
+  const T stance_time = locomotion_result.stance_time[leg];
+  const Vec2<T> measured_velocity = estimate.velocity_world.template head<2>();
   const Vec2<T> desired_velocity =
     locomotion_result.command.body_velocity_world.template head<2>();
-  const Vec2<T> measured_velocity =
-    estimate.velocity_world.template head<2>();
-  const Vec2<T> velocity_error =
-    measured_velocity - desired_velocity;
-  const T swing_time = locomotion_result.swing_time[leg];
-  const T half_stance_time = T(0.5) * locomotion_result.stance_time[leg];
-  // 摆动落足点分成两条互不影响的路径，用期望速度连续过渡：
-  //   1) 行进（期望速度非零，含前进/后退/横移/原地旋转）：使用实测速度主导、
-  //      目标速度参与半个支撑期的落足公式；
-  //   2) 原地踏步（期望速度为零）：不能再用实测速度前馈，因为它等于把当前速度
-  //      原样维持住，零命令下任何微小扰动都会被保留，四条腿乱抖、机身匀速漂移。
-  //      这一路改用速度误差捕获项，把足端收敛回机身正下方。
-  // 方向运动保留实测速度主导的落足反馈，只在半个支撑期内把实测/目标速度
-  // 各取一半，再加小幅速度误差捕获。
-  constexpr T kTravelCaptureGain = T(0.08);
-  // DM1 零速原地踏步的纵向/横向滑移不同，分别调节已有速度捕获项；
-  // 有明确行走速度时两轴仍连续过渡到原有 0.08 参数。
-  const Vec2<T> kInPlaceCaptureGain = Vec2<T>::Constant(T(0.25));
-  constexpr T kInPlaceVelocityThreshold = T(0.05);
-  const T desired_speed = desired_velocity.norm();
-  const T in_place_blend = std::clamp(
-    desired_speed / kInPlaceVelocityThreshold, T(0), T(1));
-  const Vec2<T> in_place_step =
-    kInPlaceCaptureGain.cwiseProduct(velocity_error);
-  const Vec2<T> stance_velocity =
-    T(0.5) * (measured_velocity + desired_velocity);
-  const Vec2<T> travel_step =
-    swing_time * measured_velocity + half_stance_time * stance_velocity +
-    kTravelCaptureGain * velocity_error;
-  Vec2<T> step = (T(1) - in_place_blend) * in_place_step +
-    in_place_blend * travel_step;
-  // 首两次摆动逐级接入实测反馈，第三次恢复完整反馈。
-  const T startup_blend = startup_step_blend_[leg];
-  const Vec2<T> commanded_step =
-    (swing_time + half_stance_time) * desired_velocity;
-  step = (T(1) - startup_blend) * commanded_step + startup_blend * step;
-  if (step.norm() > maximum_step_length_) {
-    step *= maximum_step_length_ / step.norm();
-  }
-  // 落脚点始终相对当前机身规划：nominal_foot_world 跟随状态估计的机身位置，
-  // step 提供速度前馈与落点捕获项。零速度时前馈为零，靠捕获项把足端收敛回
-  // 机身正下方，即为原地踏步。
-  // 注意：曾把零速度下的落点"锚定"到离地瞬间的绝对世界坐标，等于丢掉捕获项，
-  // 实测机身会一路乱摆并摔倒（复测确认），因此落点必须继续跟随机身。
+  const T yaw_rate = locomotion_result.command.body_angular_velocity.z();
+  // MIT Raibert 落足：半个支撑期速度前馈、0.03 捕获项和偏航离心项。
+  // 目标按世界坐标计算，每次摆动开始时锁存一次，避免足点随反馈累加漂移。
+  Vec2<T> step = Vec2<T>::Zero();
+  step.x() = measured_velocity.x() * T(0.5) * stance_time +
+    T(0.03) * (measured_velocity.x() - desired_velocity.x()) +
+    T(0.5) * estimate.position_world.z() / T(9.81) *
+    (measured_velocity.y() * yaw_rate);
+  step.y() = measured_velocity.y() * T(0.5) * stance_time +
+    T(0.03) * (measured_velocity.y() - desired_velocity.y()) -
+    T(0.5) * estimate.position_world.z() / T(9.81) *
+    (measured_velocity.x() * yaw_rate);
+  step.x() = std::clamp(step.x(), T(-0.3), T(0.3));
+  step.y() = std::clamp(step.y(), T(-0.3), T(0.3));
   Vec3<T> landing_position = initial_position;
   landing_position.template head<2>() = nominal_foot_world + step;
-  // z 始终使用离地瞬间锁存的地面高度，不能跟随摆动中的实测足高漂移。
   landing_position.z() = initial_position.z();
   trajectory.setFinalPosition(landing_position);
-  T trajectory_swing_height = swing_height_;
-  if (startup_blend < T(1)) {
-    trajectory_swing_height *= T(0.375) + T(0.625) * startup_blend;
-  }
-  trajectory.setHeight(trajectory_swing_height);
-  startup_step_blend_[leg] = std::min(T(1), startup_blend + T(0.3));
+  trajectory.setHeight(swing_height_);
   swing_active_[leg] = true;
 }
 
 template<typename T>
-void FSM_State_Locomotion<T>::constrainJointTargets(
-  const std::array<bool, kNumLegs> & contact_state)
+void FSM_State_Locomotion<T>::constrainJointTargets()
 {
-  // WBC 最大单周期关节目标步长：0.15 rad/step @ 500 Hz = 75 rad/s 的等效速率。
-  // 该值远高于任何物理关节速度，只阻止 WBC 在接触状态跳变或状态估计突变时
-  // 产生的瞬间大角度目标跳变（如接触融合退出瞬间 hip q_des 跳到 -1.57 rad）。
-  constexpr T kMaxPositionStep = T(0.15);
-
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto leg_id = static_cast<LegId>(leg);
     const auto & joints = this->_data->quadruped->leg(leg_id).joints;
     auto & command = this->_data->leg_controller->commands[leg];
 
-    if (!contact_state[leg]) {
-      command.velocity_desired =
-        command.velocity_desired.cwiseProduct(swing_joint_velocity_scale_);
-    }
     command.velocity_desired = command.velocity_desired.cwiseMin(
       joints.velocity_limit).cwiseMax(-joints.velocity_limit);
     command.position_desired = command.position_desired.cwiseMax(
       joints.lower_limit).cwiseMin(joints.upper_limit);
 
-    // 对 WBC 输出的关节目标施加逐帧变化率限制，防止接触融合退出等事件
-    // 导致目标瞬间跳变到关节极限、产生无法跟踪的巨大 PD 误差。
-    if (prev_joint_target_initialized_) {
-      for (Eigen::Index joint = 0;
-        joint < static_cast<Eigen::Index>(kJointsPerLeg); ++joint)
-      {
-        const T delta =
-          command.position_desired[joint] - prev_joint_position_desired_[leg][joint];
-        if (std::abs(delta) > kMaxPositionStep) {
-          command.position_desired[joint] =
-            prev_joint_position_desired_[leg][joint] +
-            std::copysign(kMaxPositionStep, delta);
-        }
-      }
-    }
-    prev_joint_position_desired_[leg] = command.position_desired;
   }
-  prev_joint_target_initialized_ = true;
-}
-
-template<typename T>
-void FSM_State_Locomotion<T>::applyEntryTransition()
-{
-  if (!entry_transition_active_) {return;}
-  constexpr T duration = T(0.2);
-  const T progress = std::clamp(entry_transition_time_ / duration, T(0), T(1));
-  const T alpha = progress * progress * (T(3) - T(2) * progress);
-  auto & controller = *this->_data->leg_controller;
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    const auto & previous = entry_joint_commands_[leg];
-    const auto next = controller.commands[leg];
-    auto & command = controller.commands[leg];
-    command.position_desired = previous.position_desired +
-      alpha * (next.position_desired - previous.position_desired);
-    command.velocity_desired = previous.velocity_desired +
-      alpha * (next.velocity_desired - previous.velocity_desired);
-    command.kp_joint = previous.kp + alpha * (next.kp_joint - previous.kp);
-    command.kd_joint = previous.kd + alpha * (next.kd_joint - previous.kd);
-    // 补偿参考与增益同时插值的交叉项，使任意同一反馈下 FF+PD 为两端总命令的插值。
-    command.torque_feedforward = (T(1) - alpha) * previous.torque_feedforward +
-      alpha * next.torque_feedforward + alpha * (T(1) - alpha) * (
-      (next.kp_joint - previous.kp).cwiseProduct(
-        next.position_desired - previous.position_desired) +
-      (next.kd_joint - previous.kd).cwiseProduct(
-        next.velocity_desired - previous.velocity_desired));
-    prev_joint_position_desired_[leg] = command.position_desired;
-  }
-  entry_transition_time_ += this->_data->control_time_step;
-  if (progress >= T(1)) {entry_transition_active_ = false;}
 }
 
 template<typename T>
@@ -671,10 +580,41 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
         "[FSM][LOCOMOTION] 失能前判断：WBC runAndApply 失败。\n");
     }
     if (wbc_valid) {
+      // MIT LegController 保留一层足端速度阻尼：支撑腿 Kp=0，摆动腿使用
+      // 足端任务的刚度，Kd=7 直接作用在实际足端速度上。
+      const auto & estimate = *this->_data->state_estimate;
+      const Mat3<T> rotation_body_from_world =
+        estimate.rotation_world_from_body.transpose();
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        auto & command = this->_data->leg_controller->commands[leg];
+        const LegId leg_id = static_cast<LegId>(leg);
+        const Vec3<T> desired_foot_body = rotation_body_from_world *
+          (wbc_data_.pFoot_des[leg] - estimate.position_world) -
+          this->_data->quadruped->hipLocation(leg_id);
+        command.foot_position_desired = desired_foot_body;
+        command.foot_velocity_desired = rotation_body_from_world * wbc_data_.vFoot_des[leg];
+        command.kp_cartesian = Mat3<T>::Zero();
+        if (!result.contact_state[leg]) {
+          command.kp_cartesian = Vec3<T>(T(500), T(500), T(150)).asDiagonal();
+        }
+        command.kd_cartesian = Mat3<T>::Identity() * T(7);
+      }
       // 行走层只负责自身的目标范围；所有状态共用的连续力矩约束由
       // LegController 最终命令出口统一执行。
-      constrainJointTargets(result.contact_state);
-      applyEntryTransition();
+      constrainJointTargets();
+      if (applied_gait_ == GaitType::STAND_CYCLE && load_transfer_elapsed_ > T(1.04)) {
+        // 单次抬落结束后把零空间姿态平滑收回 DM1 home，避免支撑脚的
+        // 微小位移永久留在关节目标中；普通 TROT 不走这条动作专用路径。
+        const T alpha = std::clamp(
+          (load_transfer_elapsed_ - T(1.04)) / T(0.3), T(0), T(1));
+        for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+          auto & command = this->_data->leg_controller->commands[leg];
+          const auto & home = this->_data->quadruped->leg(
+            static_cast<LegId>(leg)).joints.home_position;
+          command.position_desired =
+            (T(1) - alpha) * command.position_desired + alpha * home;
+        }
+      }
     }
   } else {
     // 关闭 WBC 时的降级路径只发送足端前馈力，主要用于调试算法分层。
@@ -686,6 +626,10 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
         this->_data->state_estimate->rotation_world_from_body.transpose() *
         result.reaction_forces_world[leg];
     }
+  }
+  if (entry_transition_active_) {
+    entry_transition_time_ += this->_data->control_time_step;
+    if (entry_transition_time_ >= T(0.2)) {entry_transition_active_ = false;}
   }
 }
 
@@ -884,7 +828,6 @@ void FSM_State_Locomotion<T>::onExit()
   iteration_ = 0;
   resetSwingTrajectories();
   rl_target_initialized_ = false;
-  prev_joint_target_initialized_ = false;
 }
 
 template class FSM_State_Locomotion<float>;

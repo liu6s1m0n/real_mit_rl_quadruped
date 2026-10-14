@@ -3,7 +3,7 @@
  * @brief 无界面回归：MPC/WBC 行走必须连续推进，不能一步一停或反复退回站立。
  *
  * 该测试只读取仿真状态，不修改控制器行为；用于守住
- * locomotion_joint_kp/kd（WBC 零空间关节 PD）这一组行走稳定性参数。
+ * joint_kp/kd（WBC 零空间关节 PD）这一组行走稳定性参数。
  */
 #include <array>
 #include <cmath>
@@ -17,6 +17,7 @@
 
 #include "RobotRunner.hpp"
 #include "SimulationActuatorWriter.hpp"
+#include "model/robots/dm1.hpp"
 
 namespace
 {
@@ -53,6 +54,7 @@ struct WalkReport
   double maximum_joint_torque = 0.0;
   double maximum_raw_joint_torque = 0.0;
   double maximum_joint_speed = 0.0;
+  double steady_maximum_joint_speed = 0.0;
   double absolute_torque_sum = 0.0;
   double squared_torque_sum = 0.0;
   std::size_t torque_samples = 0;
@@ -213,6 +215,9 @@ WalkReport runDirection(
       if (index < 1000) {
         report.startup_maximum_joint_speed = std::max(
           report.startup_maximum_joint_speed, std::abs(data->qvel[dof]));
+      } else {
+        report.steady_maximum_joint_speed = std::max(
+          report.steady_maximum_joint_speed, std::abs(data->qvel[dof]));
       }
       if (state == FSM_StateName::LOCOMOTION) {
         report.absolute_torque_sum += std::abs(torque);
@@ -348,7 +353,17 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
   // 初次接触切换时不能立即把全部实测速度瞬态写入落脚捕获项。
   EXPECT_LT(report.startup_maximum_planar_speed, 0.30);
   EXPECT_LT(report.startup_maximum_abs_pitch, 0.10);
-  EXPECT_LT(report.startup_maximum_joint_speed, 4.0);
+  // 选定的 TROT 摆动期为 0.15 s，稳态摆腿关节速度约 5 rad/s；入场瞬态
+  // 不得明显超过稳态峰值，全程峰值须给 DM1 电机 2π rad/s 上限留 10% 余量。
+  const double joint_speed_limit = static_cast<double>(
+    robots::dm1::makeJointParameters<float>(false).velocity_limit.minCoeff());
+  std::printf(
+    "march_joint_speed startup=%.3f steady=%.3f limit=%.3f\n",
+    report.startup_maximum_joint_speed, report.steady_maximum_joint_speed,
+    joint_speed_limit);
+  EXPECT_LT(report.startup_maximum_joint_speed,
+    1.10 * report.steady_maximum_joint_speed);
+  EXPECT_LT(report.maximum_joint_speed, 0.90 * joint_speed_limit);
   // 长时间运行后仍须回到完整反馈并保持收敛，不能持续漂移。
   EXPECT_LT(std::abs(report.initial_reposition_x), 0.20);
   EXPECT_LT(std::abs(report.initial_reposition_y), 0.20);

@@ -166,7 +166,7 @@ private:
   OffsetDurationGait stand_;
   /** @brief 50% 支撑率的对角小跑，用于按键 2 原地踏步。 */
   OffsetDurationGait trot_;
-  /** @brief 60% 支撑率的对角行走，用于普通方向运动。 */
+  /** @brief TROT_WALK 枚举入口，与 MIT TROT 同为 50% 支撑、0.26 s 周期。 */
   OffsetDurationGait trot_walk_;
 };
 

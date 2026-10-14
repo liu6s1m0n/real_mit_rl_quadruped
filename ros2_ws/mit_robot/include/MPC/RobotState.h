@@ -25,6 +25,8 @@ struct RobotState
   Vec3<T> velocity_world = Vec3<T>::Zero();
   Vec3<T> rpy = Vec3<T>::Zero();
   Vec3<T> rpy_rate = Vec3<T>::Zero();
+  /** 世界系角速度 R*omega_body，MIT 凸 MPC 的状态量。 */
+  Vec3<T> angular_velocity_world = Vec3<T>::Zero();
   Mat3<T> rotation_world_from_body = Mat3<T>::Identity();
   std::array<Vec3<T>, kNumLegs> foot_position_world{};
   T timestamp = T(0);

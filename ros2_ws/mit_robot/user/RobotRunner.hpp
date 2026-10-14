@@ -217,7 +217,6 @@ private:
   bool rl_entry_posture_latched_ = false;
   ControlMode pending_rl_mode_ = ControlMode::WalkRl;
   float locomotion_entry_stable_time_s_ = 0.0F;
-  float locomotion_contact_fusion_time_s_ = 0.0F;
   float rl_entry_stable_time_s_ = 0.0F;
   bool prone_down_active_ = false;
   bool prone_down_complete_ = false;
