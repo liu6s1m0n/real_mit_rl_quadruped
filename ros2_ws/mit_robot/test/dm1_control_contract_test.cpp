@@ -97,7 +97,9 @@ TEST(Dm1Contract, WbcDiagnosticsDistinguishRawTargetsFromStandingOverride)
   ASSERT_EQ(orientation_error.size(), 3U);
   EXPECT_NEAR(orientation_error[1], 0.0583F, 1.0e-6F);
   EXPECT_LT(raw[7], context.joint_states[2].position[1] - 0.01F);
-  EXPECT_FLOAT_EQ(context.leg_controller.commands[2].position_desired[1], context.joint_states[2].position[1]);
+  // MIT BalanceStand 直接使用 KinWBC 给出的关节参考，不再用零空间姿态覆盖。
+  EXPECT_FLOAT_EQ(
+    context.leg_controller.commands[2].position_desired[1], raw[7]);
   context.desired_state.mode = ControlMode::Locomotion;
   context.data().locomotion_gait = GaitType::STAND;
   FSM_State_Locomotion<float> locomotion(&context.data());
@@ -341,6 +343,13 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
   EXPECT_TRUE(
     parameters.balance_body_orientation_kd.isApprox(
       Vec3<float>(10.0F, 10.0F, 10.0F)));
+  // BalanceStand 下发给电机的关节 PD 取 MIT WBC_Ctrl 默认阻抗 5/1.5。
+  EXPECT_TRUE(
+    parameters.balance_joint_kp.isApprox(
+      Vec3<float>(5.0F, 5.0F, 5.0F)));
+  EXPECT_TRUE(
+    parameters.balance_joint_kd.isApprox(
+      Vec3<float>(1.5F, 1.5F, 1.5F)));
   EXPECT_TRUE(
     parameters.joint_kp.isApprox(
       Vec3<float>(10.0F, 10.0F, 10.0F)));
@@ -371,16 +380,18 @@ TEST(Dm1Contract, MotorFacingJointGainsStayInsideMitProtocolRange)
   constexpr float kOperationalKdLimit = 4.95F;
   // 直接下发给电机的关节 PD：初始化/趴卧保持、BalanceStand、StandUp 收腿、
   // MPC/WBC 行走（LieDown 折叠复用）；RL 复用较温和的 initialization_kp/kd。
-  const std::array<Vec3<float>, 5> kp_sets{
+  const std::array<Vec3<float>, 6> kp_sets{
     parameters.initialization_kp,
     parameters.prone_home_joint_kp,
     parameters.joint_kp,
+    parameters.balance_joint_kp,
     parameters.stand_up_joint_kp,
     parameters.joint_kp};
-  const std::array<Vec3<float>, 5> kd_sets{
+  const std::array<Vec3<float>, 6> kd_sets{
     parameters.initialization_kd,
     parameters.prone_home_joint_kd,
     parameters.joint_kd,
+    parameters.balance_joint_kd,
     parameters.stand_up_joint_kd,
     parameters.joint_kd};
   for (const auto & set : kp_sets) {
@@ -468,8 +479,8 @@ TEST(Dm1Contract, BalanceStandUsesMitWbcOnlyAndEqualGravitySupport)
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & command = context.leg_controller.commands[leg];
     EXPECT_TRUE(command.torque_feedforward.allFinite());
-    EXPECT_TRUE(command.kp_joint.isApprox(context.parameters.joint_kp));
-    EXPECT_TRUE(command.kd_joint.isApprox(context.parameters.joint_kd));
+    EXPECT_TRUE(command.kp_joint.isApprox(context.parameters.balance_joint_kp));
+    EXPECT_TRUE(command.kd_joint.isApprox(context.parameters.balance_joint_kd));
   }
 }
 

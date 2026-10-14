@@ -33,6 +33,9 @@ struct RobotControlParameters
   Vec3<T> balance_body_position_kd;
   Vec3<T> balance_body_orientation_kp;
   Vec3<T> balance_body_orientation_kd;
+  // BalanceStand 下发给电机的关节 PD；按 MIT 取低阻抗，支撑靠 WBIC 前馈。
+  Vec3<T> balance_joint_kp;
+  Vec3<T> balance_joint_kd;
   Vec3<T> joint_kp;
   Vec3<T> joint_kd;
   T balance_floating_base_weight;
@@ -90,9 +93,13 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(10), T(10), T(10)),
     // BalanceStand 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd；不是电机 MIT-PD。
     Vec3<T>(T(100), T(100), T(100)), Vec3<T>(T(10), T(10), T(10)),
-    // 经典 WBC（站立/行走/趴下）共用的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
+    // BalanceStand 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
+    // 取 MIT WBC_Ctrl 的默认关节阻抗（Kp=5、Kd=1.5），即 MIT 的低 PD 站立：
+    // 支撑力主要来自 WBIC 前馈，关节 PD 只做参考跟踪，不靠硬弹簧顶住自重。
+    Vec3<T>(T(5), T(5), T(5)), Vec3<T>(T(1.5), T(1.5), T(1.5)),
+    // 经典 WBC（行走/趴下）共用的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(10), T(10), T(10)), Vec3<T>(T(2), T(2), T(2)),
-    // WBC浮动基权重、反力权重、单脚最大法向力。
+    // WBC浮动基权重、反力权重、单脚最大法向力（MIT BalanceStand 取 1000）。
     T(1000), T(1), T(120),
     // StandUp 趴卧展开时长、大腿速度比例、机械关节目标姿态。
     T(3.2), T(0.75), Vec3<T>(T(0), T(0.1), T(-2.15)),

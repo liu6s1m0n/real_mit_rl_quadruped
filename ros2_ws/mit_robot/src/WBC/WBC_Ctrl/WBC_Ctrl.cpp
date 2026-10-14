@@ -232,14 +232,13 @@ void WBC_Ctrl<T>::applyResult(LegController<T> & leg_controller) const
       model_.getJointPositionOffsets().segment(offset, kJointsPerLeg);
     command.velocity_desired = result_.joint_velocity.segment(offset, kJointsPerLeg);
     command.torque_feedforward = result_.joint_torque.segment(offset, kJointsPerLeg);
-    // MIT 的膝关节 barrier；DM1 电机坐标中伸膝方向同样对应较小 calf
-    // 角度，阈值取 0.3 rad，避免摆动或零空间解把膝盖推入地面。
-    if (command.position_desired[2] < T(0.3) && joint_states_[leg].position[2] < T(0.3)) {
-      command.position_desired[2] = T(0.3);
-      const T knee_position = joint_states_[leg].position[2];
-      command.torque_feedforward[2] +=
-        T(1) / (knee_position * knee_position + T(0.02));
-    }
+    // MIT 的膝关节 non-flip barrier 不能照搬到 DM1：MIT 关节约定里 calf=0 是
+    // 腿伸直，barrier 用来阻止膝盖反折。DM1 的电机坐标相反，calf=0 是腿完全
+    // 折叠（趴卧零位），站立收腿目标也只有 0.07 rad。照搬会在趴卧起身的瞬间
+    // 把 q_des 硬夹到 0.3 并叠加 1/(q^2+0.02) ≈ 40 Nm 的前馈，直接把小腿顶死、
+    // 触发硬件力矩保护并整帧被电机拒绝（实测 tx_failed_frames 上万、机身卡在
+    // 0.14 m 起不来）。DM1 的站立构型在膝关节处不存在 MIT 那种奇异区，站姿
+    // 保护由 dm1::clampStanceJointTarget 在 RobotRunner 里统一负责。
     // 最终关节命令 = 前馈力矩 + 对 WBC 运动参考的关节 PD 修正。
     command.kp_joint = kp_joint_;
     command.kd_joint = kd_joint_;
