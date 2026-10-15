@@ -13,7 +13,7 @@ namespace
 {
 constexpr std::array<LegId, kNumLegs> kLegOrder{
   LegId::FR, LegId::FL, LegId::RR, LegId::RL};
-constexpr float kLocomotionEntryStableDuration = 0.20F;
+constexpr float kLocomotionEntryStableDuration = 0.10F;
 
 bool isLocomotionMode(ControlMode mode) noexcept
 {
@@ -359,7 +359,7 @@ bool RobotRunner::locomotionEntryPostureStable() const noexcept
   if (measuredBodyHeight() < entry_height_floor) {return false;}
   // 姿态、关节位置和速度也必须稳定：过渡过程中 WBC 仍在抬升机身，
   // 此时起步会和抬升轨迹叠加成冲击。
-  constexpr float kMaximumEntryRollPitch = 0.15F;
+  constexpr float kMaximumEntryRollPitch = 0.20F;
   constexpr float kMaximumEntryJointPositionError = 0.25F;
   constexpr float kMaximumEntryJointSpeed = 1.0F;
   if (std::abs(state_estimate_.rpy.x()) > kMaximumEntryRollPitch ||

@@ -9,6 +9,11 @@
 #include "model/floating_base_model_factory.hpp"
 #include "Utilities/orientation_tools.h"
 
+namespace
+{
+constexpr std::size_t kStableFrameCount = 50;
+}
+
 template<typename T>
 FSM_State_Locomotion<T>::FSM_State_Locomotion(
   ControlFSMData<T> * control_fsm_data)
@@ -77,6 +82,9 @@ void FSM_State_Locomotion<T>::onEnter()
   entry_transition_time_ = T(0);
   load_transfer_elapsed_ = T(0);
   load_transfer_bucket_ = static_cast<std::size_t>(-1);
+  stage1_stable_frames_ = 0;
+  load_transfer_ready_frames_ = 0;
+  load_transfer_gate_open_ = false;
   cycle_shift_ready_ = false;
   // 保留 0.2 s 的步态启动保持，使按键动作从完整支撑相开始；不再插值
   // 关节目标、增益或前馈，进入 Locomotion 后直接使用 MIT WBC 输出。
@@ -93,8 +101,16 @@ template<typename T>
 void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
 {
   // 承重交接时四脚保持支撑，避免旧站立命令作用于已被规划为摆动的腿。
-  const GaitType requested = entry_transition_active_ ?
-    GaitType::STAND : this->_data->locomotion_gait;
+  const GaitType requested_input = this->_data->locomotion_gait;
+  if (requested_input != GaitType::STAND &&
+    requested_input != GaitType::STAND_CYCLE)
+  {
+    stage1_stable_frames_ = 0;
+  }
+  const bool transfer_ready = stage1_stable_frames_ >= kStableFrameCount;
+  const GaitType requested = entry_transition_active_ ||
+    (requested_input == GaitType::STAND_CYCLE && !transfer_ready) ?
+    GaitType::STAND : requested_input;
   if (!force && gait_applied_ && requested == applied_gait_) {return;}
   // 中途换步态：MPC 的相位由内部周期计数换算，而 GaitScheduler 换步态时会把
   // 相位重置到各自的 phase_offset。这里把 MPC 一起归零，两者才不会错相。
@@ -103,6 +119,8 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   if (force || switching) {
     load_transfer_elapsed_ = T(0);
     load_transfer_bucket_ = static_cast<std::size_t>(-1);
+    load_transfer_ready_frames_ = 0;
+    load_transfer_gate_open_ = false;
     cycle_shift_ready_ = false;
     mpc::NormalForceBounds<T> normal;
     normal.minimum.fill(mpc_->solverSettings().minimum_normal_force);
@@ -123,7 +141,7 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   const bool is_stand_like = requested == GaitType::STAND_CYCLE ||
     requested == GaitType::THREE_FOOT;
   this->checkSafeOrientation = !is_stand_like;
-  wbc_ctrl_->setFloatingBaseWeight(is_stand_like ? T(1000) : T(3));
+  wbc_ctrl_->setFloatingBaseWeight(is_stand_like ? T(100) : T(100));
   // 零速度指令：STAND / STAND_CYCLE / THREE_FOOT 都不需要平移速度。
   if (effective == GaitType::STAND || effective == GaitType::STAND_CYCLE ||
     effective == GaitType::THREE_FOOT) {
@@ -138,7 +156,7 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   mpc_->setGait(effective);
   this->_data->gait_scheduler->requestGait(effective);
   this->_data->gait_scheduler->modifyGait();
-  if (this->_data->locomotion_gait == GaitType::STAND) {
+  if (requested_input == GaitType::STAND) {
     std::fprintf(stderr,
       "[FSM][MARCH-DIAGNOSTIC] stage=1 zero_velocity=true planned_contacts=4 swing=false；四脚控制诊断，不自动换载。\n");
   }
@@ -482,6 +500,9 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   }
   // MPC 输入必须使用统一的世界坐标系，否则反作用力方向会与 WBC 不一致。
   const auto feet_world = footPositionsWorld();
+  if (applied_gait_ == GaitType::STAND) {
+    updateStage1Stability();
+  }
   if (applied_gait_ == GaitType::STAND_CYCLE && !entry_transition_active_) {
     // 一次抬落：0.3 s 保持（同时把质心移到 FR-RL 支撑线）、0.3 s 卸载、
     // 0.24 s 摆腿、0.2 s 恢复承重，再用 0.3 s 把机身移回原锚点。
@@ -499,9 +520,30 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       this->_data->control_time_step;
     const std::size_t bucket = static_cast<std::size_t>(time >= kEnd ?
       std::ceil(kEnd / kForceStep) : std::floor(time / kForceStep + T(1e-4)));
+    if (!load_transfer_gate_open_ && load_transfer_elapsed_ >= kTouchdown) {
+      if (loadTransferReady()) {
+        ++load_transfer_ready_frames_;
+      } else {
+        load_transfer_ready_frames_ = 0;
+      }
+      if (load_transfer_ready_frames_ >= kStableFrameCount) {
+        load_transfer_gate_open_ = true;
+        // 等待确认期间 MPC 的内部时钟仍在推进；确认后重新从换载
+        // 起始相位开始，确保两条腿同步进入一次摆动，而不是错过摆动窗。
+        mpc_->initialize();
+        std::fprintf(stderr,
+          "[FSM][STAND_CYCLE] load-transfer gate open after stable support confirmation.\n");
+      }
+    }
     const T phase = std::clamp(time < kTouchdown ?
       (time - kHold) / kRamp : T(1) - (time - kTouchdown) / kReload, T(0), T(1));
-    const T blend = phase * phase * (T(3) - T(2) * phase);
+    // 在承重反馈确认前，最多卸载 85%；若触地时仍未确认，则恢复四脚
+    // 的完整力上限并保持接触，避免“时间到了但承重腿还没接住”时抬腿。
+    const bool transfer_waiting = !load_transfer_gate_open_ &&
+      load_transfer_elapsed_ >= kTouchdown;
+    const T guarded_phase = load_transfer_gate_open_ ? phase :
+      (transfer_waiting ? T(0) : std::min(phase, T(0.85)));
+    const T blend = guarded_phase * guarded_phase * (T(3) - T(2) * guarded_phase);
     // 平移必须在卸载前完成、在抬落腿重新承重后才撤回，否则两脚支撑期间
     // 质心不在支撑线上，机身会绕对角线倾倒并掉高。
     const T shift_phase = std::clamp(time < kEnd ?
@@ -520,8 +562,12 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       mpc_->setNormalForceBounds(bounds);
       wbc_ctrl_->setNormalForceBounds(bounds.minimum, bounds.maximum);
     }
-    load_transfer_elapsed_ = std::min(kShiftEnd,
-      load_transfer_elapsed_ + this->_data->control_time_step);
+    if (!load_transfer_gate_open_ && load_transfer_elapsed_ >= kTouchdown) {
+      load_transfer_elapsed_ = kTouchdown;
+    } else {
+      load_transfer_elapsed_ = std::min(kShiftEnd,
+        load_transfer_elapsed_ + this->_data->control_time_step);
+    }
   } else {
     mpc_->setPositionOffsetWorld(Vec2<T>::Zero());
   }
@@ -547,13 +593,20 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   wbc_data_.pBody_RPY_des = desired.body_rpy;
   wbc_data_.vBody_Ori_des = desired.body_angular_velocity;
   //逐腿处理支撑或摆动逻辑。
+  auto contact_state = result.contact_state;
+  if (applied_gait_ == GaitType::STAND_CYCLE && !load_transfer_gate_open_) {
+    // MPC 的时间表可以先进入低载荷段，但 WBC 在反馈确认前仍保持四脚接触，
+    // 防止计划时刻直接把未承重的腿交给摆动任务。
+    contact_state[1] = true;
+    contact_state[2] = true;
+  }
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     //将 MPC 计算出的世界坐标系反作用力传给 WBC。
     wbc_data_.Fr_des[leg] = result.reaction_forces_world[leg];
     //将布尔接触状态转成浮点数：
-    wbc_data_.contact_state[leg] = result.contact_state[leg] ? T(1) : T(0);
+    wbc_data_.contact_state[leg] = contact_state[leg] ? T(1) : T(0);
 
-    if (result.contact_state[leg]) {
+    if (contact_state[leg]) {
       // 支撑时足端位置任务不会加入 WBC；同步当前值仅用于诊断，并清除上一摆动态。
       swing_active_[leg] = false;
       wbc_data_.pFoot_des[leg] = feet_world[leg];
@@ -601,7 +654,7 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
         command.foot_position_desired = desired_foot_body;
         command.foot_velocity_desired = rotation_body_from_world * wbc_data_.vFoot_des[leg];
         command.kp_cartesian = Mat3<T>::Zero();
-        if (!result.contact_state[leg]) {
+        if (!contact_state[leg]) {
           command.kp_cartesian = Vec3<T>(T(500), T(500), T(150)).asDiagonal();
         }
         command.kd_cartesian = Mat3<T>::Identity() * T(7);
@@ -638,6 +691,88 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
     entry_transition_time_ += this->_data->control_time_step;
     if (entry_transition_time_ >= T(0.2)) {entry_transition_active_ = false;}
   }
+}
+
+template<typename T>
+T FSM_State_Locomotion<T>::estimatedVerticalSupport(std::size_t leg) const
+{
+  if (leg >= kNumLegs || this->_data->leg_controller == nullptr ||
+    this->_data->state_estimate == nullptr)
+  {
+    return T(0);
+  }
+  const auto & data = this->_data->leg_controller->datas[leg];
+  if (!data.valid || !data.J.allFinite() || !data.torque_estimate.allFinite()) {
+    return T(0);
+  }
+  Vec3<T> torque = data.torque_estimate;
+  // MuJoCo 的当前执行层通过 qfrc_applied 施加 MIT-PD 总力矩，
+  // qfrc_actuator 不会回读这一路；反馈为近零时，用已下发命令作门控代理。
+  // 真机有有效力矩回读时始终优先使用测量值，不改变任何 MPC/WBIC 输出。
+  if (torque.norm() < T(1e-3)) {
+    const auto & command = this->_data->leg_controller->commands[leg];
+    if (!command.torque_feedforward.allFinite() ||
+      !command.kp_joint.allFinite() || !command.kd_joint.allFinite() ||
+      !command.position_desired.allFinite() || !command.velocity_desired.allFinite())
+    {
+      return T(0);
+    }
+    torque = command.torque_feedforward +
+      command.kp_joint.cwiseProduct(command.position_desired - data.q) +
+      command.kd_joint.cwiseProduct(command.velocity_desired - data.qd);
+  }
+  const Mat3<T> normal = data.J * data.J.transpose() +
+    T(1e-6) * Mat3<T>::Identity();
+  Eigen::LDLT<Mat3<T>> solver(normal);
+  if (solver.info() != Eigen::Success) {return T(0);}
+  const Vec3<T> force_body = solver.solve(data.J * torque);
+  const Vec3<T> force_world =
+    this->_data->state_estimate->rotation_world_from_body * force_body;
+  if (!force_world.allFinite()) {return T(0);}
+  return std::abs(force_world.z());
+}
+
+template<typename T>
+void FSM_State_Locomotion<T>::updateStage1Stability()
+{
+  const auto & estimate = *this->_data->state_estimate;
+  const auto & parameters = *this->_data->control_parameters;
+  const T target_height = std::clamp(
+    this->_data->desired_state->body_position_world.z(),
+    parameters.minimum_standing_height, parameters.maximum_standing_height);
+  bool stable = estimate.valid && estimate.position_world.z() > target_height - T(0.025) &&
+    estimate.position_world.z() < target_height + T(0.025) &&
+    std::abs(estimate.rpy.x()) < T(0.10) &&
+    std::abs(estimate.rpy.y()) < T(0.10);
+  for (std::size_t leg = 0; leg < kNumLegs && stable; ++leg) {
+    const auto & data = this->_data->leg_controller->datas[leg];
+    stable = data.valid && data.p.allFinite() && data.v.allFinite() &&
+      data.v.norm() < T(0.20);
+  }
+  stage1_stable_frames_ = stable ?
+    std::min(stage1_stable_frames_ + 1, kStableFrameCount) : 0;
+}
+
+template<typename T>
+bool FSM_State_Locomotion<T>::loadTransferReady() const
+{
+  const auto & estimate = *this->_data->state_estimate;
+  const T weight = this->_data->quadruped->totalMass() * T(9.81);
+  const T front_right = estimatedVerticalSupport(0);
+  const T rear_left = estimatedVerticalSupport(3);
+  const auto & fr_data = this->_data->leg_controller->datas[0];
+  const auto & rl_data = this->_data->leg_controller->datas[3];
+  return stage1_stable_frames_ >= kStableFrameCount && estimate.valid &&
+    estimate.position_world.z() > T(0.295) &&
+    std::abs(estimate.rpy.x()) < T(0.12) &&
+    std::abs(estimate.rpy.y()) < T(0.12) &&
+    estimate.velocity_world.norm() < T(0.30) &&
+    estimate.angular_velocity_body.norm() < T(0.40) &&
+    fr_data.valid && rl_data.valid && fr_data.v.norm() < T(0.30) &&
+    rl_data.v.norm() < T(0.30) &&
+    front_right > T(0.15) * weight / T(4) &&
+    rear_left > T(0.15) * weight / T(4) &&
+    front_right + rear_left > T(0.60) * weight;
 }
 
 template<typename T>

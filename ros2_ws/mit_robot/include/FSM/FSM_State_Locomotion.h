@@ -112,6 +112,9 @@ private:
   bool gait_applied_ = false;
   T load_transfer_elapsed_ = T(0);
   std::size_t load_transfer_bucket_ = static_cast<std::size_t>(-1);
+  std::size_t stage1_stable_frames_ = 0;
+  std::size_t load_transfer_ready_frames_ = 0;
+  bool load_transfer_gate_open_ = false;
   std::array<Vec3<T>, kNumLegs> load_transfer_foot_position_{};
   /*4 号一次抬落：整机质心计算模型、起始时机身原点到整机质心的世界系水平
     偏移，以及把质心移到 FR-RL 支撑线上所需的水平位移。*/
@@ -123,6 +126,12 @@ private:
   Vec3<T> wholeBodyComWorld();
   /** 4 号起始时锁存质心偏移和对角支撑线位移。 */
   void prepareStandCycleShift(const std::array<Vec3<T>, kNumLegs> & feet_world);
+  /** 用已有关节力矩和雅可比估算单腿世界竖直支撑力。 */
+  T estimatedVerticalSupport(std::size_t leg) const;
+  /** 更新阶段①四脚稳定计数。 */
+  void updateStage1Stability();
+  /** 判断承重对角腿是否已接管足够载荷且机身仍稳定。 */
+  bool loadTransferReady() const;
 };
 
 extern template class FSM_State_Locomotion < float >;

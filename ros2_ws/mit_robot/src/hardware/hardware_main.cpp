@@ -597,7 +597,10 @@ int runImuOnly(const std::string & device, float control_time_step)
   const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     // IMU 诊断循环最小周期为 1 ms。
     std::chrono::duration<double>(std::max(0.001F, control_time_step)));
+  const auto print_period = std::chrono::milliseconds(100);
   auto next_cycle = start;
+  auto next_print = start;
+  std::uint64_t last_printed_sequence = 0;
   while (!g_stop_requested.load()) {
     next_cycle += period;
     ImuData<float> sample;
@@ -606,8 +609,28 @@ int runImuOnly(const std::string & device, float control_time_step)
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
     // readAt() 是非阻塞函数：串口由接收线程负责读取，本循环只复制最新的
     // 已校验数据。
-    // readAt() 非阻塞地复制最新已校验数据；此模式不运行控制器，因此忽略返回值。
-    static_cast<void>(imu.readAt(sample, timestamp));
+    // readAt() 非阻塞地复制最新已校验数据；IMU-only 模式按固定频率输出诊断数据。
+    const bool valid = imu.readAt(sample, timestamp);
+    const auto now = std::chrono::steady_clock::now();
+    if (valid && now >= next_print && sample.sequence != last_printed_sequence) {
+      // 以 ZYX 顺序从当前姿态四元数恢复 roll/pitch/yaw，并转换为角度输出。
+      const auto yaw_pitch_roll =
+        sample.orientation_world_from_body.toRotationMatrix().eulerAngles(2, 1, 0);
+      imu_log::print(
+        imu_log::Level::Info,
+        "[DM IMU] seq=%llu t=%.3f acc=(%.3f, %.3f, %.3f) "
+        "gyro=(%.3f, %.3f, %.3f) rpy_deg=(%.3f, %.3f, %.3f)\n",
+        static_cast<unsigned long long>(sample.sequence), sample.timestamp,
+        sample.acceleration_body.x(), sample.acceleration_body.y(),
+        sample.acceleration_body.z(), sample.angular_velocity_body.x(),
+        sample.angular_velocity_body.y(), sample.angular_velocity_body.z(),
+        static_cast<double>(yaw_pitch_roll[2] * 57.29577951308232F),
+        static_cast<double>(yaw_pitch_roll[1] * 57.29577951308232F),
+        static_cast<double>(yaw_pitch_roll[0] * 57.29577951308232F));
+      last_printed_sequence = sample.sequence;
+      next_print += print_period;
+      if (next_print < now) {next_print = now + print_period;}
+    }
     std::this_thread::sleep_until(next_cycle);
   }
   // 退出时停止 IMU 接收线程并关闭串口。

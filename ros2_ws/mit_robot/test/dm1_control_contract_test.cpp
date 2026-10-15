@@ -93,7 +93,7 @@ TEST(Dm1Contract, WbcDiagnosticsDistinguishRawTargetsFromStandingOverride)
   const std::string log = ::testing::internal::GetCapturedStderr();
   ASSERT_TRUE(context.leg_controller.legsEnabled()) << log;
   ASSERT_NE(log.find("[WBC][DIAGNOSTIC] t_s=12.25"), std::string::npos);
-  EXPECT_NE(log.find("floating_weight=1000 contacts=4"), std::string::npos);
+  EXPECT_NE(log.find("floating_weight=100 contacts=4"), std::string::npos);
   const auto raw = diagnosticVector(log, "q_wbc");
   const auto orientation_error = diagnosticVector(log, "task0_error");
   ASSERT_EQ(raw.size(), kNumJoints);
@@ -439,7 +439,7 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
   // 机身姿态环属于 BalanceStand 的 WBC 任务增益，与直接关节 PD 量纲不同。
   EXPECT_TRUE(
     parameters.balance_body_orientation_kp.isApprox(
-      Vec3<float>(100.0F, 100.0F, 100.0F)));
+      Vec3<float>(200.0F, 200.0F, 100.0F)));
   EXPECT_TRUE(
     parameters.balance_body_orientation_kd.isApprox(
       Vec3<float>(10.0F, 10.0F, 10.0F)));

@@ -30,8 +30,6 @@ constexpr std::array<const char *, kNumJoints> kJointNames{
   "RR_hip", "RR_thigh", "RR_calf",
   "RL_hip", "RL_thigh", "RL_calf"};
 constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(100);
-constexpr float kContinuousTorqueNm = 30.0F;
-constexpr float kPeakTorqueNm = 97.0F;
 // 状态估计/控制与独立 MIT 发送保持 500 Hz；未使能反馈轮询为 125 Hz。
 constexpr std::uint32_t kMotorFrameDivider = 4;
 
@@ -98,26 +96,8 @@ void reportSendFailures(const dm1_hardware::PeriodicMitSender & sender)
 
 void reportMotorTorque(const dm1_hardware::HardwareSample & sample)
 {
-  static robot_log::Throttle report(500);
-  if (!report.ready()) {return;}
-  const auto maximum = std::max_element(
-    sample.motors.begin(), sample.motors.end(), [](const auto & left, const auto & right) {
-      return std::abs(left.torque) < std::abs(right.torque);
-    });
-  if (maximum == sample.motors.end()) {return;}
-  const std::size_t joint = static_cast<std::size_t>(maximum - sample.motors.begin());
-  const float magnitude = std::abs(maximum->torque);
-  const char * status = magnitude > kPeakTorqueNm ? "OVER_PEAK" :
-    (magnitude > kContinuousTorqueNm ? "OVER_CONTINUOUS" : "NORMAL");
-  const auto level = magnitude > kPeakTorqueNm ? imu_log::Level::Error :
-    (magnitude > kContinuousTorqueNm ? imu_log::Level::Warning : imu_log::Level::Info);
-  imu_log::print(
-    level,
-    "[DM1][TORQUE] status=%s joint=%s bus=%u can=0x%03x tau=%+.2f Nm "
-    "continuous=%.1f peak=%.1f Nm（仅监控，不自动失能）\n",
-    status, kJointNames[joint], static_cast<unsigned int>(maximum->bus),
-    static_cast<unsigned int>(maximum->can_id), static_cast<double>(maximum->torque),
-    static_cast<double>(kContinuousTorqueNm), static_cast<double>(kPeakTorqueNm));
+  // 单个电机力矩提示暂时关闭；故障、发送失败和控制失败仍由独立告警路径输出。
+  (void)sample;
 }
 }
 
