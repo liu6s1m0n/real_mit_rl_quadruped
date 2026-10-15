@@ -49,6 +49,8 @@ enum class Motion : std::uint8_t
   FourContactDiagnostic,
   /// 四脚零速入场后逐渐将 FL+RR 的负载转给 FR+RL，保持四脚接触。
   FourContactLoadTransfer,
+  /// 三腿站立，FL 腿单次抬起后放下；用于验证单腿摆动控制，不涉及步态切换。
+  SingleLegLift,
 };
 
 struct VelocityCommand

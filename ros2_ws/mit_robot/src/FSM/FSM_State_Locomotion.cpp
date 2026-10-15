@@ -115,14 +115,20 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   }
   applied_gait_ = requested;
   gait_applied_ = true;
-  // STAND 是 3 号四脚诊断入口：本轮仅运行阶段①，保持全部接触。
-  // MPC 和 WBC 求解、关节目标及 PD 均沿用踏步控制，不自动进入换载/摆腿。
-  const GaitType effective = requested == GaitType::STAND ||
-    requested == GaitType::STAND_CYCLE ? requested : GaitType::TROT;
-  this->checkSafeOrientation = effective != GaitType::STAND_CYCLE;
-  // 普通行走使用较低的浮动基修正权重；按键 4 是独立的静态换载动作，
-  // 使用 BalanceStand 权重避免 WBIC 擅自重新分配卸载腿的反力。
-  wbc_ctrl_->setFloatingBaseWeight(effective == GaitType::STAND_CYCLE ? T(1000) : T(3));
+  // STAND 是 3 号四脚诊断入口；STAND_CYCLE 是 4 号换载；THREE_FOOT 是 5 号单腿抬起。
+  // 三者都直接传给 MPC 和 GaitScheduler，不映射到 TROT。
+  const GaitType effective = (requested == GaitType::STAND ||
+    requested == GaitType::STAND_CYCLE ||
+    requested == GaitType::THREE_FOOT) ? requested : GaitType::TROT;
+  const bool is_stand_like = requested == GaitType::STAND_CYCLE ||
+    requested == GaitType::THREE_FOOT;
+  this->checkSafeOrientation = !is_stand_like;
+  wbc_ctrl_->setFloatingBaseWeight(is_stand_like ? T(1000) : T(3));
+  // 零速度指令：STAND / STAND_CYCLE / THREE_FOOT 都不需要平移速度。
+  if (effective == GaitType::STAND || effective == GaitType::STAND_CYCLE ||
+    effective == GaitType::THREE_FOOT) {
+    mpc_->setVelocityCommand(T(0), T(0), T(0));
+  }
   wbc_ctrl_->setBodyOrientationGains(
     this->_data->control_parameters->locomotion_body_orientation_kp,
     this->_data->control_parameters->locomotion_body_orientation_kd);
@@ -467,7 +473,8 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   // 每帧求解经典 MPC/WBC；入口输出平滑交接到本周期的新控制结果。
   applyRequestedGait(false);
   if (applied_gait_ == GaitType::STAND ||
-    applied_gait_ == GaitType::STAND_CYCLE) {
+    applied_gait_ == GaitType::STAND_CYCLE ||
+    applied_gait_ == GaitType::THREE_FOOT) {
     mpc_->setVelocityCommand(T(0), T(0), T(0));
   } else {
     mpc_->setVelocityCommand(

@@ -25,6 +25,9 @@ std::optional<OperatorCommand> decodeKey(int key)
   } else if (key == '4') {
     command.type = CommandType::Motion;
     command.motion = Motion::FourContactLoadTransfer;
+  } else if (key == '5') {
+    command.type = CommandType::Motion;
+    command.motion = Motion::SingleLegLift;
   } else if (key == 'p' || key == 'P') {
     command.type = CommandType::ProneDown;
   } else if (key == 'w' || key == 'W') {
@@ -76,6 +79,7 @@ VelocityCommand velocityForMotion(
     case Motion::MarchInPlace: return {0.0F, 0.0F, 0.0F};
     case Motion::FourContactDiagnostic: return {0.0F, 0.0F, 0.0F};
     case Motion::FourContactLoadTransfer: return {0.0F, 0.0F, 0.0F};
+    case Motion::SingleLegLift: return {0.0F, 0.0F, 0.0F};
   }
   return {};
 }

@@ -51,6 +51,7 @@ private:
   Vec3 < T > initial_body_rpy_ = Vec3 < T > ::Zero();
   T last_height_command_ = T(0);
   std::array<Vec3<T>, kNumLegs> entry_joint_positions_{};
+  std::array<Vec3<T>, kNumLegs> entry_foot_positions_{};  ///< 入场时的脚底世界坐标，站立期间锁定。
   std::size_t posture_ramp_iteration_ = 0;
 };
 

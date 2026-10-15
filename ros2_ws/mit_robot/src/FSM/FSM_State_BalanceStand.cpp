@@ -120,10 +120,12 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
 {
   // MIT BalanceStand：水平位置与航向锁定入场值，roll/pitch 保持水平，
   // 仅高度跟随外部目标；速度、加速度目标均为零。
+  const auto & estimate = *this->_data->state_estimate;
   wbc_data_.pBody_des = initial_body_position_;
   wbc_data_.vBody_des.setZero();
   wbc_data_.aBody_des.setZero();
   wbc_data_.pBody_RPY_des = initial_body_rpy_;
+  wbc_data_.pBody_RPY_des.z() = estimate.rpy.z();
   wbc_data_.vBody_Ori_des.setZero();
 
   //读取外部期望高度
@@ -144,11 +146,9 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
   last_height_command_ = wbc_data_.pBody_des.z();
 
   // 四腿始终接触；期望反力取 mg/4 竖直分量，由 WBIC 在摩擦锥内修正。
-  const auto & estimate = *this->_data->state_estimate;
   const T support_force =
     this->_data->quadruped->totalMass() * T(9.81) / static_cast<T>(kNumLegs);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    // 接触腿在 WBC 中只使用反力；足端目标取当前世界系落脚点，便于诊断。
     wbc_data_.pFoot_des[leg] = estimate.position_world +
       estimate.rotation_world_from_body *
       (this->_data->quadruped->hipLocation(static_cast<LegId>(leg)) +

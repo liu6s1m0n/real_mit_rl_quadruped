@@ -251,7 +251,8 @@ int HardwareBridge::runKeyboardControl(
   imu_log::print(
     imu_log::Level::Info,
     "键盘控制已启动：电机初始处于锁定状态。按 Shift+U/0 使能/失能，1 站立，"
-    "2 原地踏步，3 四脚零速度诊断（禁止摆腿），P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
+    "2 原地踏步，3 四脚零速度诊断（禁止摆腿），4 一次抬落（FL+RR），"
+    "5 单腿抬起（FR 腿三腿站立），P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
 
   while (!stop_requested.load()) {
     reportSendFailures(sender);
@@ -277,6 +278,7 @@ int HardwareBridge::runKeyboardControl(
       imu_log::print(
         imu_log::Level::Info,
         "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，3 四脚零速度诊断（阶段①，不摆腿），"
+        "4 一次抬落（FL+RR），5 单腿抬起（FR 腿三腿站立），"
         "P 趴下，W/S 前进/后退，A/D 左移/右移，Q/E 旋转，"
         "空格停止，Esc 退出，H 帮助。\n");
     }
@@ -404,6 +406,9 @@ int HardwareBridge::runKeyboardControl(
           gait = GaitType::STAND;
         } else if (arbiter.motion() == teleop::Motion::FourContactLoadTransfer) {
           gait = GaitType::STAND_CYCLE;
+        } else if (arbiter.motion() == teleop::Motion::SingleLegLift) {
+          // 5 号：THREE_FOOT 步态，FR 腿单次抬起，FL/RR/RL 三腿支撑，控制逻辑与踏步一致。
+          gait = GaitType::THREE_FOOT;
         }
         runner_.setLocomotionGait(gait);
         runner_.setControlMode(ControlMode::Locomotion);
