@@ -221,6 +221,31 @@ TEST(OrientationEstimatorTest, ImuFusionRetainsAccelerometerCorrection)
   EXPECT_NEAR(estimator.result().rpy.y(), 0.0F, 1e-4F);
 }
 
+TEST(OrientationEstimatorTest, AccelerometerRollPitchSignsMatchBodyFrame)
+{
+  SensorFixture fixture;
+  fixture.imu.sample.orientation_valid = false;
+  fixture.imu.sample.angular_velocity_body.setZero();
+
+  constexpr float roll = -0.18F;
+  constexpr float pitch = 0.13F;
+  const float gravity = 9.81F;
+  // For x-forward, y-left, z-up, stationary specific force is
+  // R_body_from_world * [0, 0, g].
+  fixture.imu.sample.acceleration_body <<
+    -gravity * std::sin(pitch),
+    gravity * std::cos(pitch) * std::sin(roll),
+    gravity * std::cos(pitch) * std::cos(roll);
+
+  OrientationEstimator<float> estimator(
+    fixture.imu, fixture.legPointers(), OrientationEstimatorMode::IMU_FUSION);
+
+  ASSERT_TRUE(estimator.run());
+  EXPECT_NEAR(estimator.result().rpy.x(), roll, kTolerance);
+  EXPECT_NEAR(estimator.result().rpy.y(), pitch, kTolerance);
+  EXPECT_NEAR(estimator.result().rpy.z(), 0.0F, kTolerance);
+}
+
 TEST(OrientationEstimatorTest, ImuFusionRejectsDegenerateDeviceOrientation)
 {
   SensorFixture fixture;

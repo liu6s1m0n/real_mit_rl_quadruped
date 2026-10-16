@@ -4,7 +4,24 @@
 #include <stdexcept>
 #include <utility>
 
-#include "Utilities/orientation_tools.h"
+namespace
+{
+
+// StateEstimate and BodyOriTask use an active body-to-world quaternion.  Keep
+// this conversion local and explicit instead of relying on the legacy
+// coordinate-transform helper's transpose convention.
+template<typename T>
+Eigen::Quaternion<T> activeRpyToQuaternion(const Vec3<T> & rpy)
+{
+  Eigen::Quaternion<T> result =
+    Eigen::AngleAxis<T>(rpy.z(), Vec3<T>::UnitZ()) *
+    Eigen::AngleAxis<T>(rpy.y(), Vec3<T>::UnitY()) *
+    Eigen::AngleAxis<T>(rpy.x(), Vec3<T>::UnitX());
+  result.normalize();
+  return result;
+}
+
+}  // namespace
 
 // 四足运动 WBC 适配层：机身姿态和位置始终作为任务；每条腿根据接触状态，
 // 在“支撑接触约束”与“摆动足位置任务”之间二选一。
@@ -162,10 +179,10 @@ bool LocomotionCtrl<T>::prepareTasksAndContacts(const void * input)
   if (!input_data.allFinite()) {return false;}
   active_contact_state_ = input_data.contact_state;
 
-  // 外部输入使用易读的 RPY，姿态任务内部使用四元数以避免直接做欧拉角差。
-  const Quat<T> quaternion = ori::rpyToQuat(input_data.pBody_RPY_des);  // RPY 转四元数，避免直接相减欧拉角。
-  const Eigen::Quaternion<T> desired_orientation(  // 姿态任务使用的期望四元数。
-    quaternion[0], quaternion[1], quaternion[2], quaternion[3]);
+  // 外部输入使用易读的 RPY，姿态任务内部使用主动 body->world 四元数，
+  // 以避免直接相减欧拉角；这里显式使用 ZYX 主动旋转顺序。
+  const Eigen::Quaternion<T> desired_orientation =
+    activeRpyToQuaternion(input_data.pBody_RPY_des);
   if (!body_orientation_task_->update(
       desired_orientation, input_data.vBody_Ori_des, Vec3<T>::Zero()))
   {

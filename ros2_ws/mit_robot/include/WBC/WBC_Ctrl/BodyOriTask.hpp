@@ -24,7 +24,7 @@ public:
 
   /**
    * @brief 设置期望姿态、角速度和角加速度并更新任务数据。
-   * @param orientation_world_from_body_desired 世界系到机身系的期望四元数。
+   * @param orientation_world_from_body_desired 机身系到世界系的期望四元数。
    * @param angular_velocity_body_desired 机身坐标系期望角速度，rad/s。
    * @param angular_acceleration_body_desired 机身坐标系期望角加速度，rad/s^2。
    * @return 输入有效且任务命令、雅可比均有限时返回 true。

@@ -341,6 +341,41 @@ ros2 run mymit_robot hardware_main \
 失能，`Esc` 失能后退出。键盘控制与
 `--enable-output`、`--stand-up`、`--set-zero`、`--imu-only`、`--motor-only` 互斥。
 
+### 实机站立偏移诊断采集
+
+增强诊断 CSV 会记录每个控制周期的 IMU 序号、姿态四元数、加速度、角速度、重力模长，
+状态估计的位置/速度/角速度/世界加速度，四条腿足端的机身系和世界系完整坐标，以及
+12 个关节的实际值、目标值、反馈力矩、前馈力矩、PD 分量和已发布帧。采集不改变控制命令。
+
+先在工作空间准备环境，并将日志集中到一个目录：
+
+```bash
+cd /home/simon/real_mitrl_dog/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export DM1_LOG_DIR="$HOME/dm1_diag_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$DM1_LOG_DIR"
+stdbuf -oL -eL ros2 run mymit_robot hardware_main \
+  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
+  --keyboard-control 2>&1 | tee "$DM1_LOG_DIR/terminal.log"
+```
+
+确认启动检查通过后，保持急停可用，按 `Shift+U` 解锁，等待关节初始化完成，再按 `1` 站立；
+让机器保持站立 10～20 秒，不要按方向键。若持续向一侧偏，立即按 `0`，再按 `Ctrl+C`。
+CSV 会在终端打印实际路径。随后可打包：
+
+```bash
+tar -czf "${DM1_LOG_DIR}.tar.gz" -C "$(dirname "$DM1_LOG_DIR")" "$(basename "$DM1_LOG_DIR")"
+```
+
+另外做一次不接触电机的 IMU 轴向测试；机器人保持断电或安全固定，分别轻微抬高左侧和机头，
+观察终端里的 `acc` 与 `rpy_deg` 符号，然后按 `Ctrl+C`：
+
+```bash
+ros2 run mymit_robot hardware_main --imu-only \
+  --imu /dev/serial/by-id/你的-DM-IMU-设备 2>&1 | tee "$DM1_LOG_DIR/imu_only.log"
+```
+
 实机推荐顺序：先用 `--motor-only --poll-feedback` 确认反馈，再用只读完整模式确认 IMU
 和姿态，最后在物理急停旁执行键盘模式。软件上锁不能替代物理急停。
 

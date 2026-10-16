@@ -218,6 +218,8 @@ private:
   ControlMode pending_rl_mode_ = ControlMode::WalkRl;
   float locomotion_entry_stable_time_s_ = 0.0F;
   float rl_entry_stable_time_s_ = 0.0F;
+  // 四脚诊断（按键 3）直接进入 Locomotion，不等待经典步态入场计时。
+  bool bypass_locomotion_entry_check_ = false;
   bool prone_down_active_ = false;
   bool prone_down_complete_ = false;
 };

@@ -179,7 +179,9 @@ int HardwareBridge::runKeyboardControl(
   if (csv_log.is_open()) {
     csv_log << "t_s,fsm,body_roll,body_pitch,body_yaw,body_z";
     for (const auto * leg : {"FR", "FL", "RR", "RL"}) {
-      csv_log << ',' << leg << "_foot_world_z";
+      csv_log << ',' << leg << "_foot_body_x," << leg << "_foot_body_y," <<
+        leg << "_foot_body_z," << leg << "_foot_world_x," <<
+        leg << "_foot_world_y," << leg << "_foot_world_z";
     }
     for (const auto * name : kJointNames) {
       csv_log << ',' << name << "_q," << name << "_q_des," << name << "_tau,"
@@ -190,7 +192,12 @@ int HardwareBridge::runKeyboardControl(
               << name << "_kp_published," << name << "_kd_published";
     }
     csv_log << ",publish_attempted,publish_ok,published_valid,published_age_s,tx_failed_frames,"
-            << "imu_qw,imu_qx,imu_qy,imu_qz,imu_ax,imu_ay,imu_az,model_body_z_contact\n";
+            << "imu_sequence,imu_timestamp,imu_qw,imu_qx,imu_qy,imu_qz,"
+            << "imu_ax,imu_ay,imu_az,imu_gx,imu_gy,imu_gz,imu_gravity,"
+            << "est_pos_x,est_pos_y,est_pos_z,est_vel_world_x,est_vel_world_y,"
+            << "est_vel_world_z,est_vel_body_x,est_vel_body_y,est_vel_body_z,"
+            << "est_omega_body_x,est_omega_body_y,est_omega_body_z,"
+            << "est_acc_world_x,est_acc_world_y,est_acc_world_z,model_body_z_contact\n";
     imu_log::print(imu_log::Level::Info, "关节数据记录到 %s（published 表示已入发送队列，不代表电机执行确认）\n", log_path.c_str());
   }
   // 打开 CAN 并不代表物理电机已经失能；接受键盘输入前先建立失效安全状态。
@@ -393,7 +400,8 @@ int HardwareBridge::runKeyboardControl(
         runner_.setLocomotionGait(gait);
         runner_.setControlMode(ControlMode::Locomotion);
         if (runner_.currentStateName() == FSM_StateName::BALANCE_STAND &&
-          !runner_.locomotionEntryReady())
+          !runner_.locomotionEntryReady() &&
+          arbiter.motion() != teleop::Motion::FourContactDiagnostic)
         {
           static robot_log::Throttle entry_wait_log(1000);
           if (entry_wait_log.ready()) {
@@ -461,12 +469,15 @@ int HardwareBridge::runKeyboardControl(
         Vec3<float> foot_from_hip;
         computeLegJacobianAndPosition(runner_.quadruped(), log_js[leg].position,
           static_cast<Mat3<float> *>(nullptr), &foot_from_hip, leg_id);
-        csv_log << ',' << (estimate.position_world +
-          estimate.rotation_world_from_body *
-          (runner_.quadruped().hipLocation(leg_id) + foot_from_hip)).z();
+        const Vec3<float> foot_body =
+          runner_.quadruped().hipLocation(leg_id) + foot_from_hip;
+        const Vec3<float> foot_world = estimate.position_world +
+          estimate.rotation_world_from_body * foot_body;
+        csv_log << ',' << foot_body.x() << ',' << foot_body.y() << ',' << foot_body.z()
+                << ',' << foot_world.x() << ',' << foot_world.y() << ',' << foot_world.z();
         model_body_z += (runner_.quadruped().leg(leg_id).foot_radius -
           (estimate.rotation_world_from_body *
-          (runner_.quadruped().hipLocation(leg_id) + foot_from_hip)).z()) / kNumLegs;
+          foot_body).z()) / kNumLegs;
       }
       const auto & cmds = runner_.jointCommands();
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
@@ -500,9 +511,20 @@ int HardwareBridge::runKeyboardControl(
       const auto & imu = sample.imu;
       csv_log << ',' << publish_attempted << ',' << publish_ok << ',' << (last_published_s >= 0)
               << ',' << (last_published_s >= 0 ? now_s - last_published_s : std::nan(""))
-              << ',' << sender.failedFrames() << ',' << imu.orientation_world_from_body.w()
+              << ',' << sender.failedFrames() << ',' << imu.sequence << ',' << imu.timestamp
+              << ',' << imu.orientation_world_from_body.w()
               << ',' << imu.orientation_world_from_body.x() << ',' << imu.orientation_world_from_body.y()
               << ',' << imu.orientation_world_from_body.z() << ',' << imu.acceleration_body.transpose().format(Eigen::IOFormat(Eigen::StreamPrecision, 0, ",", ","))
+              << ',' << imu.angular_velocity_body.x() << ',' << imu.angular_velocity_body.y()
+              << ',' << imu.angular_velocity_body.z() << ',' << imu.gravity_magnitude
+              << ',' << estimate.position_world.x() << ',' << estimate.position_world.y()
+              << ',' << estimate.position_world.z() << ',' << estimate.velocity_world.x()
+              << ',' << estimate.velocity_world.y() << ',' << estimate.velocity_world.z()
+              << ',' << estimate.velocity_body.x() << ',' << estimate.velocity_body.y()
+              << ',' << estimate.velocity_body.z() << ',' << estimate.angular_velocity_body.x()
+              << ',' << estimate.angular_velocity_body.y() << ',' << estimate.angular_velocity_body.z()
+              << ',' << estimate.acceleration_world.x() << ',' << estimate.acceleration_world.y()
+              << ',' << estimate.acceleration_world.z()
               << ',' << model_body_z << '\n';
       if (motor_frame_phase % 50 == 0) {csv_log.flush();}
     }

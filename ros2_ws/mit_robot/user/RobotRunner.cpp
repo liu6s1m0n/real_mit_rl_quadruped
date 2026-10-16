@@ -160,6 +160,9 @@ float RobotRunner::currentTime() const noexcept
 /*设置目标控制模式*/
 void RobotRunner::setControlMode(ControlMode mode) noexcept
 {
+  if (mode == ControlMode::BalanceStand) {
+    bypass_locomotion_entry_check_ = false;
+  }
   if (mode != ControlMode::WalkRl && mode != ControlMode::StairsRl) {
     rl_posture_transition_pending_ = false;
     rl_entry_posture_latched_ = false;
@@ -197,7 +200,7 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
   // Locomotion -> BalanceStand 回退，现场表现就是“走一步停一步”。
   // RL 走的是下面的 pending 分支，自带的 rlEntryPostureStable() 更严格。
   if ((mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic) &&
-    !locomotionEntryReady())
+    !bypass_locomotion_entry_check_ && !locomotionEntryReady())
   {
     return;
   }
@@ -230,6 +233,7 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
     desired_state_.body_position_world.z() = kDm1RlDefaultBodyHeight;
   }
   desired_state_.mode = mode;
+  bypass_locomotion_entry_check_ = false;
 }
 
 bool RobotRunner::requestStandUp() noexcept
@@ -253,6 +257,7 @@ bool RobotRunner::requestStandUp() noexcept
     desired_state_.body_acceleration_world.setZero();
     desired_state_.body_angular_velocity.setZero();
     desired_state_.mode = ControlMode::BalanceStand;
+    bypass_locomotion_entry_check_ = false;
     motion_start_hold_active_ = false;
     motion_start_hold_release_pending_ = false;
     setHomeCalfContactsEnabled(false);
@@ -448,6 +453,9 @@ void RobotRunner::setWalkingForwardSpeed(float speed)
 
 void RobotRunner::setLocomotionGait(GaitType gait) noexcept
 {
+  // GaitType::STAND is the key-3 four-contact diagnostic entry. It must not
+  // wait for the normal walking posture gate before entering Locomotion.
+  bypass_locomotion_entry_check_ = gait == GaitType::STAND;
   control_fsm_->setLocomotionGait(gait);
 }
 
@@ -496,6 +504,7 @@ void RobotRunner::reset()
   rl_entry_posture_latched_ = false;
   locomotion_entry_stable_time_s_ = 0.0F;
   rl_entry_stable_time_s_ = 0.0F;
+  bypass_locomotion_entry_check_ = false;
   prone_down_active_ = false;
   prone_down_complete_ = false;
   prone_down_height_command_ = quadruped_.nominalBodyHeight();
