@@ -93,6 +93,18 @@ public:
    * @throws std::invalid_argument 偏移非有限或超过 5 cm 时抛出。
    */
   void setPositionOffsetWorld(const Vec2<T> & offset);
+  /**
+   * @brief 由 FSM 提供 STAND_CYCLE 动作时钟，单位 s。
+   *
+   * 设置后接触表与摆动相位按该时间计算，等待承重确认时可整体暂停；
+   * 未设置（负值）时沿用内部迭代计时。initialize() 会清除。
+   */
+  void setStandCycleTime(T time) noexcept {stand_cycle_time_ = time;}
+  /** 设置 STAND_CYCLE 中摆动的腿（4 号 FL+RR，5 号 FR）。 */
+  void setStandCycleSwingLegs(const std::array<bool, kNumLegs> & legs) noexcept
+  {
+    stand_cycle_swing_ = legs;
+  }
   /** @brief 返回零速位置锚点；尚未初始化时下一次 run() 会锚定到当前估计。 */
   Vec3<T> positionAnchorWorld(const StateEstimate<T> & estimate) const noexcept
   {
@@ -149,6 +161,10 @@ private:
   Vec3<T> command_position_world_ = Vec3<T>::Zero();
   /** @brief 叠加在位置锚点上的世界系水平偏移。 */
   Vec2<T> position_offset_world_ = Vec2<T>::Zero();
+  /** @brief 外部 STAND_CYCLE 动作时钟；负值表示使用内部迭代计时。 */
+  T stand_cycle_time_ = T(-1);
+  /** STAND_CYCLE 摆动腿掩码，默认 4 号的 FL+RR。 */
+  std::array<bool, kNumLegs> stand_cycle_swing_{false, true, true, false};
   /** @brief 是否已经用初始目标初始化过目标偏航角。 */
   bool command_initialized_ = false;
   /** @brief 最近一次有效求解得到的四腿世界系反力。 */

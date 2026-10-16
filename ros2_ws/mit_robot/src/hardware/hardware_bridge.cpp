@@ -130,25 +130,18 @@ HardwareBridge::HardwareBridge(
   if (options_.set_zero && options_.enable_output) {
     throw std::invalid_argument("--set-zero 不能与 --enable-output 同时使用");
   }
-  if (!std::isfinite(options_.startup_zero_tolerance_rad) ||
+  if ((!options_.set_zero &&
+    (!std::isfinite(options_.startup_zero_tolerance_rad) ||
     options_.startup_zero_tolerance_rad <= 0.0F ||
     !std::isfinite(options_.startup_stationary_velocity_rad_s) ||
     options_.startup_stationary_velocity_rad_s <= 0.0F ||
-    options_.startup_stable_samples <= 0 ||
+    options_.startup_stable_samples <= 0)) ||
     options_.max_consecutive_cycle_overruns <= 0 ||
     options_.max_cycle_overruns_in_window <= 0 ||
     !std::isfinite(options_.cycle_overrun_window_s) || options_.cycle_overrun_window_s <= 0.0)
   {
     throw std::invalid_argument(
             "硬件启动阈值或控制周期超时参数无效");
-  }
-  if (options_.set_zero) {
-    for (const auto & item : calibration_) {
-      if (std::abs(item.zero_position) > 1.0e-4F) {
-        throw std::invalid_argument(
-                "--set-zero 要求所有标定参数的 zero_position 均为 0");
-      }
-    }
   }
 }
 
@@ -209,6 +202,7 @@ int HardwareBridge::runKeyboardControl(
     return 9;
   }
   teleop::OperatorCommandArbiter arbiter;
+  std::uint32_t last_motion_presses = 0;
   bool output_enabled = false;
   bool control_active = false;
   bool stand_up_pending = false;
@@ -239,7 +233,7 @@ int HardwareBridge::runKeyboardControl(
     imu_log::Level::Info,
     "键盘控制已启动：电机初始处于锁定状态。按 Shift+U/0 使能/失能，1 站立，"
     "2 原地踏步，3 四脚零速度诊断（禁止摆腿），4 一次抬落（FL+RR），"
-    "5 单腿抬起（FR 腿三腿站立），P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
+    "5 四腿依次单腿抬落并循环，P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
 
   while (!stop_requested.load()) {
     reportSendFailures(sender);
@@ -265,7 +259,7 @@ int HardwareBridge::runKeyboardControl(
       imu_log::print(
         imu_log::Level::Info,
         "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，3 四脚零速度诊断（阶段①，不摆腿），"
-        "4 一次抬落（FL+RR），5 单腿抬起（FR 腿三腿站立），"
+        "4 一次抬落（FL+RR），5 四腿依次单腿抬落并循环，"
         "P 趴下，W/S 前进/后退，A/D 左移/右移，Q/E 旋转，"
         "空格停止，Esc 退出，H 帮助。\n");
     }
@@ -393,23 +387,24 @@ int HardwareBridge::runKeyboardControl(
           gait = GaitType::STAND;
         } else if (arbiter.motion() == teleop::Motion::FourContactLoadTransfer) {
           gait = GaitType::STAND_CYCLE;
+          // 已在执行 4 号时再次按 4：请求结束后重新抬落一次。
+          if (arbiter.motionPresses() != last_motion_presses &&
+            runner_.currentStateName() == FSM_StateName::LOCOMOTION)
+          {
+            runner_.requestStandCycleRestart();
+          }
         } else if (arbiter.motion() == teleop::Motion::SingleLegLift) {
-          // 5 号：THREE_FOOT 步态，FR 腿单次抬起，FL/RR/RL 三腿支撑，控制逻辑与踏步一致。
+          // 5 号：四腿依次单腿抬落并循环，复用 4 号一次抬落的全部流程。
           gait = GaitType::THREE_FOOT;
+          if (arbiter.motionPresses() != last_motion_presses &&
+            runner_.currentStateName() == FSM_StateName::LOCOMOTION)
+          {
+            runner_.requestStandCycleRestart();
+          }
         }
         runner_.setLocomotionGait(gait);
         runner_.setControlMode(ControlMode::Locomotion);
-        if (runner_.currentStateName() == FSM_StateName::BALANCE_STAND &&
-          !runner_.locomotionEntryReady() &&
-          arbiter.motion() != teleop::Motion::FourContactDiagnostic)
-        {
-          static robot_log::Throttle entry_wait_log(1000);
-          if (entry_wait_log.ready()) {
-            imu_log::print(
-              imu_log::Level::Info,
-              "Locomotion 等待：机身高度/姿态或关节展开度尚未连续满足准入条件。\n");
-          }
-        }
+        last_motion_presses = arbiter.motionPresses();
       }
     }
     const float timestamp = static_cast<float>(now_s);
@@ -691,15 +686,34 @@ bool HardwareBridge::stationaryLevelSample(
   return std::all_of(seen.begin(), seen.end(), [](bool value) {return value;});
 }
 
-// 执行启动采样；普通启动验证硬件稳定性，--set-zero 额外验证并复核零位。
+// 执行启动采样；--set-zero 直接写入全部电机零位，普通启动验证硬件稳定性。
 bool HardwareBridge::performStartupZeroCalibration(
   const std::chrono::steady_clock::time_point & start,
   const std::atomic_bool & stop_requested)
 {
+  if (options_.set_zero) {
+    imu_log::print(
+      imu_log::Level::Warning,
+      "DM1 零位维护：跳过反馈/姿态/位置检查，直接写入全部电机零位。\n");
+    for (const auto & item : calibration_) {
+      if (stop_requested.load()) {return false;}
+      const auto & address = item.address;
+      if (!hardware_.setMotorZero(address)) {
+        imu_log::print(
+          imu_log::Level::Error,
+          "重置电机零位失败：总线 %u，CAN ID %u。\n",
+          static_cast<unsigned int>(address.bus),
+          static_cast<unsigned int>(address.can_id));
+        return false;
+      }
+    }
+    imu_log::print(imu_log::Level::Warning, "DM1 全部电机零位写入完成。\n");
+    return true;
+  }
   const bool read_only_diagnostic =
-    !options_.enable_output && !options_.keyboard_control && !options_.set_zero;
+    !options_.enable_output && !options_.keyboard_control;
   const bool single_feedback_round =
-    read_only_diagnostic || options_.keyboard_control || options_.set_zero;
+    read_only_diagnostic || options_.keyboard_control;
   const int required_stable_samples = single_feedback_round ? 1 : options_.startup_stable_samples;
   const auto sequence_timeout = single_feedback_round ?
     std::chrono::milliseconds(500) : kStartupSequenceTimeout;
@@ -779,8 +793,6 @@ bool HardwareBridge::performStartupZeroCalibration(
     if (!stationaryLevelSample(sample)) {
       imu_log::print(
         imu_log::Level::Error,
-        options_.set_zero ?
-        "启动零位检查被拒绝：--set-zero 要求连续 %d 帧静止、水平且健康的反馈。\n" :
         "启动检查被拒绝：机器人必须连续 %d 帧静止、水平，且反馈健康。\n",
         required_stable_samples);
       return false;
@@ -804,10 +816,6 @@ bool HardwareBridge::performStartupZeroCalibration(
     imu_log::print(
       imu_log::Level::Info,
       "DM1 12 路电机首轮反馈通过；将持续监测 IMU，电机不再要求连续上报。\n");
-  } else if (options_.set_zero) {
-    imu_log::print(
-      imu_log::Level::Info,
-      "DM1 零位维护首轮反馈通过；开始写入并复核 12 路电机零位。\n");
   } else if (options_.keyboard_control) {
     imu_log::print(
       imu_log::Level::Info,
@@ -819,80 +827,10 @@ bool HardwareBridge::performStartupZeroCalibration(
       required_stable_samples);
   }
 
-  if (!options_.set_zero) {
-    imu_log::print(
-      imu_log::Level::Info,
-      "DM1 启动稳定性检查通过；使能后将执行平滑回零，未修改电机参数。\n");
-    return true;
-  }
-
-  hardware_.disableAll();
-  if (options_.set_zero) {
-    imu_log::print(
-      imu_log::Level::Warning,
-      "DM1 显式零位维护：正在重置全部 12 个电机的零位。\n");
-  }
-  for (const auto & item : calibration_) {
-    if (stop_requested.load()) {return false;}
-    const auto & address = item.address;
-    if (!hardware_.setMotorZero(address)) {
-      imu_log::print(
-        imu_log::Level::Error,
-        "重置电机零位失败：总线 %u，CAN ID %u。\n",
-        static_cast<unsigned int>(address.bus),
-        static_cast<unsigned int>(address.can_id));
-      return false;
-    }
-  }
-
-  if (stop_requested.load()) {return false;}
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  const auto verification_deadline =
-    std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  dm1_hardware::HardwareSample last_verification;
-  bool have_verification_sample = false;
-  while (!stop_requested.load() && std::chrono::steady_clock::now() < verification_deadline) {
-    dm1_hardware::HardwareSample verification;
-    if (readSample(verification) && sequencesAdvanced(verification)) {
-      // Advance the baseline even when this fresh sample is otherwise unsafe;
-      // a repeated copy of that unsafe frame must not pass on the next try.
-      previous = verification;
-      last_verification = verification;
-      have_verification_sample = true;
-      const bool stationary = stationaryLevelSample(verification);
-      const bool positions_within =
-        motorPositionsWithin(verification, options_.startup_zero_tolerance_rad);
-      if (stationary && positions_within) {
-        if (options_.set_zero) {
-          imu_log::print(
-            imu_log::Level::Warning,
-            "DM1 显式电机零位重置已验证。\n");
-        }
-        return true;
-      }
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  if (have_verification_sample) {
-    if (!motorPositionsWithin(last_verification, options_.startup_zero_tolerance_rad)) {
-      imu_log::print(
-        imu_log::Level::Error,
-        "DM1 零位复核失败：以下电机位置仍超出允许范围。\n");
-      reportInvalidMotorPositions(last_verification, options_.startup_zero_tolerance_rad);
-    } else {
-      imu_log::print(
-        imu_log::Level::Error,
-        "DM1 零位复核失败：电机位置已在允许范围内，但 IMU 或电机静止检查未通过。\n");
-    }
-  } else {
-    imu_log::print(
-      imu_log::Level::Error,
-      "DM1 零位复核失败：2 秒内未收到完整的新反馈。\n");
-  }
   imu_log::print(
-    imu_log::Level::Error,
-    "DM1 电机零位重置未能通过验证。\n");
-  return false;
+    imu_log::Level::Info,
+    "DM1 启动稳定性检查通过；使能后将执行平滑回零，未修改电机参数。\n");
+  return true;
 }
 
 // ---------- 主硬件控制循环 ----------

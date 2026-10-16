@@ -167,7 +167,7 @@ void GaitScheduler<T>::step()
       gait_data.initial_phase + dt_ / gait_data.period_time_nominal);
     const T time = std::round(gait_data.initial_phase * gait_data.period_time_nominal / dt_) * dt_;
     for (Eigen::Index foot = 0; foot < static_cast<Eigen::Index>(kNumLegs); ++foot) {
-      const bool moving_leg = foot == 1 || foot == 2;
+      const bool moving_leg = stand_cycle_swing_[static_cast<std::size_t>(foot)];
       const bool swing = moving_leg && time >= T(0.6) && time < T(0.84);
       const int previous = gait_data.contact_state_scheduled(foot);
       gait_data.contact_state_previous(foot) = previous;

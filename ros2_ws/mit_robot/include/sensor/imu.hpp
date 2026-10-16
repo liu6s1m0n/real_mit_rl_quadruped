@@ -194,7 +194,8 @@ private:
   Vec3<float> startup_gravity_body_ = Vec3<float>::Zero();
   Vec3<float> startup_rpy_degrees_ = Vec3<float>::Zero();
   float startup_gravity_magnitude_ = 9.81F;
-  Eigen::Quaternionf startup_orientation_ = Eigen::Quaternionf::Identity();
+  // 仅消除启动航向角；保留启动 roll/pitch，使原始重力向量与姿态处于同一世界系。
+  Eigen::Quaternionf startup_heading_orientation_ = Eigen::Quaternionf::Identity();
   bool startup_baseline_valid_ = false;
 };
 

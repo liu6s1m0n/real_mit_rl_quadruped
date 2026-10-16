@@ -45,6 +45,15 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   EXPECT_FLOAT_EQ(transfer_velocity.lateral, 0.0F);
   EXPECT_FLOAT_EQ(transfer_velocity.yaw, 0.0F);
 
+  const auto single_leg = teleop::decodeKey('5');
+  ASSERT_TRUE(single_leg.has_value());
+  EXPECT_EQ(single_leg->type, CommandType::Motion);
+  EXPECT_EQ(single_leg->motion, teleop::Motion::SingleLegLift);
+  const auto single_leg_velocity = teleop::velocityForMotion(single_leg->motion);
+  EXPECT_FLOAT_EQ(single_leg_velocity.forward, 0.0F);
+  EXPECT_FLOAT_EQ(single_leg_velocity.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(single_leg_velocity.yaw, 0.0F);
+
   const auto prone_down = teleop::decodeKey('P');
   ASSERT_TRUE(prone_down.has_value());
   EXPECT_EQ(prone_down->type, CommandType::ProneDown);

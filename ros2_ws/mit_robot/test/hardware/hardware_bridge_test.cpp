@@ -358,10 +358,10 @@ TEST(HardwareBridgeTest, SetZeroExplicitlyResetsAllMotorZeros)
   EXPECT_EQ(bridge.run(stop_requested), 0);
   EXPECT_TRUE(hardware.zeroed);
   EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
-  EXPECT_GE(hardware.disable_count, 2);
+  EXPECT_GE(hardware.disable_count, 1);
   EXPECT_EQ(hardware.close_count, 1);
-  EXPECT_EQ(hardware.read_count, 2);
-  EXPECT_EQ(hardware.poll_count, 2);
+  EXPECT_EQ(hardware.read_count, 0);
+  EXPECT_EQ(hardware.poll_count, 0);
 }
 
 TEST(HardwareBridgeTest, SmallOffsetEnablesWithoutWritingMotorZeros)
@@ -475,7 +475,7 @@ TEST(HardwareBridgeTest, StartupRejectsRepeatedFeedbackSnapshot)
   EXPECT_EQ(hardware.enable_count, 0);
 }
 
-TEST(HardwareBridgeTest, SetZeroRejectsStalePostWriteFeedback)
+TEST(HardwareBridgeTest, SetZeroIgnoresPostWriteFeedback)
 {
   std::atomic_bool stop_requested{false};
   StartupZeroHardware hardware(stop_requested);
@@ -486,9 +486,9 @@ TEST(HardwareBridgeTest, SetZeroRejectsStalePostWriteFeedback)
   options.set_zero = true;
   HardwareBridge bridge(hardware, calibration(), options);
 
-  EXPECT_EQ(bridge.run(stop_requested), 7);
+  EXPECT_EQ(bridge.run(stop_requested), 0);
   EXPECT_EQ(hardware.zero_count, static_cast<int>(kNumJoints));
-  EXPECT_EQ(hardware.read_count, 3);
+  EXPECT_EQ(hardware.read_count, 0);
 }
 
 TEST(HardwareBridgeTest, LargeOffsetRejectsOutputStartup)

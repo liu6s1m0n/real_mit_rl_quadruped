@@ -223,7 +223,12 @@ MarchReport runMarch(
     std::size_t concurrent_swing = 0;
     const bool early_force_window = index >= 100 && index < 200;
     const bool late_force_window = index + 700 >= steps && index + 300 < steps;
-    const bool swing_force_window = index >= 455 && index < 485;
+    // 4 号按达标推进，摆动时刻不固定；按计划摆动相位取摆动中段采样。
+    const auto & scheduled = runner.gaitScheduler().gait_data;
+    const bool swing_force_window = gait_at(index) == GaitType::STAND_CYCLE ?
+      !scheduled.contactScheduled(LegId::FL) &&
+      scheduled.phase_swing(1) >= 0.2F && scheduled.phase_swing(1) < 0.45F :
+      index >= 455 && index < 485;
     report.early_force_samples += early_force_window ? 1U : 0U;
     report.late_force_samples += late_force_window ? 1U : 0U;
     report.swing_force_samples += swing_force_window ? 1U : 0U;
@@ -515,6 +520,37 @@ TEST(Dm1MarchInPlace, Key4LiftsOnceThenRestoresFourLegSupport)
   EXPECT_NEAR(late_support, early_support, 10.0);
 }
 
+TEST(Dm1MarchInPlace, Key5CyclesThroughAllFourLegs)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  const int trunk = mj_name2id(model.get(), mjOBJ_BODY, "trunk");
+  const double start_z = data->xpos[3 * trunk + 2];
+
+  // 5 号复用 4 号的一次抬落流程，按 FR→FL→RR→RL 逐腿循环。
+  const auto report = runMarch(model.get(), data.get(), runner, writer,
+    [](std::size_t) {return GaitType::THREE_FOOT;}, 10000);
+  printReport("single_leg", report);
+  EXPECT_EQ(report.fallbacks, 0U);
+  EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
+  EXPECT_LT(start_z - report.body_height_min, 0.01);
+  EXPECT_LT(report.maximum_roll, 0.05);
+  EXPECT_LT(report.maximum_pitch, 0.05);
+  // 每条腿至少完成一次抬落；单腿离地瞬间可能有少量接触抖动，
+  // 因此只检查离地事件和合理的抬脚高度上限。
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_GE(report.liftoffs[leg], 1U) << kLegNames[leg];
+    EXPECT_GT(report.maximum_foot_height[leg], 0.01) << kLegNames[leg];
+    EXPECT_LT(report.maximum_foot_height[leg], 0.035) << kLegNames[leg];
+  }
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    EXPECT_TRUE(report.final_contact[leg]) << kLegNames[leg];
+  }
+}
+
 TEST(Dm1MarchInPlace, Key4PlannerSchedulerAndEstimatorAgreeOnOneLift)
 {
   test_support::FsmContext context(0.002F);
@@ -650,10 +686,21 @@ TEST(Dm1MarchInPlace, Key4RecoversFromAPhysicalPitchAndPositionDisturbance)
   ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
   const int trunk = mj_name2id(model.get(), mjOBJ_BODY, "trunk");
   std::size_t disturbed_frames = 0;
+  // 4 号按达标推进，扰动从计划摆动开始前 25 帧起施加 100 帧。
+  std::size_t disturb_start = 0;
+  bool disturb_armed = false;
   const auto report = runMarch(model.get(), data.get(), runner, writer,
     [](std::size_t) {return GaitType::STAND_CYCLE;}, 5000, {},
     [&](std::size_t frame) {
-      const bool disturb = frame >= 430 && frame < 530;
+      const auto & scheduled = runner.gaitScheduler().gait_data;
+      if (!disturb_armed && scheduled.time_stance_remaining(1) > 0.0F &&
+        scheduled.time_stance_remaining(1) <= 0.05F)
+      {
+        disturb_armed = true;
+        disturb_start = frame;
+      }
+      const bool disturb = disturb_armed && frame >= disturb_start &&
+        frame < disturb_start + 100;
       data->xfrc_applied[6 * trunk] = disturb ? 4.0 : 0.0;
       data->xfrc_applied[6 * trunk + 3] = disturb ? -0.35 : 0.0;
       // 质心平移后原 2 Nm 只能压出约 0.013 rad，加大到 4 Nm 保证扰动可观测。

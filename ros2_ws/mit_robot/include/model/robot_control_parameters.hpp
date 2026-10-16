@@ -96,7 +96,7 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     // BalanceStand 直接下发给电机的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     // 取 MIT WBC_Ctrl 的默认关节阻抗（Kp=5、Kd=1.5），即 MIT 的低 PD 站立：
     // 支撑力主要来自 WBIC 前馈，关节 PD 只做参考跟踪，不靠硬弹簧顶住自重。
-    Vec3<T>(T(5), T(5), T(5)), Vec3<T>(T(1.5), T(1.5), T(1.5)),
+    Vec3<T>(T(8), T(8), T(15)), Vec3<T>(T(1.8), T(1.8), T(2)),
     // 经典 WBC（行走/趴下）共用的关节 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(10), T(10), T(10)), Vec3<T>(T(2), T(2), T(2)),
     // WBC 浮动基权重、反力权重、单脚最大法向力；当前站立配置使用权重 100。

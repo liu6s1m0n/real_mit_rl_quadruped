@@ -29,8 +29,7 @@ public:
     // 整批 12 帧照常发送（丢帧会让电机收不到命令而超时失能）。
     float torque_limit_nm = 88.0F;
     float startup_stationary_velocity_rad_s = 0.05F;
-    // 在写入零位或使能物理输出前，要求连续多个采样周期保持稳定；
-    // 对 CAN/IMU 来说，仅有一个正常帧是不够的。
+    // 普通控制启动前要求连续多个采样周期保持稳定；--set-zero 不读取反馈。
     int startup_stable_samples = 3;
     bool enable_output = false;
     bool keyboard_control = false;
@@ -55,7 +54,7 @@ public:
   int run(const std::atomic_bool & stop_requested);
 
 private:
-  // 执行启动时的静止、水平和电机零位检查；必要时显式重置电机零位。
+  // 普通启动执行静止/水平/零位检查；--set-zero 直接写入电机零位。
   bool performStartupZeroCalibration(
     const std::chrono::steady_clock::time_point & start,
     const std::atomic_bool & stop_requested);

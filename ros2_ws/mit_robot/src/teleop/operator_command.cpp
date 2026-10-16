@@ -115,6 +115,7 @@ void OperatorCommandArbiter::apply(const OperatorCommand & command) noexcept
     case CommandType::Motion:
       if (state_ == MotorOutputState::Enabled) {
         motion_ = command.motion;
+        ++motion_presses_;
         if (command.motion == Motion::MarchInPlace) {
           selected_gait_motion_ = command.motion;
         }

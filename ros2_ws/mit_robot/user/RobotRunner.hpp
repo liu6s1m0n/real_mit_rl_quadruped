@@ -78,6 +78,8 @@ public:
   void setWalkingForwardSpeed(float speed);
   /** 设置机身系前后、左右速度和偏航角速度，单位 m/s、rad/s。 */
   void setLocomotionGait(GaitType gait) noexcept;
+  /** 请求 4 号一次抬落重新执行（仅在上一次结束后生效）。 */
+  void requestStandCycleRestart() noexcept;
   void setLocomotionVelocityCommand(
     float forward_velocity, float lateral_velocity, float yaw_rate);
   /** 设置站立目标高度，实际命令会按 standing_height_rate_limit_ 平滑跟随。 */
@@ -98,6 +100,7 @@ public:
   }
   /*返回当前状态估计结果。*/
   const StateEstimate<float> & stateEstimate() const noexcept {return state_estimate_;}
+  const GaitScheduler<float> & gaitScheduler() const noexcept {return gait_scheduler_;}
   /*返回机器人模型*/
   const Quadruped<float> & quadruped() const noexcept {return quadruped_;}
   /** 返回 FSM 当前实际状态，用于确认安全回退没有反复重置步态。 */
@@ -105,15 +108,9 @@ public:
   {
     return control_fsm_->currentStateName();
   }
-  /** 当前是否已经处在允许行走的站立控制状态。 */
+  /** 当前是否已经处在站立或行走控制状态。 */
   bool standingReady() const noexcept;
-  /**
-   * @brief MPC/经典行走的入场门槛：机身已经抬到站立指令附近且姿态稳定。
-   *
-   * RL 入场有 rlEntryPostureStable() 的同类约束；如果缺失这个门槛，机身
-   * 还停在趴卧高度时就开始迈步，折叠的支撑腿会被 WBC 关节 PD 瞬间蹬直，
-   * 表现为“走一步停一步”。
-   */
+  /** 移动不再等待经典步态准入条件；保留接口供桥接层兼容调用。 */
   bool locomotionEntryReady() const noexcept;
   /** RL 入场姿态是否已经连续满足高度、关节和姿态条件。 */
   bool rlEntryReady() const noexcept;
@@ -143,7 +140,6 @@ private:
   /** 仅在 DM1 Home 启用整段小腿贴地代理，运动前关闭以免擦地。 */
   void setHomeCalfContactsEnabled(bool enabled) noexcept;
   float measuredBodyHeight() const noexcept;
-  bool locomotionEntryPostureStable() const noexcept;
   bool rlEntryPostureStable() const noexcept;
   void initializeController(OrientationEstimatorMode orientation_mode);
   float currentTime() const noexcept;
@@ -216,10 +212,7 @@ private:
   bool rl_posture_transition_pending_ = false;
   bool rl_entry_posture_latched_ = false;
   ControlMode pending_rl_mode_ = ControlMode::WalkRl;
-  float locomotion_entry_stable_time_s_ = 0.0F;
   float rl_entry_stable_time_s_ = 0.0F;
-  // 四脚诊断（按键 3）直接进入 Locomotion，不等待经典步态入场计时。
-  bool bypass_locomotion_entry_check_ = false;
   bool prone_down_active_ = false;
   bool prone_down_complete_ = false;
 };

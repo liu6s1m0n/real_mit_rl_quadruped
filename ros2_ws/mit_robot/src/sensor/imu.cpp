@@ -267,7 +267,7 @@ void HardwareImu::close() noexcept
   startup_gravity_body_.setZero();
   startup_rpy_degrees_.setZero();
   startup_gravity_magnitude_ = 9.81F;
-  startup_orientation_ = Eigen::Quaternionf::Identity();
+  startup_heading_orientation_ = Eigen::Quaternionf::Identity();
 }
 
 bool HardwareImu::tryRecover()
@@ -404,7 +404,10 @@ bool HardwareImu::calibrateStartupBaseline()
   startup_gravity_body_ = average_acceleration;
   startup_gravity_magnitude_ = gravity_magnitude;
   startup_rpy_degrees_ = average_rpy_degrees;
-  startup_orientation_ = rpyDegreesToQuaternion(startup_rpy_degrees_);
+  // 加速度仍然是设备世界系中的重力向量，不能把启动 roll/pitch 一起减掉；
+  // 只消除启动 yaw，既保持初始航向为零，又让姿态和重力方向使用同一坐标系。
+  const Vec3<float> startup_heading_rpy(0.0F, 0.0F, startup_rpy_degrees_.z());
+  startup_heading_orientation_ = rpyDegreesToQuaternion(startup_heading_rpy);
   startup_baseline_valid_ = true;
   imu_log::print(
     imu_log::Level::Info,
@@ -468,8 +471,10 @@ bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
   const Eigen::Quaternionf current_orientation =
     rpyDegreesToQuaternion(current_rpy_degrees);
   sample = ImuData<float>{};
-  // 把启动时的 IMU 姿态作为局部世界系原点：R_relative = R0^-1 * R_current。
-  sample.orientation_world_from_body = startup_orientation_.conjugate() * current_orientation;
+  // 只去除启动航向：R_input = R_yaw0^-1 * R_current。
+  // 保留 roll/pitch，避免与未变换的机体系重力加速度产生坐标语义冲突。
+  sample.orientation_world_from_body =
+    startup_heading_orientation_.conjugate() * current_orientation;
   sample.angular_velocity_body <<
     raw_sample.angular_velocity[0], raw_sample.angular_velocity[1],
     raw_sample.angular_velocity[2];

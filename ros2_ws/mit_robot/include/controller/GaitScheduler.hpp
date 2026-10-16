@@ -187,6 +187,21 @@ public:
 
   /** @brief 推进一个控制周期。 */
   void step();
+  /**
+   * @brief 对齐 STAND_CYCLE 动作时钟：下一次 step() 后的时间等于 time，单位 s。
+   * 其他步态下不起作用。
+   */
+  /** 设置 STAND_CYCLE 摆动腿掩码（4 号 FL+RR，5 号 FR）。 */
+  void setStandCycleSwingLegs(const std::array<bool, kNumLegs> & legs) noexcept
+  {
+    stand_cycle_swing_ = legs;
+  }
+  void setStandCycleTime(T time) noexcept
+  {
+    if (gait_data.current_gait != GaitType::STAND_CYCLE) {return;}
+    gait_data.initial_phase = std::clamp(
+      (time - dt_) / gait_data.period_time_nominal, T(0), T(1));
+  }
 
   /** @brief 更新由上层传入的步态参数快照。 */
   void setParameters(const GaitSchedulerParameters<T> & parameters);
@@ -233,6 +248,7 @@ private:
 
   GaitSchedulerParameters<T> parameters_{};
   T dt_ = T(0);
+  std::array<bool, kNumLegs> stand_cycle_swing_{false, true, true, false};
 };
 
 static_assert(kNumLegs == 4, "GaitScheduler requires exactly four legs");

@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <vector>
 #include <stdexcept>
 
 #include "model/floating_base_model_factory.hpp"
@@ -85,7 +87,11 @@ void FSM_State_Locomotion<T>::onEnter()
   stage1_stable_frames_ = 0;
   load_transfer_ready_frames_ = 0;
   load_transfer_gate_open_ = false;
+  cycle_stall_frames_ = 0;
+  cycle_unload_logged_ = false;
   cycle_shift_ready_ = false;
+  gait_applied_ = false;
+  single_leg_cycle_index_ = 0;
   // 保留 0.2 s 的步态启动保持，使按键动作从完整支撑相开始；不再插值
   // 关节目标、增益或前馈，进入 Locomotion 后直接使用 MIT WBC 输出。
   entry_transition_active_ = !isRlMode();
@@ -102,25 +108,35 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
 {
   // 承重交接时四脚保持支撑，避免旧站立命令作用于已被规划为摆动的腿。
   const GaitType requested_input = this->_data->locomotion_gait;
-  if (requested_input != GaitType::STAND &&
-    requested_input != GaitType::STAND_CYCLE)
+  const bool cycle_input = requested_input == GaitType::STAND_CYCLE ||
+    requested_input == GaitType::THREE_FOOT;
+  if (requested_input != GaitType::STAND && !cycle_input)
   {
     stage1_stable_frames_ = 0;
   }
   const bool transfer_ready = stage1_stable_frames_ >= kStableFrameCount;
   const GaitType requested = entry_transition_active_ ||
-    (requested_input == GaitType::STAND_CYCLE && !transfer_ready) ?
+    (cycle_input && !transfer_ready) ?
     GaitType::STAND : requested_input;
   if (!force && gait_applied_ && requested == applied_gait_) {return;}
+  if (requested == GaitType::THREE_FOOT &&
+    (!gait_applied_ || applied_gait_ != GaitType::THREE_FOOT))
+  {
+    single_leg_cycle_index_ = 0;
+  }
   // 中途换步态：MPC 的相位由内部周期计数换算，而 GaitScheduler 换步态时会把
   // 相位重置到各自的 phase_offset。这里把 MPC 一起归零，两者才不会错相。
   const bool switching = gait_applied_ && requested != applied_gait_;
-  if (switching) {mpc_->initialize();}
+  // 强制开始下一次 4/5 号抬落时也要重置 MPC 的位置锚点；否则上一条腿
+  // 的机身微小漂移会叠加到下一周期，最终让后腿动作越过支撑三角形。
+  if (switching || (force && cycle_input)) {mpc_->initialize();}
   if (force || switching) {
     load_transfer_elapsed_ = T(0);
     load_transfer_bucket_ = static_cast<std::size_t>(-1);
     load_transfer_ready_frames_ = 0;
     load_transfer_gate_open_ = false;
+    cycle_stall_frames_ = 0;
+    cycle_unload_logged_ = false;
     cycle_shift_ready_ = false;
     mpc::NormalForceBounds<T> normal;
     normal.minimum.fill(mpc_->solverSettings().minimum_normal_force);
@@ -133,7 +149,7 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   }
   applied_gait_ = requested;
   gait_applied_ = true;
-  // STAND 是 3 号四脚诊断入口；STAND_CYCLE 是 4 号换载；THREE_FOOT 是 5 号单腿抬起。
+  // STAND 是 3 号四脚诊断入口；STAND_CYCLE 是 4 号换载；THREE_FOOT 是 5 号单腿循环。
   // 三者都直接传给 MPC 和 GaitScheduler，不映射到 TROT。
   const GaitType effective = (requested == GaitType::STAND ||
     requested == GaitType::STAND_CYCLE ||
@@ -153,12 +169,28 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   wbc_ctrl_->setBodyPositionGains(
     this->_data->control_parameters->balance_body_position_kp,
     this->_data->control_parameters->balance_body_position_kd);
-  mpc_->setGait(effective);
-  this->_data->gait_scheduler->requestGait(effective);
+  // 5 号单腿抬落复用 4 号的 STAND_CYCLE 时序，每次只摆动一条腿。
+  if (requested == GaitType::STAND_CYCLE || requested == GaitType::THREE_FOOT) {
+    std::array<bool, kNumLegs> swing{false, false, false, false};
+    if (requested == GaitType::THREE_FOOT) {
+      swing[single_leg_cycle_index_] = true;
+    } else {
+      swing = {false, true, true, false};
+    }
+    if (swing != cycle_swing_) {cycle_learned_correction_.setZero();}
+    cycle_swing_ = swing;
+    mpc_->setStandCycleSwingLegs(swing);
+    this->_data->gait_scheduler->setStandCycleSwingLegs(swing);
+  }
+  const GaitType planner_gait =
+    effective == GaitType::THREE_FOOT ? GaitType::STAND_CYCLE : effective;
+  mpc_->setGait(planner_gait);
+  this->_data->gait_scheduler->requestGait(planner_gait);
   this->_data->gait_scheduler->modifyGait();
   if (requested_input == GaitType::STAND) {
     std::fprintf(stderr,
-      "[FSM][MARCH-DIAGNOSTIC] stage=1 zero_velocity=true planned_contacts=4 swing=false；四脚控制诊断，不自动换载。\n");
+      "[FSM][MARCH-DIAGNOSTIC] stage=1 zero_velocity=true planned_contacts=4 swing=false；"
+      "即按键 4 换载前的四脚站稳阶段，不自动换载。\n");
   }
 }
 
@@ -246,7 +278,7 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
   }
   // 4 号一次抬落关闭了通用姿态检查，这里保留 0.3 rad 的宽松上限：
   // 质心已移到支撑线上，正常抬落远小于该值，超过即说明正在绕对角线倾倒。
-  const bool stand_cycle = applied_gait_ == GaitType::STAND_CYCLE;
+  const bool stand_cycle = isStandCycle();
   const T max_roll = stand_cycle ? T(0.3) : ori::deg2rad(max_roll_degrees);
   const T max_pitch = stand_cycle ? T(0.3) : ori::deg2rad(max_pitch_degrees);
   if (std::abs(estimate.rpy.x()) > max_roll ||
@@ -269,7 +301,7 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
         "[FSM][LOCOMOTION] 安全回站：leg=%zu 反馈无效。\n", leg);
       return false;
     }
-    if (applied_gait_ == GaitType::STAND_CYCLE) {continue;}
+    if (isStandCycle()) {continue;}
     const T foot_speed = data.v.norm();
     if (data.p.z() > T(0) ||
       std::abs(data.p.y()) > maximum_lateral_foot_offset_ || foot_speed > T(9))
@@ -333,13 +365,27 @@ Vec3<T> FSM_State_Locomotion<T>::wholeBodyComWorld()
 
 /* 4 号一次抬落只用 FR+RL 两脚支撑，质心不在两脚连线上就会绕对角线倾倒，
    表现为机身掉高并向抬起腿一侧滚转/俯仰。起始时锁存一次：把质心垂直投影到
-   FR-RL 连线所需的水平位移，整个抬落期间保持，恢复承重后再平滑撤回。*/
+   FR-RL 连线所需的水平位移；之后由 integrateStandCycleShift() 按实测偏差修正，
+   整个抬落期间保持，恢复承重后再平滑撤回。*/
 template<typename T>
 void FSM_State_Locomotion<T>::prepareStandCycleShift(
   const std::array<Vec3<T>, kNumLegs> & feet_world)
 {
   cycle_shift_ready_ = true;
   cycle_support_shift_world_.setZero();
+  // 4 号开始时四脚都着地，记录足端高度作为 FL/RR 的落脚高度。
+  load_transfer_foot_position_ = feet_world;
+  cycle_touched_.fill(false);
+  cycle_reaching_.fill(false);
+  cycle_reach_frames_ = 0;
+  cycle_initial_shift_world_.setZero();
+  cycle_hold_latched_ = false;
+  cycle_gate_wait_frames_ = 0;
+  cycle_tipping_ = false;
+  cycle_had_tip_ = false;
+  cycle_aborted_ = false;
+  cycle_tip_count_ = 0;
+  cycle_start_rpy_ = this->_data->state_estimate->rpy;
   const auto & estimate = *this->_data->state_estimate;
   Vec3<T> com_world = Vec3<T>::Zero();
   try {
@@ -354,21 +400,25 @@ void FSM_State_Locomotion<T>::prepareStandCycleShift(
   cycle_com_shift_world_ =
     com_world.template head<2>() - estimate.position_world.template head<2>();
   const Vec2<T> com_at_anchor = anchor + cycle_com_shift_world_;
-  const Vec2<T> front_right = feet_world[0].template head<2>();
-  const Vec2<T> line = feet_world[3].template head<2>() - front_right;
-  if (!com_at_anchor.allFinite() || !line.allFinite() || line.squaredNorm() < T(1e-4)) {
-    return;
-  }
-  const T along = (com_at_anchor - front_right).dot(line) / line.squaredNorm();
-  Vec2<T> shift = front_right + along * line - com_at_anchor;
+  const Vec2<T> target = cycleSupportTarget(com_at_anchor, feet_world);
+  if (!com_at_anchor.allFinite() || !target.allFinite()) {return;}
+  Vec2<T> shift = target - com_at_anchor;
   constexpr T kMaximumShift = T(0.04);
   if (shift.norm() > kMaximumShift) {shift *= kMaximumShift / shift.norm();}
-  cycle_support_shift_world_ = shift;
+  cycle_initial_shift_world_ = shift;
+  cycle_support_shift_world_ = shift + cycle_learned_correction_;
+  if (cycle_support_shift_world_.norm() > T(0.045)) {
+    cycle_support_shift_world_ *= T(0.045) / cycle_support_shift_world_.norm();
+  }
   std::fprintf(stderr,
-    "[FSM][STAND_CYCLE] com-body=(%.4f,%.4f)m 支撑线平移=(%.4f,%.4f)m\n",
+    "[FSM][STAND_CYCLE] gait=%d leg=%zu com-body=(%.4f,%.4f)m 支撑线平移=(%.4f,%.4f)m（含已学修正 (%.4f,%.4f)m）\n",
+    static_cast<int>(applied_gait_), cycleSwingLegs().empty() ? kNumLegs : cycleSwingLegs().front(),
     static_cast<double>(cycle_com_shift_world_.x()),
     static_cast<double>(cycle_com_shift_world_.y()),
-    static_cast<double>(shift.x()), static_cast<double>(shift.y()));
+    static_cast<double>(cycle_support_shift_world_.x()),
+    static_cast<double>(cycle_support_shift_world_.y()),
+    static_cast<double>(cycle_learned_correction_.x()),
+    static_cast<double>(cycle_learned_correction_.y()));
 }
 
 /* 将四条腿全部标记为没有开始摆动。清除每条腿轨迹内部的：
@@ -393,12 +443,14 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   auto & trajectory = swing_trajectories_.at(leg);
   trajectory.reset();
   trajectory.setInitialPosition(initial_position);
-  if (applied_gait_ == GaitType::STAND_CYCLE) {
-    load_transfer_foot_position_[leg] = initial_position;
-    trajectory.setFinalPosition(load_transfer_foot_position_[leg]);
-    // 按键 4 保持单次抬两腿语义；DM1 足端接触几何下使用 3.5 cm，
-    // 足底完全离开地面，同时不改变按钮时序。
-    trajectory.setHeight(T(0.035));
+  if (isStandCycle()) {
+    // 落点高度用 4 号开始时四脚着地的足端高度，而不是离地瞬间的高度：
+    // 卸载等待期间轻载脚可能已悬空约 1 cm，按离地高度落脚会落在空中。
+    Vec3<T> landing = initial_position;
+    landing.z() = load_transfer_foot_position_[leg].z();
+    trajectory.setFinalPosition(landing);
+    // 按键 4/5 均使用 3 cm 抬脚高度，不改变动作时序。
+    trajectory.setHeight(T(0.03));
     swing_active_[leg] = true;
     return;
   }
@@ -490,6 +542,35 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
 {
   // 每帧求解经典 MPC/WBC；入口输出平滑交接到本周期的新控制结果。
   applyRequestedGait(false);
+  const bool cycle_complete = load_transfer_elapsed_ >=
+    T(1.34) - T(0.5) * this->_data->control_time_step;
+  if (applied_gait_ == GaitType::THREE_FOOT &&
+    cycle_complete && !cycle_aborted_)
+  {
+    single_leg_cycle_index_ = (single_leg_cycle_index_ + 1) % kNumLegs;
+    applyRequestedGait(true);
+    std::fprintf(stderr,
+      "[FSM][THREE_FOOT] 当前单腿抬落完成，切换到第 %zu 条腿并继续循环。\n",
+      single_leg_cycle_index_);
+  }
+  if (this->_data->stand_cycle_restart_requested) {
+    this->_data->stand_cycle_restart_requested = false;
+    if (isStandCycle() && (cycle_complete || cycle_aborted_))
+    {
+      // 上一次抬落已完整结束（含平移撤回），从头重新执行一次；保留上一次
+      // 由实测力差学到的平移修正，下一次从修正后的位置开始。
+      if (applied_gait_ == GaitType::THREE_FOOT && !cycle_aborted_) {
+        single_leg_cycle_index_ = (single_leg_cycle_index_ + 1) % kNumLegs;
+      }
+      cycle_learned_correction_ = cycle_support_shift_world_ - cycle_initial_shift_world_;
+      applyRequestedGait(true);
+      std::fprintf(stderr, "[FSM][STAND_CYCLE] 再次按键：重新执行一次抬落。\n");
+    } else if (isStandCycle()) {
+      std::fprintf(stderr,
+        "[FSM][STAND_CYCLE] 再次按键被忽略：上一次抬落尚未结束（t=%.3f s）。\n",
+        static_cast<double>(load_transfer_elapsed_));
+    }
+  }
   if (applied_gait_ == GaitType::STAND ||
     applied_gait_ == GaitType::STAND_CYCLE ||
     applied_gait_ == GaitType::THREE_FOOT) {
@@ -503,7 +584,7 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   if (applied_gait_ == GaitType::STAND) {
     updateStage1Stability();
   }
-  if (applied_gait_ == GaitType::STAND_CYCLE && !entry_transition_active_) {
+  if (isStandCycle() && !entry_transition_active_) {
     // 一次抬落：0.3 s 保持（同时把质心移到 FR-RL 支撑线）、0.3 s 卸载、
     // 0.24 s 摆腿、0.2 s 恢复承重，再用 0.3 s 把机身移回原锚点。
     constexpr T kHold = T(0.3);
@@ -515,34 +596,82 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
     constexpr T kShiftEnd = kEnd + kShiftReturn;
     // 卸载斜坡按 10 ms 分段刷新上下限，既平滑又不让 MPC 每帧重解。
     constexpr T kForceStep = T(0.01);
-    if (!cycle_shift_ready_) {prepareStandCycleShift(feet_world);}
+    // 卸载到 95% 时暂停整条时间轴等待承重确认；确认后从同一时刻继续，
+    // 不重置 MPC，也不先回载，保证卸载、摆腿和平移撤回始终同相。
+    constexpr T kGatePhase = T(0.95);
+    constexpr T kGateTime = kHold + kGatePhase * kRamp;
     const T time = std::round(load_transfer_elapsed_ / this->_data->control_time_step) *
       this->_data->control_time_step;
+    if (!cycle_shift_ready_) {prepareStandCycleShift(feet_world);}
+    // 实机机身位置环有约 1 cm 稳态误差，只靠平移目标无法把质心送到支撑线上。
+    // 保持结束、卸载开始前（动作时钟在此暂停），按实测全身质心到 FR-RL
+    // 连线的偏差积分修正平移量；卸载开始后冻结，避免轻载脚被拖动。
+    const bool unload_start = time >= kHold &&
+      time < kHold + T(0.5) * this->_data->control_time_step;
+    if (unload_start) {integrateStandCycleShift(feet_world);}
+    if (!unload_start && time >= kHold && !cycle_hold_latched_) {
+      // 卸载开始时锁存 FL/RR 实测关节角（四脚着地），卸载期间保持。
+      cycle_hold_latched_ = true;
+      // 平移本身会让机身侧倾约 2°，倾倒基准取卸载开始时的姿态。
+      cycle_start_rpy_ = this->_data->state_estimate->rpy;
+      for (const std::size_t leg : cycleSwingLegs()) {
+        cycle_hold_q_[leg] = this->_data->leg_controller->datas[leg].q;
+      }
+    }
+    if (!unload_start && time >= kHold && !cycle_unload_logged_) {
+      cycle_unload_logged_ = true;
+      const Vec2<T> com_error = standCycleComLineError(feet_world);
+      std::fprintf(stderr,
+        "[FSM][STAND_CYCLE] 开始卸载：支撑线平移=(%.4f,%.4f)m 质心距支撑线=(%.4f,%.4f)m\n",
+        static_cast<double>(cycle_support_shift_world_.x()),
+        static_cast<double>(cycle_support_shift_world_.y()),
+        static_cast<double>(com_error.x()), static_cast<double>(com_error.y()));
+    }
     const std::size_t bucket = static_cast<std::size_t>(time >= kEnd ?
       std::ceil(kEnd / kForceStep) : std::floor(time / kForceStep + T(1e-4)));
-    if (!load_transfer_gate_open_ && load_transfer_elapsed_ >= kTouchdown) {
-      if (loadTransferReady()) {
+    if (!load_transfer_gate_open_ && time > kHold && load_transfer_elapsed_ < kGateTime &&
+      applied_gait_ == GaitType::STAND_CYCLE)
+    {
+      // 卸载途中（含倾倒回载）同样按实测 RR-FL 承重差修正平移：倾倒时 RR 承重
+      // 明显多于 FL，平移持续推向 FL 一侧，回载后再卸载时质心更靠近支撑线。
+      standCycleDiagonalImbalance(feet_world, true);
+    }
+    if (!load_transfer_gate_open_ && load_transfer_elapsed_ >= kGateTime) {
+      // 卸到 95% 时 FL/RR 的残余承重应近似相等；RR 明显多于 FL 说明真实
+      // 质心仍偏在 RR 一侧（模型质心与实物不符），抬腿后会朝 RR 倾倒。
+      // 等待期间按实测残余力差把机身朝 FL 一侧积分平移，直到两者相等。
+      // 5 号三腿支撑静定，没有对角力差的概念，只看承重确认。
+      const T imbalance = applied_gait_ == GaitType::STAND_CYCLE ?
+        standCycleDiagonalImbalance(feet_world, true) : T(0);
+      // 力差判据只作辅助：等待超过 2 s 仍不满足时放行，仅依赖承重确认。
+      constexpr std::size_t kImbalanceTimeoutFrames = 1000;
+      if (++cycle_gate_wait_frames_ == kImbalanceTimeoutFrames) {
+        std::fprintf(stderr,
+          "[FSM][STAND_CYCLE] RR-FL 承重差等待 2 s 仍为 %.1f%% 体重，忽略该判据。\n",
+          static_cast<double>(imbalance) * 100.0);
+      }
+      const bool balanced = cycle_gate_wait_frames_ >= kImbalanceTimeoutFrames ||
+        (std::isfinite(static_cast<double>(imbalance)) && std::abs(imbalance) < T(0.03));
+      if (loadTransferReady() && balanced) {
         ++load_transfer_ready_frames_;
       } else {
         load_transfer_ready_frames_ = 0;
       }
       if (load_transfer_ready_frames_ >= kStableFrameCount) {
         load_transfer_gate_open_ = true;
-        // 等待确认期间 MPC 的内部时钟仍在推进；确认后重新从换载
-        // 起始相位开始，确保两条腿同步进入一次摆动，而不是错过摆动窗。
-        mpc_->initialize();
         std::fprintf(stderr,
-          "[FSM][STAND_CYCLE] load-transfer gate open after stable support confirmation.\n");
+          "[FSM][STAND_CYCLE] load-transfer gate open after stable support confirmation. "
+          "RR-FL 承重差=%.1f%% 体重 支撑线平移=(%.4f,%.4f)m\n",
+          static_cast<double>(imbalance) * 100.0,
+          static_cast<double>(cycle_support_shift_world_.x()),
+          static_cast<double>(cycle_support_shift_world_.y()));
       }
     }
     const T phase = std::clamp(time < kTouchdown ?
       (time - kHold) / kRamp : T(1) - (time - kTouchdown) / kReload, T(0), T(1));
-    // 在承重反馈确认前，最多卸载 85%；若触地时仍未确认，则恢复四脚
-    // 的完整力上限并保持接触，避免“时间到了但承重腿还没接住”时抬腿。
-    const bool transfer_waiting = !load_transfer_gate_open_ &&
-      load_transfer_elapsed_ >= kTouchdown;
+    // 承重反馈确认前停在 95% 卸载，FL/RR 仍保持接触。
     const T guarded_phase = load_transfer_gate_open_ ? phase :
-      (transfer_waiting ? T(0) : std::min(phase, T(0.85)));
+      std::min(phase, kGatePhase);
     const T blend = guarded_phase * guarded_phase * (T(3) - T(2) * guarded_phase);
     // 平移必须在卸载前完成、在抬落腿重新承重后才撤回，否则两脚支撑期间
     // 质心不在支撑线上，机身会绕对角线倾倒并掉高。
@@ -550,24 +679,139 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       time / kHold : T(1) - (time - kEnd) / kShiftReturn, T(0), T(1));
     const T shift_blend = shift_phase * shift_phase * (T(3) - T(2) * shift_phase);
     mpc_->setPositionOffsetWorld(shift_blend * cycle_support_shift_world_);
+    // MPC 接触表与本状态共用同一动作时钟，等待期间两者一起暂停。
+    mpc_->setStandCycleTime(time);
     if (bucket != load_transfer_bucket_) {
       load_transfer_bucket_ = bucket;
       mpc::NormalForceBounds<T> bounds;
       bounds.minimum.fill(mpc_->solverSettings().minimum_normal_force);
       bounds.maximum.fill(mpc_->solverSettings().maximum_normal_force);
-      for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
+      for (const std::size_t leg : cycleSwingLegs()) {
         bounds.minimum[leg] = T(0);
         bounds.maximum[leg] *= T(1) - blend;
       }
       mpc_->setNormalForceBounds(bounds);
       wbc_ctrl_->setNormalForceBounds(bounds.minimum, bounds.maximum);
     }
-    if (!load_transfer_gate_open_ && load_transfer_elapsed_ >= kTouchdown) {
-      load_transfer_elapsed_ = kTouchdown;
-    } else {
-      load_transfer_elapsed_ = std::min(kShiftEnd,
-        load_transfer_elapsed_ + this->_data->control_time_step);
+    // 动作时钟只在当前段达标时推进：质心未到位不卸载、支撑腿未接住不继续
+    // 卸载、摆动脚跟踪不上不继续抬、未触地不回载。时间常数只决定达标时的
+    // 推进快慢。摆动段悬空等待有风险，超过 0.3 s 强制推进到收腿。
+    const char * blocker = standCycleStepBlocker(time, blend, shift_blend, feet_world);
+    if (blocker == nullptr && !load_transfer_gate_open_ &&
+      load_transfer_elapsed_ >= kGateTime)
+    {
+      blocker = "等待承重确认（含 FL/RR 残余承重差 < 3% 体重）";
     }
+    // 触地确认：到触地时刻摆动脚若仍高于起始地面 8 mm，则保持摆动并继续下探，
+    // 动作时钟停在触地点，回载不开始；否则 WBC 接触约束会把脚固定在空中，
+    // 回载力打空，机身朝另一侧塌陷。最多下探 0.2 s。
+    cycle_reaching_.fill(false);
+    if (time >= kTouchdown && time < kEnd) {
+      for (const std::size_t leg : cycleSwingLegs()) {
+        if (!cycle_touched_[leg] &&
+          feet_world[leg].z() - load_transfer_foot_position_[leg].z() <= T(0.008))
+        {
+          cycle_touched_[leg] = true;
+        }
+      }
+      bool all_touched = true;
+      for (const std::size_t leg : cycleSwingLegs()) {all_touched = all_touched && cycle_touched_[leg];}
+      if (!all_touched) {
+        if (++cycle_reach_frames_ > 100) {
+          std::fprintf(stderr,
+            "[FSM][STAND_CYCLE] 下探 0.2 s 仍未触地 FR=%d FL=%d RR=%d RL=%d（1=已触地），按触地处理。\n",
+            static_cast<int>(cycle_touched_[0] || !cycle_swing_[0]),
+            static_cast<int>(cycle_touched_[1] || !cycle_swing_[1]),
+            static_cast<int>(cycle_touched_[2] || !cycle_swing_[2]),
+            static_cast<int>(cycle_touched_[3] || !cycle_swing_[3]));
+          for (const std::size_t leg : cycleSwingLegs()) {cycle_touched_[leg] = true;}
+        } else {
+          for (const std::size_t leg : cycleSwingLegs()) {cycle_reaching_[leg] = !cycle_touched_[leg];}
+          if (blocker == nullptr) {blocker = "摆动脚尚未触地，继续下探";}
+        }
+      }
+    }
+    // 摆动期两脚支撑绕 FR-RL 连线不稳定，悬空越久倒得越多：摆动段绝不暂停，
+    // 不达标时以 3 倍速走完剩余轨迹尽快落脚（MIT Cheetah 3 早触地思路）。
+    const bool swinging = time >= kGateTime + (T(1) - kGatePhase) * kRamp &&
+      time < kTouchdown;
+    T step = this->_data->control_time_step;
+    if (blocker != nullptr) {
+      ++cycle_stall_frames_;
+      if (swinging) {
+        if (cycle_stall_frames_ == 1) {
+          std::fprintf(stderr,
+            "[FSM][STAND_CYCLE] 摆动段 t=%.3f s 未达标（%s），加速落脚。\n",
+            static_cast<double>(time), blocker);
+        }
+        step *= T(3);
+        blocker = nullptr;
+      } else if (cycle_stall_frames_ % 250 == 1 && cycle_stall_frames_ > 1) {
+        std::fprintf(stderr,
+          "[FSM][STAND_CYCLE] 动作暂停 t=%.3f s：%s（已等待 %.2f s）。\n",
+          static_cast<double>(time), blocker,
+          static_cast<double>(cycle_stall_frames_) *
+          static_cast<double>(this->_data->control_time_step));
+      }
+    }
+    // 卸载中（抬腿前）若机身开始绕支撑线倾倒（FL/RR 足端离地 > 1 cm 或
+    // roll/pitch 相对动作起点变化 > 0.04 rad），动作时钟倒退回载，同时力差
+    // 积分继续把机身推向 FL 一侧，恢复后再重新卸载，而不是等到倒地。
+    bool tipping = false;
+    if (!load_transfer_gate_open_ && time > kHold && !cycle_aborted_) {
+      const auto & estimate = *this->_data->state_estimate;
+      tipping =
+        std::abs(estimate.rpy.x() - cycle_start_rpy_.x()) > T(0.04) ||
+        std::abs(estimate.rpy.y() - cycle_start_rpy_.y()) > T(0.04);
+      for (const std::size_t leg : cycleSwingLegs()) {
+        tipping = tipping ||
+          feet_world[leg].z() - load_transfer_foot_position_[leg].z() > T(0.01);
+      }
+    }
+    if (tipping || cycle_tipping_) {
+      // 一旦触发就一直回载到满载点再重新卸载；不能在倾倒刚消失时停在半卸载处。
+      if (!cycle_tipping_) {
+        ++cycle_tip_count_;
+        std::fprintf(stderr,
+          "[FSM][STAND_CYCLE] 卸载中检测到倾倒（第 %zu 次） t=%.3f s，回载重试；支撑线平移=(%.4f,%.4f)m\n",
+          cycle_tip_count_,
+          static_cast<double>(time),
+          static_cast<double>(cycle_support_shift_world_.x()),
+          static_cast<double>(cycle_support_shift_world_.y()));
+      }
+      cycle_tipping_ = true;
+      cycle_had_tip_ = true;
+      load_transfer_ready_frames_ = 0;
+      load_transfer_elapsed_ = std::max(kHold,
+        load_transfer_elapsed_ - this->_data->control_time_step);
+      blocker = "卸载中倾倒，回载中";
+      // 用未取整的动作时钟判断回到满载点；取整后的 time 因浮点误差可能略大于 kHold。
+      if (load_transfer_elapsed_ <= kHold + T(0.5) * this->_data->control_time_step) {
+        cycle_tipping_ = false;
+        cycle_start_rpy_ = this->_data->state_estimate->rpy;
+        // 连续倾倒 3 次说明平移无法把质心送上支撑线，反复卸载/回载会让轻载腿
+        // 触底弹起、机身抖动；停在四脚满载，等待再次按 4。
+        constexpr std::size_t kMaximumTipRetries = 3;
+        if (cycle_tip_count_ >= kMaximumTipRetries) {
+          cycle_aborted_ = true;
+          std::fprintf(stderr,
+            "[FSM][STAND_CYCLE] 连续 %zu 次卸载倾倒，本次抬落中止，保持四脚站立；"
+            "可再次按 4 重试。支撑线平移=(%.4f,%.4f)m\n",
+            cycle_tip_count_,
+            static_cast<double>(cycle_support_shift_world_.x()),
+            static_cast<double>(cycle_support_shift_world_.y()));
+        }
+      }
+    }
+    if (blocker == nullptr && !cycle_tipping_ && !cycle_aborted_) {
+      if (!swinging) {cycle_stall_frames_ = 0;}
+      // 加速时不越过触地点，保证回载从触地时刻开始。
+      const T next = load_transfer_elapsed_ + step;
+      load_transfer_elapsed_ = std::min(kShiftEnd,
+        swinging && step > this->_data->control_time_step ? std::min(next, kTouchdown) : next);
+    }
+    // 下一周期 GaitScheduler::step() 先于本状态运行，提前同步估计器接触先验。
+    this->_data->gait_scheduler->setStandCycleTime(load_transfer_elapsed_);
   } else {
     mpc_->setPositionOffsetWorld(Vec2<T>::Zero());
   }
@@ -594,11 +838,15 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   wbc_data_.vBody_Ori_des = desired.body_angular_velocity;
   //逐腿处理支撑或摆动逻辑。
   auto contact_state = result.contact_state;
-  if (applied_gait_ == GaitType::STAND_CYCLE && !load_transfer_gate_open_) {
+  if (isStandCycle() && !load_transfer_gate_open_) {
     // MPC 的时间表可以先进入低载荷段，但 WBC 在反馈确认前仍保持四脚接触，
     // 防止计划时刻直接把未承重的腿交给摆动任务。
-    contact_state[1] = true;
-    contact_state[2] = true;
+    for (const std::size_t leg : cycleSwingLegs()) {contact_state[leg] = true;}
+  }
+  if (isStandCycle()) {
+    for (const std::size_t leg : cycleSwingLegs()) {
+      if (cycle_reaching_[leg]) {contact_state[leg] = false;}
+    }
   }
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     //将 MPC 计算出的世界坐标系反作用力传给 WBC。
@@ -617,6 +865,15 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
 
     // 只在离地沿锁存起点和落脚点。后续周期即使实测足端受到扰动，目标轨迹
     // 也只由锁存数据和 swing_phase 推进，不会把扰动累积成新的目标高度。
+    if (isStandCycle() && cycle_reaching_[leg]) {
+      // 未触地：以 0.1 m/s 向起始地面以下 2 cm 下探，直到触地确认。
+      wbc_data_.pFoot_des[leg] = feet_world[leg];
+      wbc_data_.pFoot_des[leg].z() = load_transfer_foot_position_[leg].z() - T(0.02);
+      wbc_data_.vFoot_des[leg] = Vec3<T>(T(0), T(0), T(-0.1));
+      wbc_data_.aFoot_des[leg].setZero();
+      swing_active_[leg] = true;
+      continue;
+    }
     if (!swing_active_[leg]) {
       startSwingTrajectory(leg, feet_world[leg], result);
     }
@@ -662,12 +919,26 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       // 行走层只负责自身的目标范围；所有状态共用的连续力矩约束由
       // LegController 最终命令出口统一执行。
       constrainJointTargets();
-      if (applied_gait_ == GaitType::STAND_CYCLE && load_transfer_elapsed_ > T(1.04)) {
+      if (isStandCycle() && cycle_hold_latched_ &&
+        load_transfer_elapsed_ < T(0.6))
+      {
+        // 卸载期间 FL/RR 力上限接近零，关节目标若跟随 WBC（按机身到位计算）
+        // 漂移，轻载脚会被提离地面；保持卸载开始时的关节角直到摆动开始。
+        for (const std::size_t leg : cycleSwingLegs()) {
+          if (!contact_state[leg]) {continue;}
+          auto & command = this->_data->leg_controller->commands[leg];
+          command.position_desired = cycle_hold_q_[leg];
+          command.velocity_desired.setZero();
+        }
+      }
+      if (isStandCycle() && load_transfer_elapsed_ > T(1.04)) {
         // 单次抬落结束后把零空间姿态平滑收回 DM1 home，避免支撑脚的
         // 微小位移永久留在关节目标中；普通 TROT 不走这条动作专用路径。
         const T alpha = std::clamp(
           (load_transfer_elapsed_ - T(1.04)) / T(0.3), T(0), T(1));
         for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+          // 摆动腿由足端轨迹控制，不能被 home 关节目标拉住。
+          if (!contact_state[leg]) {continue;}
           auto & command = this->_data->leg_controller->commands[leg];
           const auto & home = this->_data->quadruped->leg(
             static_cast<LegId>(leg)).joints.home_position;
@@ -749,8 +1020,225 @@ void FSM_State_Locomotion<T>::updateStage1Stability()
     stable = data.valid && data.p.allFinite() && data.v.allFinite() &&
       data.v.norm() < T(0.20);
   }
+  const std::size_t previous_frames = stage1_stable_frames_;
   stage1_stable_frames_ = stable ?
     std::min(stage1_stable_frames_ + 1, kStableFrameCount) : 0;
+  if (this->_data->locomotion_gait == GaitType::STAND &&
+    previous_frames < kStableFrameCount && stage1_stable_frames_ >= kStableFrameCount)
+  {
+    // 3 号与 4 号共用同一四脚站稳判据；达标即 4 号可立即进入换载。
+    std::fprintf(stderr,
+      "[FSM][MARCH-DIAGNOSTIC] stage=1 四脚站稳达标（与按键 4 换载前判据相同）。\n");
+  }
+}
+
+template<typename T>
+std::vector<std::size_t> FSM_State_Locomotion<T>::cycleSwingLegs() const
+{
+  std::vector<std::size_t> legs;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    if (cycle_swing_[leg]) {legs.push_back(leg);}
+  }
+  return legs;
+}
+
+template<typename T>
+Vec2<T> FSM_State_Locomotion<T>::standCycleComLineError(
+  const std::array<Vec3<T>, kNumLegs> & feet_world)
+{
+  Vec3<T> com_world = Vec3<T>::Zero();
+  try {
+    com_world = wholeBodyComWorld();
+  } catch (const std::exception &) {
+    return Vec2<T>::Constant(std::numeric_limits<T>::quiet_NaN());
+  }
+  const Vec2<T> com = com_world.template head<2>();
+  // 返回质心到目标点的水平位移，即还需要平移的量。
+  return cycleSupportTarget(com, feet_world) - com;
+}
+
+template<typename T>
+Vec2<T> FSM_State_Locomotion<T>::cycleSupportTarget(
+  const Vec2<T> & com, const std::array<Vec3<T>, kNumLegs> & feet_world) const
+{
+  // 4 号：质心投影到 FR(0)-RL(3) 对角支撑线上（保持原有行为）。
+  // 5 号（THREE_FOOT）：目标 = 三条支撑腿足端的质心（支撑三角形的中心），
+  //   保证结果始终在三角形内部，与腿的顺序、坐标系方向无关。
+  if (applied_gait_ != GaitType::THREE_FOOT) {
+    const Vec2<T> a = feet_world[0].template head<2>();
+    const Vec2<T> line = feet_world[3].template head<2>() - a;
+    if (!com.allFinite() || !line.allFinite() || line.squaredNorm() < T(1e-4)) {
+      return Vec2<T>::Constant(std::numeric_limits<T>::quiet_NaN());
+    }
+    const T along = (com - a).dot(line) / line.squaredNorm();
+    return a + along * line;
+  }
+  // THREE_FOOT：把质心投影到摆动腿对侧对角线上，再朝第三条支撑腿内缩 2 cm。
+  // 对角线对（FR↔RL，FL↔RR）：
+  //   FR(0) 抬 → 对侧对角线 FL(1)-RR(2)，朝 RL(3) 内缩
+  //   FL(1) 抬 → 对侧对角线 FR(0)-RL(3)，朝 RR(2) 内缩
+  //   RR(2) 抬 → 对侧对角线 FR(0)-RL(3)，朝 FL(1) 内缩
+  //   RL(3) 抬 → 对侧对角线 FL(1)-RR(2)，朝 FR(0) 内缩
+  const std::size_t swing = cycleSwingLegs().empty() ? 0 : cycleSwingLegs().front();
+  std::size_t ea = 0, eb = 3, inward = 1;
+  switch (swing) {
+    case 0: ea = 1; eb = 2; inward = 3; break;
+    case 1: ea = 0; eb = 3; inward = 2; break;
+    case 2: ea = 0; eb = 3; inward = 1; break;
+    case 3: ea = 1; eb = 2; inward = 0; break;
+    default: break;
+  }
+  const Vec2<T> a2 = feet_world[ea].template head<2>();
+  const Vec2<T> line2 = feet_world[eb].template head<2>() - a2;
+  if (!line2.allFinite() || line2.squaredNorm() < T(1e-4)) {
+    return Vec2<T>::Constant(std::numeric_limits<T>::quiet_NaN());
+  }
+  Vec2<T> normal2(-line2.y(), line2.x());
+  normal2.normalize();
+  if (normal2.dot(feet_world[inward].template head<2>() - a2) < T(0)) {normal2 = -normal2;}
+  const T along2 = (com - a2).dot(line2) / line2.squaredNorm();
+  constexpr T kInset = T(0.02);
+  return a2 + along2 * line2 + kInset * normal2;
+}
+
+template<typename T>
+T FSM_State_Locomotion<T>::standCycleDiagonalImbalance(
+  const std::array<Vec3<T>, kNumLegs> & feet_world, bool integrate)
+{
+  const T weight = this->_data->quadruped->totalMass() * T(9.81);
+  const T imbalance =
+    (estimatedVerticalSupport(2) - estimatedVerticalSupport(1)) / weight;
+  const Vec2<T> front_right = feet_world[0].template head<2>();
+  const Vec2<T> line = feet_world[3].template head<2>() - front_right;
+  if (!std::isfinite(static_cast<double>(imbalance)) || !line.allFinite() ||
+    line.squaredNorm() < T(1e-4))
+  {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+  if (integrate) {
+    // 支撑线法向，指向 FL 一侧。
+    Vec2<T> normal(-line.y(), line.x());
+    normal.normalize();
+    if (normal.dot(feet_world[1].template head<2>() - front_right) < T(0)) {normal = -normal;}
+    // 10% 体重的力差每秒平移 1 cm。
+    constexpr T kGain = T(0.1);
+    // 实测力差不依赖质心模型；实机模型质心与实物相差可超过 1 cm，允许修正 3 cm。
+    applyStandCycleShiftCorrection(
+      kGain * imbalance * this->_data->control_time_step * normal, T(0.03));
+  }
+  return imbalance;
+}
+
+template<typename T>
+void FSM_State_Locomotion<T>::integrateStandCycleShift(
+  const std::array<Vec3<T>, kNumLegs> & feet_world)
+{
+  const Vec2<T> error = standCycleComLineError(feet_world);
+  if (!error.allFinite()) {return;}
+  // 机身仍在移动时偏差会自行减小，此时积分会超调；只在停稳后修正稳态误差。
+  if (this->_data->state_estimate->velocity_world.template head<2>().norm() > T(0.02)) {
+    return;
+  }
+  constexpr T kIntegralGain = T(0.5);  // 1/s：1 cm 偏差每秒修正 5 mm。
+  applyStandCycleShiftCorrection(
+    kIntegralGain * this->_data->control_time_step * error, T(0.01));
+}
+
+template<typename T>
+void FSM_State_Locomotion<T>::applyStandCycleShiftCorrection(
+  const Vec2<T> & delta, T maximum_correction)
+{
+  // 防积分饱和：机身实际位置未跟上当前平移目标（误差 >= 1.5 cm，实机位置环
+  // 稳态误差约 1 cm）时不再加大平移量，否则 WBC 关节目标会按“机身已到位”
+  // 持续偏离实际，卸载腿被提起。
+  const auto & estimate = *this->_data->state_estimate;
+  const Vec2<T> target = mpc_->positionAnchorWorld(estimate).template head<2>() +
+    cycle_support_shift_world_;
+  if ((estimate.position_world.template head<2>() - target).norm() >= T(0.015)) {return;}
+  // 修正量相对起始锁存平移不超过 maximum_correction。
+  Vec2<T> correction = cycle_support_shift_world_ + delta - cycle_initial_shift_world_;
+  if (correction.norm() > maximum_correction) {
+    correction *= maximum_correction / correction.norm();
+  }
+  cycle_support_shift_world_ = cycle_initial_shift_world_ + correction;
+  // 总平移不得超过 MPC 位置偏移上限 5 cm（超过会抛异常），留 5 mm 余量。
+  constexpr T kMaximumTotalShift = T(0.045);
+  if (cycle_support_shift_world_.norm() > kMaximumTotalShift) {
+    cycle_support_shift_world_ *= kMaximumTotalShift / cycle_support_shift_world_.norm();
+  }
+}
+
+template<typename T>
+const char * FSM_State_Locomotion<T>::standCycleStepBlocker(
+  T time, T blend, T /*shift_blend*/,
+  const std::array<Vec3<T>, kNumLegs> & feet_world)
+{
+  constexpr T kHold = T(0.3);
+  constexpr T kLiftoff = T(0.6);
+  constexpr T kTouchdown = T(0.84);
+  constexpr T kEnd = T(1.04);
+  const auto & estimate = *this->_data->state_estimate;
+  if (!estimate.valid) {return "状态估计无效";}
+  if (std::abs(estimate.rpy.x()) > T(0.12) || std::abs(estimate.rpy.y()) > T(0.12)) {
+    return "机身姿态超过 0.12 rad";
+  }
+  const T target_height = this->_data->desired_state->body_position_world.z();
+  if (estimate.position_world.z() < target_height - T(0.03)) {return "机身高度下降超过 3 cm";}
+  const T weight = this->_data->quadruped->totalMass() * T(9.81);
+  T support = T(0);
+  T moving = T(0);
+  T swing_count = T(0);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    if (cycle_swing_[leg]) {
+      moving += estimatedVerticalSupport(leg);
+      swing_count += T(1);
+    } else {
+      support += estimatedVerticalSupport(leg);
+    }
+  }
+  // 摆动腿当前单腿法向力上限，与下发给 MPC/WBC 的上限一致。
+  const T cap = mpc_->solverSettings().maximum_normal_force * (T(1) - blend);
+  if (time >= kEnd) {
+    // 撤回质心平移前，摆动腿必须已重新接回载荷（每条腿约 17.5% 体重）。
+    if (moving < T(0.175) * swing_count * weight) {return "摆动腿尚未接回载荷";}
+    // 四脚均已承重，撤回平移只需姿态正常，不再要求位置跟踪精度。
+    return nullptr;
+  }
+  if (time < kHold) {
+    // 平移斜坡期间目标在移动，机身天然滞后；到位判据留到卸载开始前检查。
+    return nullptr;
+  }
+  if (time < kLiftoff) {
+    // 卸载段：FL+RR 实测承重不得超过当前法向力上限（留 10% 体重裕量），
+    // 即载荷确实转给了 FR+RL，才继续压低上限。
+    // 卸载开始前（仅在该时刻检查）要求实测全身质心距 FR-RL 支撑线 < 6 mm
+    // 且机身已停稳；卸载途中再暂停会让轻载脚反复离地。
+    // 发生过倾倒回载后，平移已由实测力差修正，模型质心判据不再适用（实机
+    // 模型质心偏差超过其 ±1 cm 修正范围，会卡死在此处）。
+    if (time < kHold + T(0.5) * this->_data->control_time_step && !cycle_had_tip_) {
+      // 4 号只有 FR/RL 两脚支撑，必须先把质心压到支撑线附近；
+      // 5 号始终保留三条支撑腿，不能复用这条对角线判据，否则当
+      // 支撑三角形的目标点超出机身平移限幅时会永久停在 0.3 s。
+      const bool require_diagonal_alignment = applied_gait_ == GaitType::STAND_CYCLE;
+      const Vec2<T> com_error = standCycleComLineError(feet_world);
+      const bool position_ok = !require_diagonal_alignment ||
+        (com_error.allFinite() && com_error.norm() <= T(0.006));
+      if (!position_ok || estimate.velocity_world.template head<2>().norm() > T(0.05)) {
+        return require_diagonal_alignment ?
+          "质心距支撑目标超过 6 mm 或未停稳" : "机身尚未停稳";
+      }
+    }
+    return moving <= swing_count * cap + T(0.1) * weight ?
+      nullptr : "摆动腿实测承重高于卸载上限";
+  }
+  if (time < kTouchdown) {
+    // 足端跟踪滞后时加速只会让脚更早被切成支撑而悬在空中，故不作为判据；
+    // 落脚由触地确认（未触地继续下探）保证。
+    if (support < T(0.85) * weight) {return "摆动期支撑腿承重不足 85%";}
+    return nullptr;
+  }
+  // 回载过程中实测力天然滞后于上限，不逐帧卡住，留到撤回平移前统一检查。
+  return nullptr;
 }
 
 template<typename T>
@@ -758,21 +1246,23 @@ bool FSM_State_Locomotion<T>::loadTransferReady() const
 {
   const auto & estimate = *this->_data->state_estimate;
   const T weight = this->_data->quadruped->totalMass() * T(9.81);
-  const T front_right = estimatedVerticalSupport(0);
-  const T rear_left = estimatedVerticalSupport(3);
-  const auto & fr_data = this->_data->leg_controller->datas[0];
-  const auto & rl_data = this->_data->leg_controller->datas[3];
+  T support = T(0);
+  bool legs_ok = true;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    if (cycle_swing_[leg]) {continue;}
+    const auto & data = this->_data->leg_controller->datas[leg];
+    const T force = estimatedVerticalSupport(leg);
+    support += force;
+    legs_ok = legs_ok && data.valid && data.v.norm() < T(0.30) &&
+      force > T(0.15) * weight / T(4);
+  }
   return stage1_stable_frames_ >= kStableFrameCount && estimate.valid &&
     estimate.position_world.z() > T(0.295) &&
     std::abs(estimate.rpy.x()) < T(0.12) &&
     std::abs(estimate.rpy.y()) < T(0.12) &&
     estimate.velocity_world.norm() < T(0.30) &&
     estimate.angular_velocity_body.norm() < T(0.40) &&
-    fr_data.valid && rl_data.valid && fr_data.v.norm() < T(0.30) &&
-    rl_data.v.norm() < T(0.30) &&
-    front_right > T(0.15) * weight / T(4) &&
-    rear_left > T(0.15) * weight / T(4) &&
-    front_right + rear_left > T(0.60) * weight;
+    legs_ok && support > T(0.60) * weight;
 }
 
 template<typename T>

@@ -6,6 +6,7 @@
 #define MYMIT_ROBOT_FSM_STATE_LOCOMOTION_H_
 
 #include <array>
+#include <vector>
 #include <memory>
 
 #include "FSM/FSM_State.h"
@@ -115,7 +116,33 @@ private:
   std::size_t stage1_stable_frames_ = 0;
   std::size_t load_transfer_ready_frames_ = 0;
   bool load_transfer_gate_open_ = false;
+  /*4 号动作时钟连续未达标的帧数，用于超时告警和摆动段强制收腿。*/
+  std::size_t cycle_stall_frames_ = 0;
+  bool cycle_unload_logged_ = false;
+  /*4 号开始时（四脚着地）记录的足端世界位置，摆动腿按其高度落脚。*/
   std::array<Vec3<T>, kNumLegs> load_transfer_foot_position_{};
+  /*4 号触地确认：已触地标志、本周期是否仍在下探，以及下探帧数。*/
+  std::array<bool, kNumLegs> cycle_touched_{};
+  std::array<bool, kNumLegs> cycle_reaching_{};
+  std::size_t cycle_reach_frames_ = 0;
+  /*4 号起始锁存的平移量（积分修正以它为基准，限幅 ±1 cm）、卸载开始时锁存的
+    FL/RR 关节角，以及承重确认等待帧数。*/
+  Vec2<T> cycle_initial_shift_world_ = Vec2<T>::Zero();
+  std::array<Vec3<T>, kNumLegs> cycle_hold_q_{};
+  bool cycle_hold_latched_ = false;
+  std::size_t cycle_gate_wait_frames_ = 0;
+  /*卸载中检测到倾倒后回退到满载、重新卸载；动作起点姿态作为倾倒基准。*/
+  bool cycle_tipping_ = false;
+  bool cycle_had_tip_ = false;
+  /*当前抬落的摆动腿：4 号 FL+RR，5 号按 FR→FL→RR→RL 依次循环。*/
+  std::array<bool, kNumLegs> cycle_swing_{false, true, true, false};
+  std::size_t single_leg_cycle_index_ = 0;
+  /*卸载倾倒重试次数；达到上限后中止本次抬落并保持四脚站立。*/
+  std::size_t cycle_tip_count_ = 0;
+  bool cycle_aborted_ = false;
+  /*上一次 4 号由实测力差学到的平移修正，再次按 4 时沿用（本次进入 Locomotion 内有效）。*/
+  Vec2<T> cycle_learned_correction_ = Vec2<T>::Zero();
+  Vec3<T> cycle_start_rpy_ = Vec3<T>::Zero();
   /*4 号一次抬落：整机质心计算模型、起始时机身原点到整机质心的世界系水平
     偏移，以及把质心移到 FR-RL 支撑线上所需的水平位移。*/
   std::unique_ptr<FloatingBaseModel<T>> com_model_;
@@ -132,6 +159,35 @@ private:
   void updateStage1Stability();
   /** 判断承重对角腿是否已接管足够载荷且机身仍稳定。 */
   bool loadTransferReady() const;
+  /** 4 号（STAND_CYCLE）或 5 号（THREE_FOOT，逐腿复用 4 号时序）正在执行。 */
+  bool isStandCycle() const noexcept
+  {
+    return applied_gait_ == GaitType::STAND_CYCLE || applied_gait_ == GaitType::THREE_FOOT;
+  }
+  /** 当前抬落动作的摆动腿编号。 */
+  std::vector<std::size_t> cycleSwingLegs() const;
+  /** 质心应到达的水平目标点：4 号为 FR-RL 线上的垂足，5 号为当前三腿支撑边内侧目标。 */
+  Vec2<T> cycleSupportTarget(
+    const Vec2<T> & com, const std::array<Vec3<T>, kNumLegs> & feet_world) const;
+  /** 实测全身质心到支撑目标点的水平位移；无法计算时返回 NaN。 */
+  Vec2<T> standCycleComLineError(const std::array<Vec3<T>, kNumLegs> & feet_world);
+  /**
+   * (RR - FL) 实测竖直承重差占体重比例；integrate 为真时按该差值把机身
+   * 沿支撑线法向朝 FL 一侧积分平移。无法计算时返回 NaN。
+   */
+  T standCycleDiagonalImbalance(
+    const std::array<Vec3<T>, kNumLegs> & feet_world, bool integrate);
+  /** 带防饱和地把修正量加到 4 号平移量上：机身未跟上目标时不累加。 */
+  void applyStandCycleShiftCorrection(const Vec2<T> & delta, T maximum_correction);
+  /** 按质心到支撑线的实测偏差积分修正 4 号机身平移量。 */
+  void integrateStandCycleShift(const std::array<Vec3<T>, kNumLegs> & feet_world);
+  /**
+   * 判断 4 号当前动作段是否达标，达标才推进动作时钟。
+   * @return 达标返回 nullptr，否则返回未达标原因。
+   */
+  const char * standCycleStepBlocker(
+    T time, T blend, T shift_blend,
+    const std::array<Vec3<T>, kNumLegs> & feet_world);
 };
 
 extern template class FSM_State_Locomotion < float >;

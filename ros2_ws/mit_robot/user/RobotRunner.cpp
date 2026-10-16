@@ -13,7 +13,6 @@ namespace
 {
 constexpr std::array<LegId, kNumLegs> kLegOrder{
   LegId::FR, LegId::FL, LegId::RR, LegId::RL};
-constexpr float kLocomotionEntryStableDuration = 0.10F;
 
 bool isLocomotionMode(ControlMode mode) noexcept
 {
@@ -160,9 +159,6 @@ float RobotRunner::currentTime() const noexcept
 /*设置目标控制模式*/
 void RobotRunner::setControlMode(ControlMode mode) noexcept
 {
-  if (mode == ControlMode::BalanceStand) {
-    bypass_locomotion_entry_check_ = false;
-  }
   if (mode != ControlMode::WalkRl && mode != ControlMode::StairsRl) {
     rl_posture_transition_pending_ = false;
     rl_entry_posture_latched_ = false;
@@ -194,16 +190,6 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
     return;
   }
   if (desired_state_.mode == mode) {return;}
-  // 只有在机身已经抬到站立高度、姿态和关节速度都稳定后才允许进入步态。
-  // 缺少这个门槛时，BalanceStand 一建立（机身仍接近趴卧高度）就会开始
-  // 迈步，WBC 关节 PD 把折叠的支撑腿瞬间蹬直，机身被弹起并反复触发
-  // Locomotion -> BalanceStand 回退，现场表现就是“走一步停一步”。
-  // RL 走的是下面的 pending 分支，自带的 rlEntryPostureStable() 更严格。
-  if ((mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic) &&
-    !bypass_locomotion_entry_check_ && !locomotionEntryReady())
-  {
-    return;
-  }
   if (state_estimate_.valid) {
     // 切换站立/行走时只继承不可观测的水平原点和航向。roll/pitch 必须保持
     // 水平目标；若把切换瞬间的倾斜锁存下来，WBC 会主动维持后仰姿态。
@@ -233,7 +219,6 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
     desired_state_.body_position_world.z() = kDm1RlDefaultBodyHeight;
   }
   desired_state_.mode = mode;
-  bypass_locomotion_entry_check_ = false;
 }
 
 bool RobotRunner::requestStandUp() noexcept
@@ -257,7 +242,6 @@ bool RobotRunner::requestStandUp() noexcept
     desired_state_.body_acceleration_world.setZero();
     desired_state_.body_angular_velocity.setZero();
     desired_state_.mode = ControlMode::BalanceStand;
-    bypass_locomotion_entry_check_ = false;
     motion_start_hold_active_ = false;
     motion_start_hold_release_pending_ = false;
     setHomeCalfContactsEnabled(false);
@@ -336,58 +320,6 @@ bool RobotRunner::standingReady() const noexcept
 
 bool RobotRunner::locomotionEntryReady() const noexcept
 {
-  return control_fsm_->currentStateName() == FSM_StateName::BALANCE_STAND &&
-         locomotion_entry_stable_time_s_ >= kLocomotionEntryStableDuration;
-}
-
-bool RobotRunner::locomotionEntryPostureStable() const noexcept
-{
-  if (control_fsm_->currentStateName() != FSM_StateName::BALANCE_STAND ||
-    !state_estimate_.valid ||
-    !state_estimate_.rpy.allFinite())
-  {
-    return false;
-  }
-  // 先让站立高度指令完成斜坡过渡，再开始计时。这个条件
-  // 不依赖真机的机身速度估计，避免因估计噪声阻塞行走。
-  constexpr float kStandingCommandTolerance = 0.008F;
-  if (std::abs(standing_height_command_ - standing_height_target_) >
-    kStandingCommandTolerance)
-  {
-    return false;
-  }
-  // 机身必须已经抬到当前站立指令附近。允许 4 cm 的跟踪误差，既能容纳
-  // 真机的柔性下沉，又远高于趴卧高度（约 0.12 m）。
-  const float entry_height_floor = std::clamp(
-    standing_height_target_ - 0.04F,
-    minimumStandingHeight(), maximumStandingHeight());
-  if (measuredBodyHeight() < entry_height_floor) {return false;}
-  // 姿态、关节位置和速度也必须稳定：过渡过程中 WBC 仍在抬升机身，
-  // 此时起步会和抬升轨迹叠加成冲击。
-  constexpr float kMaximumEntryRollPitch = 0.20F;
-  constexpr float kMaximumEntryJointPositionError = 0.25F;
-  constexpr float kMaximumEntryJointSpeed = 1.0F;
-  if (std::abs(state_estimate_.rpy.x()) > kMaximumEntryRollPitch ||
-    std::abs(state_estimate_.rpy.y()) > kMaximumEntryRollPitch)
-  {
-    return false;
-  }
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    if (!joint_states_[leg].valid) {return false;}
-    const auto & home = quadruped_.leg(static_cast<LegId>(leg)).joints.home_position;
-    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-      const auto index = static_cast<Eigen::Index>(joint);
-      // StandUp 的预备小腿角约 0.07 rad，而正常站姿约 1.00 rad。只检查
-      // 速度会把“折叠但静止”的腿误判为站稳，随后 Locomotion 首帧产生
-      // 约 1 rad 的位置误差和 60+ Nm 的原始 PD 力矩。
-      if (std::abs(joint_states_[leg].position(index) - home(index)) >
-          kMaximumEntryJointPositionError ||
-        std::abs(joint_states_[leg].velocity(index)) > kMaximumEntryJointSpeed)
-      {
-        return false;
-      }
-    }
-  }
   return true;
 }
 
@@ -453,10 +385,12 @@ void RobotRunner::setWalkingForwardSpeed(float speed)
 
 void RobotRunner::setLocomotionGait(GaitType gait) noexcept
 {
-  // GaitType::STAND is the key-3 four-contact diagnostic entry. It must not
-  // wait for the normal walking posture gate before entering Locomotion.
-  bypass_locomotion_entry_check_ = gait == GaitType::STAND;
   control_fsm_->setLocomotionGait(gait);
+}
+
+void RobotRunner::requestStandCycleRestart() noexcept
+{
+  control_fsm_->data.stand_cycle_restart_requested = true;
 }
 
 void RobotRunner::setLocomotionVelocityCommand(
@@ -502,9 +436,7 @@ void RobotRunner::reset()
   desired_state_initialized_ = false;
   rl_posture_transition_pending_ = false;
   rl_entry_posture_latched_ = false;
-  locomotion_entry_stable_time_s_ = 0.0F;
   rl_entry_stable_time_s_ = 0.0F;
-  bypass_locomotion_entry_check_ = false;
   prone_down_active_ = false;
   prone_down_complete_ = false;
   prone_down_height_command_ = quadruped_.nominalBodyHeight();
@@ -641,13 +573,12 @@ bool RobotRunner::collectJointCommands()
   if (standing_height_target_ <= 0.33F && state == FSM_StateName::BALANCE_STAND &&
     state_estimate_.position_world.z() >= 0.30F)
   {stance_joint_limits_armed_ = true;}
-  // 固定站姿角度限位用于站立和 3；4 的两腿换载使用模型关节范围。
+  // 固定站姿角度限位只用于站立；3 是 4 的四脚站稳阶段，两者都使用
+  // 模型关节范围，保证 3 的控制与 4 换载前完全相同。
   if (stance_joint_limits_armed_ && standing_height_target_ <= 0.33F &&
     !prone_down_active_ && leg_controller_.legsEnabled() &&
-    ((state == FSM_StateName::BALANCE_STAND &&
-      !control_fsm_->data.rl_entry_posture_active) ||
-    (state == FSM_StateName::LOCOMOTION &&
-      control_fsm_->data.locomotion_gait == GaitType::STAND)))
+    state == FSM_StateName::BALANCE_STAND &&
+    !control_fsm_->data.rl_entry_posture_active)
   {
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       auto & command = leg_controller_.commands[leg];
@@ -808,8 +739,6 @@ bool RobotRunner::run()
   {
     prone_down_complete_ = true;
   }
-  locomotion_entry_stable_time_s_ = locomotionEntryPostureStable() ?
-    locomotion_entry_stable_time_s_ + control_time_step_ : 0.0F;
   if (rl_posture_transition_pending_) {
     rl_entry_stable_time_s_ = rlEntryPostureStable() ?
       rl_entry_stable_time_s_ + control_time_step_ : 0.0F;

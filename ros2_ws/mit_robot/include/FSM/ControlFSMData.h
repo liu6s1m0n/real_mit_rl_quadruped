@@ -34,6 +34,8 @@ struct ControlFSMData
   T control_time_step = T(0.001);
   bool use_wbc = true;
   GaitType locomotion_gait = GaitType::TROT_WALK;
+  // 4 号一次抬落结束后再次按 4：由 Locomotion 消费并从头重新执行一次。
+  bool stand_cycle_restart_requested = false;
   // BalanceStand uses the RL joint reference while this posture transition is
   // active; this flag is not itself a locomotion mode.
   bool rl_entry_posture_active = false;

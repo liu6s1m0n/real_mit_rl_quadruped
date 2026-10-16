@@ -64,6 +64,7 @@ void ConvexMPCLocomotion<T>::initialize() noexcept
   commanded_yaw_rate_ = T(0);
   command_yaw_ = T(0);
   position_offset_world_.setZero();
+  stand_cycle_time_ = T(-1);
   // 清除上一周期的反力、接触状态和求解有效性缓存。
   cached_reaction_forces_world_ = {};
   cached_contact_state_ = {};
@@ -148,6 +149,13 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
   const T relative_yaw = command_yaw_ - estimate.rpy.z();
   command_yaw_ = estimate.rpy.z() +
     std::atan2(std::sin(relative_yaw), std::cos(relative_yaw));
+  // MIT 做法：静止时偏航目标跟随当前估计，不锁存绝对航向。DM IMU 航向
+  // 会缓慢漂移，锁存会让 WBC 把真实机身拧回漂移前的角度，支撑脚被扭转。
+  if (commanded_velocity_body_.squaredNorm() <= T(1e-8) &&
+    std::abs(commanded_yaw_rate_) <= T(1e-4))
+  {
+    command_yaw_ = estimate.rpy.z();
+  }
   command_yaw_ += commanded_yaw_rate_ * control_time_step_;
   command.body_rpy.x() = T(0);
   command.body_rpy.y() = T(0);
@@ -261,14 +269,15 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
   const auto contact_phase = gait.contactPhase();
   const auto swing_phase = gait.swingPhase();
   auto contact_table = gait.contactTable();
-  const T time = static_cast<T>(iteration_) * control_time_step_;
+  const T time = gait_type_ == GaitType::STAND_CYCLE && stand_cycle_time_ >= T(0) ?
+    stand_cycle_time_ : static_cast<T>(iteration_) * control_time_step_;
   if (gait_type_ == GaitType::STAND_CYCLE) {
     // 一次抬落的整段预测，结束后保持四脚接触，不循环。
     for (std::size_t step = 0; step < solver_.settings().horizon; ++step) {
       const T predicted_time = time + static_cast<T>(step) * solver_.settings().time_step;
       const bool swing = predicted_time >= T(0.6) && predicted_time < T(0.84);
-      for (const std::size_t leg : {std::size_t(1), std::size_t(2)}) {
-        contact_table[step * kNumLegs + leg] = swing ? 0 : 1;
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        if (stand_cycle_swing_[leg]) {contact_table[step * kNumLegs + leg] = swing ? 0 : 1;}
       }
     }
   }
@@ -289,8 +298,8 @@ LocomotionResult<T> ConvexMPCLocomotion<T>::run(
       result.contact_phase[leg] = result.contact_state[leg] ? T(0.5) : T(0);
       result.swing_phase[leg] = result.contact_state[leg] ? T(0) :
         std::clamp((time - T(0.6)) / T(0.24), T(0), T(1));
-      result.stance_time[leg] = leg == 1 || leg == 2 ? T(0.8) : T(1.04);
-      result.swing_time[leg] = leg == 1 || leg == 2 ? T(0.24) : T(0);
+      result.stance_time[leg] = stand_cycle_swing_[leg] ? T(0.8) : T(1.04);
+      result.swing_time[leg] = stand_cycle_swing_[leg] ? T(0.24) : T(0);
     }
   }
 
