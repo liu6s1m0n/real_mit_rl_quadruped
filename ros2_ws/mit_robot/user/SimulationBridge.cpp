@@ -213,7 +213,7 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
     {mjITEM_SEPARATOR, "Robot controller", 1, nullptr, "", 0},
     {
       mjITEM_SLIDERNUM, "Height (m)", 2,
-      g_standing_height_slider, "0.30 0.42", 0
+      g_standing_height_slider, "0.28 0.42", 0
     },
     {mjITEM_BUTTON, "Forward slow", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Forward fast", 2, nullptr, "", 0},

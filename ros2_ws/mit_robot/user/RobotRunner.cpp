@@ -122,7 +122,7 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
     ControlMode::JointPd : ControlMode::BalanceStand;
   desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
   desired_state_.valid = true;
-  standing_height_target_ = 0.32F;
+  standing_height_target_ = 0.28F;
   standing_height_command_ = standing_height_target_;
   control_fsm_ = std::make_unique<ControlFSM<float>>(
     quadruped_, state_estimate_, joint_states_, leg_controller_, gait_scheduler_,
@@ -311,7 +311,7 @@ void RobotRunner::setLocomotionVelocityCommand(
 void RobotRunner::setStandingHeight(float height)
 {
   /*不能是 NaN；不能是 Inf；
-    不能低于 0.30 m；不能高于 0.42 m。*/
+    不能低于 0.28 m；不能高于 0.42 m。*/
   if (!std::isfinite(height) || height < minimumStandingHeight() ||
     height > maximumStandingHeight())
   {
@@ -474,7 +474,7 @@ bool RobotRunner::collectJointCommands()
 {
   const auto state = control_fsm_->currentStateName();
   if (standing_height_target_ <= 0.33F && state == FSM_StateName::BALANCE_STAND &&
-    state_estimate_.position_world.z() >= 0.30F)
+    state_estimate_.position_world.z() >= 0.28F)
   {stance_joint_limits_armed_ = true;}
   // 固定站姿角度限位只用于站立；3 是 4 的四脚站稳阶段，两者都使用
   // 模型关节范围，保证 3 的控制与 4 换载前完全相同。

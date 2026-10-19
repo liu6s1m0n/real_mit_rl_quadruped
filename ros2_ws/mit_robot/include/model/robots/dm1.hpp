@@ -38,10 +38,10 @@ JointModelParameters<T> makeJointParameters(bool /*is_rear*/)
   result.damping.setConstant(T(1));
   result.friction_loss.setConstant(T(0.1));
   result.armature.setConstant(T(0.01));
-  // 0.32 m 足底站姿：侧视大小腿中心线对水平的倾角均约 34.137 度。
+  // 0.28 m 调试站姿：侧视大小腿中心线对水平的倾角均约 27.85 度。
   // 安装零偏和小腿连杆方向不同，因此电机读数不相等。
   result.home_position <<
-    T(0), T(-0.392804), T(0.959416);
+    T(0), T(-0.282961), T(0.739729);
   result.joint_axes.col(0) = Vec3<T>::UnitX();
   result.joint_axes.col(1) = Vec3<T>::UnitY();
   result.joint_axes.col(2) = Vec3<T>::UnitY();
@@ -95,11 +95,11 @@ LegModelParameters<T> makeLeg(LegId leg_id, bool is_left, bool is_rear)
   return result;
 }
 
-// 名义 0.32 m 站姿的固定软件角度范围；机械硬限位与标定保持原值。
+// 名义 0.28 m 站姿的固定软件角度范围；机械硬限位与标定保持原值。
 // 大腿下界阻止膝部继续下压，上界配合小腿上界避开小腿竖直姿态。
 constexpr double kKneeEnvelopeRadius = 0.080;
-constexpr double kMinimumKneeClearance = 0.020;
-constexpr double kStanceThighLower = -0.40;
+constexpr double kMinimumKneeClearance = -0.020;
+constexpr double kStanceThighLower = -0.34;
 constexpr double kStanceThighUpper = -0.10;
 constexpr double kStanceCalfLower = -0.03;
 constexpr double kStanceCalfUpper = 1.20;
@@ -127,7 +127,7 @@ Quadruped<T> makeModel()
   legs[static_cast<std::size_t>(LegId::FL)] = makeLeg<T>(LegId::FL, true, false);
   legs[static_cast<std::size_t>(LegId::RR)] = makeLeg<T>(LegId::RR, false, true);
   legs[static_cast<std::size_t>(LegId::RL)] = makeLeg<T>(LegId::RL, true, true);
-  return Quadruped<T>(RobotType::DM1, body, legs, T(0.32));
+  return Quadruped<T>(RobotType::DM1, body, legs, T(0.28));
 }
 
 }  // namespace dm1

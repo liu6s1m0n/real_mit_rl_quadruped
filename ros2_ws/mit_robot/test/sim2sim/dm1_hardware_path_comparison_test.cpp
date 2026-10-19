@@ -223,8 +223,8 @@ ComparisonReport runComparison(bool inject_attitude_bias)
       hardware_stand_pending = true;
     }
     if (motion_started) {
-      simulation.setStandingHeight(0.32F);
-      hardware.setStandingHeight(0.32F);
+      simulation.setStandingHeight(0.28F);
+      hardware.setStandingHeight(0.28F);
       if (!feedHardware(false) || !simulation.run() || !hardware.run()) {
         report.failure = "feedback or controller rejected a standing frame";
         return report;
@@ -244,8 +244,8 @@ ComparisonReport runComparison(bool inject_attitude_bias)
       simulation.currentStateName() == FSM_StateName::BALANCE_STAND &&
       hardware.currentStateName() == FSM_StateName::BALANCE_STAND;
     const bool settled = both_standing &&
-      std::abs(sim_data->xpos[3 * trunk + 2] - 0.32) < 0.02 &&
-      std::abs(hardware_data->xpos[3 * trunk + 2] - 0.32) < 0.02 &&
+      std::abs(sim_data->xpos[3 * trunk + 2] - 0.28) < 0.02 &&
+      std::abs(hardware_data->xpos[3 * trunk + 2] - 0.28) < 0.02 &&
       std::hypot(sim_data->qvel[0], sim_data->qvel[1]) < 0.05 &&
       std::hypot(hardware_data->qvel[0], hardware_data->qvel[1]) < 0.05;
     settled_steps = settled ? settled_steps + 1 : 0;

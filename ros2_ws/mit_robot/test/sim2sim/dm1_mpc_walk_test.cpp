@@ -97,7 +97,7 @@ bool startStanding(
       motion_started = true;
       stand_up_pending = true;
     }
-    if (motion_started) {runner.setStandingHeight(0.32F);}
+    if (motion_started) {runner.setStandingHeight(0.28F);}
     if (motion_started) {runner.run();}
     if (stand_up_pending && runner.requestStandUp()) {stand_up_pending = false;}
     writer.write(runner, data, motion_started);
@@ -114,7 +114,7 @@ bool startStanding(
     const double speed = std::sqrt(
       data->qvel[0] * data->qvel[0] + data->qvel[1] * data->qvel[1] +
       data->qvel[2] * data->qvel[2]);
-    if (std::abs(height - 0.32) < 0.02 && speed < 0.05) {
+    if (std::abs(height - 0.28) < 0.02 && speed < 0.05) {
       ++settled_steps;
       if (settled_steps >= 500) {return true;}
     } else {
@@ -294,7 +294,7 @@ TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
     // 现场观察到的“一步一停”。
     EXPECT_EQ(report.fallback_count, 0U) << item.name;
     EXPECT_EQ(report.locomotion_entries, 1U) << item.name;
-    EXPECT_GT(report.minimum_height, 0.30) << item.name;
+    EXPECT_GT(report.minimum_height, 0.26) << item.name;
     EXPECT_LT(report.maximum_height, 0.45) << item.name;
     EXPECT_LT(report.maximum_abs_pitch, 0.35) << item.name;
     EXPECT_EQ(report.raw_overload_samples, 0U) << item.name;
@@ -347,7 +347,7 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
   EXPECT_EQ(report.fallback_count, 0U);
   EXPECT_EQ(report.locomotion_entries, 1U);
   EXPECT_GT(report.frames_in_locomotion, 5500U);
-  EXPECT_GT(report.minimum_height, 0.30);
+  EXPECT_GT(report.minimum_height, 0.26);
   EXPECT_LT(report.maximum_height, 0.45);
   EXPECT_LT(report.maximum_abs_pitch, 0.35);
   // 初次接触切换时不能立即把全部实测速度瞬态写入落脚捕获项。
@@ -396,7 +396,7 @@ TEST(Dm1MpcWalkStress, ForwardWithLateralPush)
     report.maximum_joint_torque, report.maximum_joint_speed);
   printTorqueStats("push120N", report);
   EXPECT_EQ(report.fallback_count, 0U);
-  EXPECT_GT(report.minimum_height, 0.30);
+  EXPECT_GT(report.minimum_height, 0.26);
   EXPECT_LT(report.maximum_abs_pitch, 0.35);
   EXPECT_EQ(report.raw_overload_samples, 0U);
   EXPECT_LE(report.maximum_raw_joint_torque, 30.0 + 1.0e-3);
@@ -427,7 +427,7 @@ TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
       motion_started = true;
       stand_up_pending = true;
     }
-    if (motion_started) {runner.setStandingHeight(0.32F);}
+    if (motion_started) {runner.setStandingHeight(0.28F);}
     if (motion_started) {runner.run();}
     if (stand_up_pending && runner.requestStandUp()) {stand_up_pending = false;}
     // 只要进入 BalanceStand 就立刻请求行走，不等机身抬升完成。
@@ -457,10 +457,10 @@ TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
     static_cast<int>(entered_locomotion), height_at_entry,
     minimum_locomotion_height, data->qpos[0] - start_x);
   // 仿真没有真机柔性下沉；高度指令走完后再计时，入场时机身
-  // 应已接近 0.32 m 名义站高，而不是刚越过 0.28 m 下限。
+  // 应已接近 0.28 m 名义站高，而不是刚越过 0.26 m 下限。
   ASSERT_TRUE(entered_locomotion);
-  EXPECT_GT(height_at_entry, 0.30);
-  EXPECT_GT(minimum_locomotion_height, 0.29);
+  EXPECT_GT(height_at_entry, 0.26);
+  EXPECT_GT(minimum_locomotion_height, 0.25);
   EXPECT_GT(data->qpos[0] - start_x, 0.05);
 }
 

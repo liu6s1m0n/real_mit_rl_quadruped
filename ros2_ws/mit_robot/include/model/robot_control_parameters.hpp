@@ -79,7 +79,7 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
   // standing_height_rate 限制支撑后抬升速度，stand_up_duration 限制趴地展开速度。
   return {
     // 站立高度范围、抬升速度、趴卧高度、趴下速度/折叠时间、单周期高度步长、初始化时长。
-    T(0.30), T(0.42), T(0.04), T(0.12), T(0.08), T(2.0), T(0.00016), T(1.2),
+    T(0.28), T(0.42), T(0.04), T(0.12), T(0.08), T(2.0), T(0.00016), T(1.2),
     // 电机刚使能后的关节初始化 PD：[hip, thigh, calf] 的 Kp、Kd。
     Vec3<T>(T(99.9), T(99.9), T(99.9)), Vec3<T>(T(1.999), T(1.999), T(1.999)),
     // 从机械趴卧零位启动；模型零位对应三个电机角全零。

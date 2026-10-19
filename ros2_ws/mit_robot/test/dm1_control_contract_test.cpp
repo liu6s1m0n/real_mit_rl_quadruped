@@ -78,11 +78,11 @@ TEST(Dm1Contract, WbcDiagnosticsDistinguishRawTargetsFromStandingOverride)
     ASSERT_TRUE(context.leg_controller.updateData(joint));
   }
   context.estimate.timestamp = 12.25F;
-  context.estimate.position_world.z() = 0.32F;
+  context.estimate.position_world.z() = 0.28F;
   context.estimate.rpy.y() = -0.0583F;
   context.estimate.orientation_world_from_body = Eigen::AngleAxisf(-0.0583F, Vec3<float>::UnitY());
   context.estimate.rotation_world_from_body = context.estimate.orientation_world_from_body.toRotationMatrix();
-  context.desired_state.body_position_world.z() = 0.32F;
+  context.desired_state.body_position_world.z() = 0.28F;
   FSM_State_BalanceStand<float> standing(&context.data());
   standing.onEnter();
   ::testing::internal::CaptureStderr();
@@ -156,7 +156,7 @@ TEST(Dm1Contract, StandingJointBoundsClampKneeSupportAndVerticalCalf)
   ASSERT_TRUE(robots::dm1::clampStanceJointTarget(unsafe));
   EXPECT_DOUBLE_EQ(unsafe[1], robots::dm1::kStanceThighLower);
   EXPECT_DOUBLE_EQ(unsafe[2], robots::dm1::kStanceCalfUpper);
-  const double knee_z = 0.32 + rear.hip_location_body.z() +
+  const double knee_z = 0.28 + rear.hip_location_body.z() +
     (Eigen::AngleAxisd(unsafe[1] + rear.joints.zero_offset[1],
       Vec3<double>::UnitY()) * rear.thigh_to_calf).z();
   EXPECT_GE(knee_z - robots::dm1::kKneeEnvelopeRadius,
@@ -169,7 +169,7 @@ TEST(Dm1Contract, StandingJointBoundsClampKneeSupportAndVerticalCalf)
   invalid[1] = std::numeric_limits<double>::quiet_NaN();
   EXPECT_FALSE(robots::dm1::clampStanceJointTarget(invalid));
 
-  // 0.32 m 工作窗口：机身俯仰 ±0.10 rad，横滚/HAA 各 ±0.03 rad。
+  // 0.28 m 工作窗口：机身俯仰 ±0.10 rad，横滚/HAA 各 ±0.03 rad。
   for (const auto & leg : robot.legs()) {
     for (const double pitch : {-0.10, 0.0, 0.10}) {
       for (const double roll : {-0.03, 0.0, 0.03}) {
@@ -186,7 +186,7 @@ TEST(Dm1Contract, StandingJointBoundsClampKneeSupportAndVerticalCalf)
               Vec3<double>::UnitY()).toRotationMatrix();
             const Vec3<double> knee = body * (leg.hip_location_body + hip *
               (leg.hip_to_thigh + thigh_rotation * leg.thigh_to_calf));
-            EXPECT_GE(0.32 + knee.z() - robots::dm1::kKneeEnvelopeRadius,
+            EXPECT_GE(0.28 + knee.z() - robots::dm1::kKneeEnvelopeRadius,
               robots::dm1::kMinimumKneeClearance - 1e-6);
             for (const double calf : {
                 robots::dm1::kStanceCalfLower, robots::dm1::kStanceCalfUpper})
@@ -213,18 +213,18 @@ TEST(Dm1Contract, StandingPosePreservesHeightAndEqualLinkInclinations)
     computeLegJacobianAndPosition(robot, q, static_cast<Mat3<double> *>(nullptr),
       &foot, leg.leg);
     const double height = leg.foot_radius - leg.hip_location_body.z() - foot.z();
-    EXPECT_NEAR(height, 0.32, 2e-7);
+    EXPECT_NEAR(height, 0.28, 2e-7);
     const double thigh_mechanical = q[1] + leg.joints.zero_offset[1];
     const Vec3<double> knee_from_hip = leg.hip_to_thigh +
       Eigen::AngleAxisd(thigh_mechanical, Vec3<double>::UnitY()) * leg.thigh_to_calf;
     EXPECT_GE(height + leg.hip_location_body.z() + knee_from_hip.z() -
-      robots::dm1::kKneeEnvelopeRadius, 0.066);
+      robots::dm1::kKneeEnvelopeRadius, 0.044);
     const Vec3<double> thigh = knee_from_hip - leg.hip_to_thigh;
     const Vec3<double> calf = foot - knee_from_hip;
     const double thigh_inclination = std::atan2(std::abs(thigh.z()), std::abs(thigh.x()));
     const double calf_inclination = std::atan2(std::abs(calf.z()), std::abs(calf.x()));
     EXPECT_NEAR(thigh_inclination, calf_inclination, 2e-6);
-    EXPECT_NEAR(thigh_inclination, 0.5958042448882499, 2e-6);
+    EXPECT_NEAR(thigh_inclination, 0.4859610000000000, 2e-6);
     EXPECT_GT(q[1], -0.597);
   }
 }
@@ -273,8 +273,8 @@ TEST(Dm1Contract, EnablingWbcDiagnosticsDoesNotChangeControlCommands)
       joint.valid = true;
       ASSERT_TRUE(context->leg_controller.updateData(joint));
     }
-    context->estimate.position_world.z() = 0.32F;
-    context->desired_state.body_position_world.z() = 0.32F;
+    context->estimate.position_world.z() = 0.28F;
+    context->desired_state.body_position_world.z() = 0.28F;
     context->desired_state.mode = ControlMode::Locomotion;
     context->data().locomotion_gait = GaitType::STAND;
   }
@@ -303,7 +303,7 @@ TEST(Dm1Contract, WbcTraceObservesRepeatedTimeFailuresAndRecoveryWithoutChanging
   LocomotionCtrl<float> logged(model::makeFloatingBaseModel(context.quadruped));
   LegController<float> quiet_legs(context.quadruped), logged_legs(context.quadruped);
   LocomotionCtrlData<float> input;
-  input.pBody_des << 0.0F, 0.0F, 0.32F;
+  input.pBody_des << 0.0F, 0.0F, 0.28F;
   input.contact_state.setOnes();
   context.estimate.position_world = input.pBody_des;
   for (auto & joint : context.joint_states) {joint.valid = true;}
@@ -389,7 +389,7 @@ TEST(Dm1Contract, MpcTracePreservesForceTrajectoryAndReportsTimeStep)
   ASSERT_TRUE(logged.valid);
   EXPECT_EQ(quiet.force_trajectory, logged.force_trajectory);
   EXPECT_EQ(quiet.cost, logged.cost);
-  EXPECT_NE(log.find("t_s=2.5 dt_mpc_s=0.030"), std::string::npos) << log;
+  EXPECT_NE(log.find("t_s=2.5 dt_mpc_s=0.03"), std::string::npos) << log;
   EXPECT_NE(log.find("min_constraint_margin="), std::string::npos);
 }
 
@@ -397,12 +397,12 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
 {
   const auto model = makeQuadruped<float>(RobotType::DM1);
   EXPECT_EQ(model.robotType(), RobotType::DM1);
-  EXPECT_FLOAT_EQ(model.nominalBodyHeight(), 0.32F);
+  EXPECT_FLOAT_EQ(model.nominalBodyHeight(), 0.28F);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     EXPECT_EQ(static_cast<std::size_t>(model.leg(static_cast<LegId>(leg)).leg), leg);
     EXPECT_TRUE(
       model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
-      Vec3<float>(0.0F, -0.392804F, 0.959416F)));
+      Vec3<float>(0.0F, -0.282961F, 0.739729F)));
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -0.03F);
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 2.72F);
   }
@@ -554,8 +554,8 @@ TEST(Dm1Contract, BalanceStandUsesMitWbcOnlyAndEqualGravitySupport)
 {
   test_support::FsmContext context(0.002F);
   context.parameters.start_in_prone_home = false;
-  context.estimate.position_world.z() = 0.32F;
-  context.desired_state.body_position_world.z() = 0.32F;
+  context.estimate.position_world.z() = 0.28F;
+  context.desired_state.body_position_world.z() = 0.28F;
   for (auto & joint : context.joint_states) {
     joint.valid = true;
     ASSERT_TRUE(context.leg_controller.updateData(joint));
@@ -585,7 +585,7 @@ TEST(Dm1Contract, LocomotionFirstCommandIgnoresDisabledPreviousCommands)
       DesiredState<float> desired;
       desired.valid = true;
       desired.mode = ControlMode::Locomotion;
-      desired.body_position_world.z() = 0.32F;
+      desired.body_position_world.z() = 0.28F;
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         joints[leg].leg = static_cast<LegId>(leg);
         joints[leg].valid = true;
@@ -631,13 +631,13 @@ TEST(Dm1Contract, ClassicEntryPreservesTotalTorqueAndReleasesStandingCommand)
     test_support::FsmContext actual(0.002F), reference(0.002F);
     for (auto * context : {&actual, &reference}) {
       context->parameters.start_in_prone_home = false;
-      context->estimate.position_world.z() = 0.32F;
+      context->estimate.position_world.z() = 0.28F;
       context->estimate.rpy.y() = -0.035F;
       context->estimate.orientation_world_from_body =
         Eigen::AngleAxisf(-0.035F, Vec3<float>::UnitY());
       context->estimate.rotation_world_from_body =
         context->estimate.orientation_world_from_body.toRotationMatrix();
-      context->desired_state.body_position_world.z() = 0.32F;
+      context->desired_state.body_position_world.z() = 0.28F;
       for (auto & joint : context->joint_states) {
         joint.valid = true;
         joint.position[1] -= 0.015F;

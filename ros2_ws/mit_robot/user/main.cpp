@@ -90,7 +90,7 @@ RobotSelection selectRobot(int argc, char ** argv)
     throw std::invalid_argument("hardware simulation options require --hardware-sim");
   }
   return {
-    MYMIT_ROBOT_DM1_SCENE_PATH, 0.32F, kDm1WalkingLateralSpeed, render_gpu,
+    MYMIT_ROBOT_DM1_SCENE_PATH, 0.28F, kDm1WalkingLateralSpeed, render_gpu,
     hardware_simulation};
 }
 

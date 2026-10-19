@@ -55,7 +55,8 @@
     <body name="trunk" pos="0 0 0.395" childclass="dm1">
       <freejoint/>
       <camera name="tracking" mode="trackcom" pos="0 -1 0.8" xyaxes="1 0 0 0 1 1"/>
-      <site name="imu" pos="0 0 -0.03"/>
+      <!-- IMU is mounted at the geometric center of the top cover. -->
+      <site name="imu" pos="0 0 0"/>
       <inertial pos="-0.001955 0.002743 -0.068608" mass="6.889103"
         fullinertia="0.035976 0.081109 0.103076 0.000077 -0.000148 0.000272"/>
       <geom class="visual" mesh="dm_base"/>
