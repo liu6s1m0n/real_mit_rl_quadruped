@@ -253,6 +253,7 @@ template<typename T>
 void FSM_State_Locomotion<T>::resetSwingTrajectories() noexcept
 {
   swing_active_.fill(false);
+  for (auto & target : two_leg_hold_targets_) {target.setZero();}
   for (auto & trajectory : swing_trajectories_) {
     trajectory.reset();
   }
@@ -424,6 +425,20 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       // 支撑时足端位置任务不会加入 WBC；同步当前值仅用于诊断，并清除上一摆动态。
       swing_active_[leg] = false;
       wbc_data_.pFoot_des[leg] = feet_world[leg];
+      wbc_data_.vFoot_des[leg].setZero();
+      wbc_data_.aFoot_des[leg].setZero();
+      continue;
+    }
+
+    if (applied_gait_ == GaitType::TWO_LEG_STAND) {
+      // Lift the non-support diagonal once and hold it in place. The body
+      // task, contact constraints, and MPC forces still run through WBC.
+      if (!swing_active_[leg]) {
+        two_leg_hold_targets_[leg] = feet_world[leg];
+        two_leg_hold_targets_[leg].z() += swing_height_;
+        swing_active_[leg] = true;
+      }
+      wbc_data_.pFoot_des[leg] = two_leg_hold_targets_[leg];
       wbc_data_.vFoot_des[leg].setZero();
       wbc_data_.aFoot_des[leg].setZero();
       continue;

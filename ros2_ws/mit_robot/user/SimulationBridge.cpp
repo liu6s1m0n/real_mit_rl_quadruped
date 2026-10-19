@@ -71,6 +71,7 @@ protected:
       case GLFW_KEY_0: decoded = '0'; break;
       case GLFW_KEY_1: decoded = '1'; break;
       case GLFW_KEY_2: decoded = '2'; break;
+      case GLFW_KEY_3: decoded = '3'; break;
       case GLFW_KEY_W: decoded = 'W'; break;
       case GLFW_KEY_S: decoded = 'S'; break;
       case GLFW_KEY_A: decoded = 'A'; break;
@@ -122,7 +123,8 @@ enum MotionCommand : int
   kStop = 10,
   kProneDown = 11,
   /// 原地对角小跑，使用 MIT TROT 时序。
-  kMarchInPlace = 12
+  kMarchInPlace = 12,
+  kTwoLegStand = 13
 };
 
 int commandForButton(const char * name)
@@ -141,6 +143,7 @@ int commandForButton(const char * name)
   if (std::strcmp(name, "Stop") == 0) {return kStop;}
   if (std::strcmp(name, "Prone down") == 0) {return kProneDown;}
   if (std::strcmp(name, "March in place TROT") == 0) {return kMarchInPlace;}
+  if (std::strcmp(name, "Two-leg stand test") == 0) {return kTwoLegStand;}
   return kNoMotionCommand;
 }
 
@@ -495,6 +498,9 @@ void runPhysics(
           "Motion selected: March in place TROT "
           "(TROT 0.5 s, 50%% stance), body velocity=(0, 0, 0)\n");
       }
+      if (pending_command == kTwoLegStand) {
+        std::printf("Motion selected: Two-leg stand test (FR+RL support)\n");
+      }
       if (pending_command == kEnableMotors) {
         gui_commands.push_back(
           teleop::OperatorCommand{teleop::CommandType::EnableMotors});
@@ -508,7 +514,7 @@ void runPhysics(
         gui_commands.push_back(
           teleop::OperatorCommand{teleop::CommandType::ProneDown});
       } else if ((pending_command > kStand && pending_command < kEnableMotors) ||
-        pending_command == kMarchInPlace)
+        pending_command == kMarchInPlace || pending_command == kTwoLegStand)
       {
         teleop::OperatorCommand command;
         command.type = teleop::CommandType::Motion;
@@ -525,6 +531,7 @@ void runPhysics(
           case kRotateClockwise:
             command.motion = teleop::Motion::RotateClockwise; break;
           case kMarchInPlace: command.motion = teleop::Motion::MarchInPlace; break;
+          case kTwoLegStand: command.motion = teleop::Motion::TwoLegStand; break;
           default: command.type = teleop::CommandType::Stop; break;
         }
         gui_commands.push_back(command);
@@ -548,7 +555,7 @@ void runPhysics(
       arbiter.expireMotion(std::chrono::steady_clock::now());
       if (arbiter.takeHelpRequest()) {
         std::printf(
-          "Keys: U enable, 0 disable, 1 stand, 2 march, "
+          "Keys: U enable, 0 disable, 1 stand, 2 march, 3 two-leg test, "
           "P prone down, W/S forward/back, A/D left/right, "
           "Q/E rotate, Space stop, Esc exit, H help\n");
       }
@@ -610,7 +617,9 @@ void runPhysics(
           const auto velocity = teleop::velocityForMotion(motion, velocity_profile);
           runner.setLocomotionVelocityCommand(
             velocity.forward, velocity.lateral, velocity.yaw);
-          runner.setLocomotionGait(GaitType::TROT);
+          runner.setLocomotionGait(
+            motion == teleop::Motion::TwoLegStand ?
+            GaitType::TWO_LEG_STAND : GaitType::TROT);
           runner.setControlMode(ControlMode::Locomotion);
         }
       }
@@ -744,6 +753,7 @@ void runHardwarePhysics(
         case kDisableMotors: key = '0'; break;
         case kStand: key = '1'; break;
         case kMarchInPlace: key = '2'; break;
+        case kTwoLegStand: key = '3'; break;
         case kProneDown: key = 'P'; break;
         case kStop: key = ' '; break;
         case kForwardSlow: key = 'W'; break;

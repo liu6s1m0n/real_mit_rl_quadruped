@@ -45,6 +45,8 @@ enum class Motion : std::uint8_t
   RotateClockwise,
   /// 原地对角小跑，使用 MIT TROT 时序。
   MarchInPlace,
+  /// 双腿对角支撑重心测试，使用完整 MPC/WBC 链。
+  TwoLegStand,
 };
 
 struct VelocityCommand

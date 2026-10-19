@@ -322,6 +322,13 @@ void GaitScheduler<T>::createGait()
         Vec4<T>(T(0), T(0.5), T(0.5), T(0)), unit_scale, true);
       break;
 
+    case GaitType::TWO_LEG_STAND:
+      // FR+RL remain fixed contacts; FL+RR are held by the WBC swing task.
+      configureGait(
+        "TWO_LEG_STAND", parameters_.trot_period_time, T(0.5), all_legs,
+        Vec4<T>::Zero(), unit_scale, false);
+      break;
+
     case GaitType::TROT_RUN:
       configureGait(
         "TROT_RUN", T(0.4), T(0.4), all_legs,
@@ -409,7 +416,11 @@ void GaitScheduler<T>::calculateAuxiliaryGaitData()
         throw std::invalid_argument("enabled gait leg must have positive phase scale");
       }
       gait_data.period_time(foot) = gait_data.period_time_nominal / scale;
-      gait_data.switching_phase(foot) = gait_data.switching_phase_nominal;
+      const bool support_leg = foot == static_cast<Eigen::Index>(LegId::FR) ||
+        foot == static_cast<Eigen::Index>(LegId::RL);
+      gait_data.switching_phase(foot) =
+        gait_data.current_gait == GaitType::TWO_LEG_STAND ?
+        (support_leg ? T(1) : T(0)) : gait_data.switching_phase_nominal;
       gait_data.phase_variable(foot) = wrapPhase(
         gait_data.initial_phase + gait_data.phase_offset(foot));
       gait_data.time_stance(foot) =

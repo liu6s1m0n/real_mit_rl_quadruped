@@ -79,6 +79,7 @@ private:
   /*四条腿各自拥有一条摆动轨迹对象。每条腿单独保存：
   起点；终点；摆动高度；当前相位；位置；速度；加速度。*/
   std::array < FootSwingTrajectory < T >, kNumLegs > swing_trajectories_ {};
+  std::array < Vec3 < T >, kNumLegs > two_leg_hold_targets_ {};
   /*记录每条腿是否已经开始当前摆动周期。*/
   std::array < bool, kNumLegs > swing_active_ {};
   /*摆动腿抬脚高度，由 DM1 控制参数覆盖。*/

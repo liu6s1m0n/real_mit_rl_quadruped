@@ -27,7 +27,14 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   EXPECT_FLOAT_EQ(march_velocity.lateral, 0.0F);
   EXPECT_FLOAT_EQ(march_velocity.yaw, 0.0F);
 
-  EXPECT_FALSE(teleop::decodeKey('3').has_value());
+  const auto two_leg = teleop::decodeKey('3');
+  ASSERT_TRUE(two_leg.has_value());
+  EXPECT_EQ(two_leg->type, CommandType::Motion);
+  EXPECT_EQ(two_leg->motion, teleop::Motion::TwoLegStand);
+  const auto two_leg_velocity = teleop::velocityForMotion(two_leg->motion);
+  EXPECT_FLOAT_EQ(two_leg_velocity.forward, 0.0F);
+  EXPECT_FLOAT_EQ(two_leg_velocity.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(two_leg_velocity.yaw, 0.0F);
   EXPECT_FALSE(teleop::decodeKey('4').has_value());
   EXPECT_FALSE(teleop::decodeKey('5').has_value());
 
