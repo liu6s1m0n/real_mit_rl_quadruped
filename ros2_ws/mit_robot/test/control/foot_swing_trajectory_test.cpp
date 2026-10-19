@@ -15,7 +15,7 @@ FootSwingTrajectory<float> makeTrajectory()
   FootSwingTrajectory<float> trajectory;
   trajectory.setInitialPosition(Vec3<float>(0.0F, 0.1F, -0.3F));
   trajectory.setFinalPosition(Vec3<float>(0.2F, -0.1F, -0.25F));
-  trajectory.setHeight(0.1F);
+  trajectory.setHeight(0.05F);
   return trajectory;
 }
 
@@ -46,7 +46,7 @@ TEST(FootSwingTrajectoryTest, ReachesConfiguredHeightAtMidSwing)
 
   EXPECT_NEAR(trajectory.getPosition().x(), 0.1F, kTolerance);
   EXPECT_NEAR(trajectory.getPosition().y(), 0.0F, kTolerance);
-  EXPECT_NEAR(trajectory.getPosition().z(), -0.2F, kTolerance);
+  EXPECT_NEAR(trajectory.getPosition().z(), -0.25F, kTolerance);
   EXPECT_NEAR(trajectory.getVelocity().z(), 0.0F, kTolerance);
 }
 

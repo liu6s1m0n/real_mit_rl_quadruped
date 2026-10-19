@@ -1,6 +1,8 @@
 # Tests are grouped by subsystem so one layer can be built and debugged without
 # pulling unrelated sources into the same executable.
 
+find_package(yaml-cpp REQUIRED)
+
 function(add_robot_unit_test target source)
   ament_add_gtest(${target} ${source})
   target_link_libraries(${target} mymit_robot_model Eigen3::Eigen)
@@ -18,6 +20,18 @@ add_robot_unit_test(test_model_dm1_load model/dm1_model_load_test.cpp)
 target_compile_definitions(test_model_dm1_load PRIVATE
   MYMIT_ROBOT_DM1_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
 )
+
+# 契约文件与 dm1.xml / dm1.hpp / 控制参数的一致性检查。任何一处漂移都 fail。
+add_robot_mujoco_test(test_model_contract model/dm1_contract_test.cpp)
+target_compile_definitions(test_model_contract PRIVATE
+  MYMIT_ROBOT_CONTRACT_PATH="${PROJECT_SOURCE_DIR}/config/dm1_model_contract.yaml"
+  MYMIT_ROBOT_DM1_XML_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/dm1.xml"
+)
+if(TARGET yaml-cpp::yaml-cpp)
+  target_link_libraries(test_model_contract yaml-cpp::yaml-cpp)
+else()
+  target_link_libraries(test_model_contract yaml-cpp)
+endif()
 
 # State and contact estimation
 add_robot_unit_test(test_estimator_orientation estimation/orientation_estimator_test.cpp)

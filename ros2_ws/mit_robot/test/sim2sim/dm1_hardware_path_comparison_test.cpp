@@ -348,8 +348,11 @@ TEST(Dm1HardwarePathComparison, MatchedMuJoCoSensors)
   EXPECT_EQ(report.hardware.fallbacks, 0U);
   EXPECT_EQ(report.simulation.locomotion_frames, 2000U);
   EXPECT_EQ(report.hardware.locomotion_frames, 2000U);
-  EXPECT_GT(report.simulation.minimum_body_z, 0.29);
-  EXPECT_GT(report.hardware.minimum_body_z, 0.29);
+  // 0.28 m 名义站高，允许 1 cm 下沉；与完整硬件链测试的门限保持一致。
+  // 注意：这里只放宽路径对照的几何门限，完整链的 0.167 m 失败仍需单独定位。
+  constexpr double kMinimumBodyHeight = 0.27;
+  EXPECT_GT(report.simulation.minimum_body_z, kMinimumBodyHeight);
+  EXPECT_GT(report.hardware.minimum_body_z, kMinimumBodyHeight);
   EXPECT_LT(report.simulation.peak_raw_torque, 30.0);
   EXPECT_LT(report.hardware.peak_raw_torque, 30.0);
   EXPECT_LT(report.hardware.maximum_roll_error * kRadiansToDegrees, 1.5);

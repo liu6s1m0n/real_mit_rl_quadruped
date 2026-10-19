@@ -120,12 +120,20 @@ Report runFullBridge(HardwareSimulationOptions settings)
     const auto now = HardwareSimulation::Clock::now();
     if (start == HardwareSimulation::Clock::time_point{}) {start = now;}
     const double elapsed = std::chrono::duration<double>(now - start).count();
+    const auto body_height = [&]() {
+        std::lock_guard<std::recursive_mutex> lock(plant.mutex);
+        const int trunk = mj_name2id(plant.model.get(), mjOBJ_BODY, "trunk");
+        return trunk >= 0 ? plant.data->xpos[trunk * 3 + 2] : 0.0;
+      };
     std::vector<teleop::OperatorCommand> commands;
     int key = 0;
     if (elapsed > 0.25 && !enable_sent) {enable_sent = true; key = 'U';}
     else if (elapsed > 1.8 && !stand_sent) {stand_sent = true; key = '1';}
-    else if (report.standing >= 350 && ready && !march_sent) {march_sent = true; key = '2';}
-    else if (report.marching >= 700U && !stop_sent) {stop_sent = true; key = ' ';}
+    else if (report.standing >= 350 && ready && body_height() >= 0.278 && !march_sent) {
+      // 0.28 m 站姿：等机身基本到目标高度再踏步，避免把站起过程计入踏步最低高度。
+      march_sent = true;
+      key = '2';
+    } else if (report.marching >= 700U && !stop_sent) {stop_sent = true; key = ' ';}
     else if (stop_sent && report.stop_returned_to_stand) {key = 27;}
     if (settings.weak_joint >= 0 && report.weak_tracking_error > 0.4 && elapsed > 4) {key = 27;}
     if (elapsed > 18) {stop.store(true);}

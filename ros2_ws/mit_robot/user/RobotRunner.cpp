@@ -15,6 +15,13 @@ namespace
 constexpr std::array<LegId, kNumLegs> kLegOrder{
   LegId::FR, LegId::FL, LegId::RR, LegId::RL};
 
+// 进入 Locomotion 的机身高度门槛：0.28 m 名义站高允许 5 mm 下沉余量。
+// 旧 0.32 m 站姿使用的是另一套阈值；这里按当前名义高度计算，避免把
+// 站起过程中的 0.16~0.20 m 误判为“已经站好、可以踏步”。
+constexpr float kLocomotionEntryHeightMargin = 0.005F;
+// 小腿折叠保护：站立 home 约 0.74 rad，0.30 rad 以下视为收腿/折叠姿态。
+constexpr float kLocomotionEntryMinimumCalfAngle = 0.30F;
+
 bool isLocomotionMode(ControlMode mode) noexcept
 {
   return mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic;
@@ -171,6 +178,13 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
   {
     return;
   }
+  // 从站立切入行走前，必须等机身高度到位且小腿未折叠；否则会把站起过程
+  // 当成踏步开始，真机和 hardware-sim 都会出现“第一帧就很低”的下沉。
+  if (isLocomotionMode(mode) && !isLocomotionMode(desired_state_.mode) &&
+    !locomotionEntryReady())
+  {
+    return;
+  }
   if (desired_state_.mode == mode) {return;}
   if (state_estimate_.valid) {
     // 切换站立/行走时只继承不可观测的水平原点和航向。roll/pitch 必须保持
@@ -276,6 +290,30 @@ bool RobotRunner::standingReady() const noexcept
 
 bool RobotRunner::locomotionEntryReady() const noexcept
 {
+  if (!state_estimate_.valid) {return false;}
+  if (control_fsm_->currentStateName() != FSM_StateName::BALANCE_STAND) {
+    return false;
+  }
+
+  // 机身高度必须接近当前名义站高（0.28 m），不能刚离开趴卧就踏步。
+  const float minimum_height =
+    quadruped_.nominalBodyHeight() - kLocomotionEntryHeightMargin;
+  if (!std::isfinite(static_cast<double>(state_estimate_.position_world.z())) ||
+    state_estimate_.position_world.z() < minimum_height)
+  {
+    return false;
+  }
+
+  // 四条腿的小腿都不能处于收腿/折叠姿态，否则 WBC 无法建立支撑。
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & leg_data = leg_controller_.datas[leg];
+    if (!leg_data.valid ||
+      !std::isfinite(static_cast<double>(leg_data.q.z())) ||
+      leg_data.q.z() < kLocomotionEntryMinimumCalfAngle)
+    {
+      return false;
+    }
+  }
   return true;
 }
 

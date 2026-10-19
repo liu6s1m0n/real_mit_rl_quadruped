@@ -106,8 +106,8 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     Vec3<T>(T(190), T(190), T(260)), Vec3<T>(T(10), T(10), T(14)),
     // Locomotion 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd。
     Vec3<T>(T(200), T(200), T(100)), Vec3<T>(T(10), T(10), T(10)),
-    // 摆腿高度、足端最大横向偏移（扫参选定摆高 0.06 m）。
-    T(0.06), T(0.30),
+    // 摆腿高度、足端最大横向偏移（0.28 m 站姿下按 0.32→0.28 比例取 0.05）。
+    T(0.05), T(0.30),
     // MPC 预测段长 dtMPC（500 Hz 下 15 帧，扫参选定 0.030 s）。
     T(0.030),
     // 经典 MPC/WBC 控制链参数到此结束。

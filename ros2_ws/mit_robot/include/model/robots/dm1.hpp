@@ -98,6 +98,9 @@ LegModelParameters<T> makeLeg(LegId leg_id, bool is_left, bool is_rear)
 // 名义 0.28 m 站姿的固定软件角度范围；机械硬限位与标定保持原值。
 // 大腿下界阻止膝部继续下压，上界配合小腿上界避开小腿竖直姿态。
 constexpr double kKneeEnvelopeRadius = 0.080;
+// 该常数目前未被控制或测试代码引用。2026-10-19 的 A/B（+0.020 / -0.020）
+// 在 hardware-sim 中得到相同的踏步最低高度 0.167 m，说明它不是下沉原因；
+// 保留数值待后续接入真实的膝间隙检查，避免把它误当成已生效的保护。
 constexpr double kMinimumKneeClearance = -0.020;
 constexpr double kStanceThighLower = -0.34;
 constexpr double kStanceThighUpper = -0.10;

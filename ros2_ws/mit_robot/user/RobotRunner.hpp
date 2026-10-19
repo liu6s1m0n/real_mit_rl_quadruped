@@ -105,7 +105,12 @@ public:
   }
   /** 当前是否已经处在站立或行走控制状态。 */
   bool standingReady() const noexcept;
-  /** 移动不再等待经典步态准入条件；保留接口供桥接层兼容调用。 */
+  /**
+   * @brief 是否满足从 BalanceStand 切入 Locomotion 的条件。
+   *
+   * 要求 FSM 已在 BALANCE_STAND、机身高度接近名义站高（0.28 m - 1 cm），
+   * 且四条腿的小腿都未处于折叠姿态。用于阻止站起过程中提前踏步。
+   */
   bool locomotionEntryReady() const noexcept;
 private:
   /*保存四条腿传感器对象的所有权。*/

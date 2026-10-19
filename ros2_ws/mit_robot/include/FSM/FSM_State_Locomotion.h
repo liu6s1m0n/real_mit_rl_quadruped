@@ -82,8 +82,8 @@ private:
   std::array < Vec3 < T >, kNumLegs > two_leg_hold_targets_ {};
   /*记录每条腿是否已经开始当前摆动周期。*/
   std::array < bool, kNumLegs > swing_active_ {};
-  /*摆动腿抬脚高度，由 DM1 控制参数覆盖。*/
-  T swing_height_ = T(0.10);
+  /*摆动腿抬脚高度，0.28 m 站姿下的 DM1 默认值；构造时由控制参数覆盖。*/
+  T swing_height_ = T(0.05);
   /*足端相对髋的横向安全边界，必须容纳该机型名义足宽和横移步长。*/
   T maximum_lateral_foot_offset_ = T(0.18);
   /*单个步周期内最大水平步长为 15 cm。*/

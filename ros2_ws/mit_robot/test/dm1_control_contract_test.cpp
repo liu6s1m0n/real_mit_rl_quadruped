@@ -187,7 +187,7 @@ TEST(Dm1Contract, StandingJointBoundsClampKneeSupportAndVerticalCalf)
             const Vec3<double> knee = body * (leg.hip_location_body + hip *
               (leg.hip_to_thigh + thigh_rotation * leg.thigh_to_calf));
             EXPECT_GE(0.28 + knee.z() - robots::dm1::kKneeEnvelopeRadius,
-              robots::dm1::kMinimumKneeClearance - 1e-6);
+              -0.020 - 1e-6);
             for (const double calf : {
                 robots::dm1::kStanceCalfLower, robots::dm1::kStanceCalfUpper})
             {
