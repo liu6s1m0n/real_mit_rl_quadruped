@@ -19,15 +19,6 @@ std::optional<OperatorCommand> decodeKey(int key)
   } else if (key == '2') {
     command.type = CommandType::Motion;
     command.motion = Motion::MarchInPlace;
-  } else if (key == '3') {
-    command.type = CommandType::Motion;
-    command.motion = Motion::FourContactDiagnostic;
-  } else if (key == '4') {
-    command.type = CommandType::Motion;
-    command.motion = Motion::FourContactLoadTransfer;
-  } else if (key == '5') {
-    command.type = CommandType::Motion;
-    command.motion = Motion::SingleLegLift;
   } else if (key == 'p' || key == 'P') {
     command.type = CommandType::ProneDown;
   } else if (key == 'w' || key == 'W') {
@@ -77,9 +68,6 @@ VelocityCommand velocityForMotion(
     case Motion::RotateCounterClockwise: return {0.0F, 0.0F, profile.yaw};
     case Motion::RotateClockwise: return {0.0F, 0.0F, -profile.yaw};
     case Motion::MarchInPlace: return {0.0F, 0.0F, 0.0F};
-    case Motion::FourContactDiagnostic: return {0.0F, 0.0F, 0.0F};
-    case Motion::FourContactLoadTransfer: return {0.0F, 0.0F, 0.0F};
-    case Motion::SingleLegLift: return {0.0F, 0.0F, 0.0F};
   }
   return {};
 }
@@ -115,10 +103,6 @@ void OperatorCommandArbiter::apply(const OperatorCommand & command) noexcept
     case CommandType::Motion:
       if (state_ == MotorOutputState::Enabled) {
         motion_ = command.motion;
-        ++motion_presses_;
-        if (command.motion == Motion::MarchInPlace) {
-          selected_gait_motion_ = command.motion;
-        }
         last_motion_at_ = command.received_at;
         motion_watchdog_enabled_ = command.watchdog;
       }

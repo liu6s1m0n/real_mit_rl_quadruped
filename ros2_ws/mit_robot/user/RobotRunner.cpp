@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "MPC/SolverMPC.h"
 #include "model/robots/dm1.hpp"
 
 namespace
@@ -16,8 +17,7 @@ constexpr std::array<LegId, kNumLegs> kLegOrder{
 
 bool isLocomotionMode(ControlMode mode) noexcept
 {
-  return mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic ||
-         mode == ControlMode::WalkRl || mode == ControlMode::StairsRl;
+  return mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic;
 }
 }
 
@@ -159,12 +159,6 @@ float RobotRunner::currentTime() const noexcept
 /*设置目标控制模式*/
 void RobotRunner::setControlMode(ControlMode mode) noexcept
 {
-  if (mode != ControlMode::WalkRl && mode != ControlMode::StairsRl) {
-    rl_posture_transition_pending_ = false;
-    rl_entry_posture_latched_ = false;
-    rl_entry_stable_time_s_ = 0.0F;
-    control_fsm_->setRlEntryPostureActive(false);
-  }
   // DM1 未执行站起前拒绝从趴卧保持状态直接跳入 WBC/步态控制。
   if (control_parameters_.start_in_prone_home &&
     (mode == ControlMode::BalanceStand || isLocomotionMode(mode)) &&
@@ -172,18 +166,6 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
   {
     return;
   }
-  // SimulationBridge reapplies the selected walking mode every control cycle
-  // while a motion command is latched. RL entry is intentionally delayed until
-  // the BalanceStand posture is stable, so an identical request during that
-  // delay must not restart the timer and posture latch.
-  if ((mode == ControlMode::WalkRl || mode == ControlMode::StairsRl) &&
-    rl_posture_transition_pending_ && pending_rl_mode_ == mode &&
-    control_fsm_->currentStateName() == FSM_StateName::BALANCE_STAND)
-  {
-    return;
-  }
-  // MPC、平地 RL 和楼梯 RL 必须经由 BalanceStand 完成独立初始化；不允许
-  // 在 LOCOMOTION 内热切换策略、历史和执行器语义。
   if (isLocomotionMode(desired_state_.mode) && isLocomotionMode(mode) &&
     desired_state_.mode != mode)
   {
@@ -197,27 +179,9 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
     desired_state_.body_position_world.y() = state_estimate_.position_world.y();
     desired_state_.body_rpy << 0.0F, 0.0F, state_estimate_.rpy.z();
   }
-  if ((mode == ControlMode::WalkRl || mode == ControlMode::StairsRl) &&
-    control_fsm_->currentStateName() == FSM_StateName::BALANCE_STAND)
-  {
-    // Every RL request must pass the complete entry contract, even when the
-    // measured height already happens to be close to 0.38 m. This prevents a
-    // caller from bypassing the joint/velocity/stability latch via a lucky
-    // starting pose.
-    rl_posture_transition_pending_ = true;
-    rl_entry_posture_latched_ = false;
-    pending_rl_mode_ = mode;
-    rl_entry_stable_time_s_ = 0.0F;
-    control_fsm_->setRlEntryPostureActive(true);
-    desired_state_.body_position_world.z() = kDm1RlDefaultBodyHeight;
-    return;
-  }
   desired_state_.body_velocity_world.setZero();
   desired_state_.body_acceleration_world.setZero();
   desired_state_.body_angular_velocity.setZero();
-  if (mode == ControlMode::WalkRl || mode == ControlMode::StairsRl) {
-    desired_state_.body_position_world.z() = kDm1RlDefaultBodyHeight;
-  }
   desired_state_.mode = mode;
 }
 
@@ -228,10 +192,6 @@ bool RobotRunner::requestStandUp() noexcept
   if (state == FSM_StateName::BALANCE_STAND || state == FSM_StateName::LOCOMOTION) {
     prone_down_active_ = false;
     prone_down_complete_ = false;
-    rl_posture_transition_pending_ = false;
-    rl_entry_posture_latched_ = false;
-    rl_entry_stable_time_s_ = 0.0F;
-    control_fsm_->setRlEntryPostureActive(false);
     // “Stand up” 按钮也作为行走中的回站按钮，始终回到当前水平位置，避免
     // 点击后把机身瞬移回世界原点。
     desired_state_.body_position_world.x() = state_estimate_.position_world.x();
@@ -289,10 +249,6 @@ bool RobotRunner::requestProneDown() noexcept
   {
     return false;
   }
-  rl_posture_transition_pending_ = false;
-  rl_entry_posture_latched_ = false;
-  rl_entry_stable_time_s_ = 0.0F;
-  control_fsm_->setRlEntryPostureActive(false);
   prone_down_active_ = true;
   prone_down_complete_ = false;
   prone_down_height_command_ = std::clamp(
@@ -304,9 +260,9 @@ bool RobotRunner::requestProneDown() noexcept
   desired_state_.body_velocity_world.setZero();
   desired_state_.body_acceleration_world.setZero();
   desired_state_.body_angular_velocity.setZero();
-  // This is a direct handoff from RL/locomotion to the independent lie-down
-  // state. The state owns the MPC/WBC descent, so no RL transition frame is
-  // executed after this request.
+  // This is a direct handoff from locomotion to the independent lie-down
+  // The state owns the MPC/WBC descent, so no transition frame is executed
+  // after this request.
   desired_state_.mode = ControlMode::ProneDown;
   return true;
 }
@@ -323,12 +279,6 @@ bool RobotRunner::locomotionEntryReady() const noexcept
   return true;
 }
 
-bool RobotRunner::rlEntryReady() const noexcept
-{
-  return rl_entry_posture_latched_ && !rl_posture_transition_pending_ &&
-         control_fsm_->currentStateName() == FSM_StateName::LOCOMOTION;
-}
-
 float RobotRunner::measuredBodyHeight() const noexcept
 {
   if (!hardware_mode_ && model_ != nullptr && data_ != nullptr) {
@@ -340,44 +290,6 @@ float RobotRunner::measuredBodyHeight() const noexcept
   return state_estimate_.position_world.z();
 }
 
-bool RobotRunner::rlEntryPostureStable() const noexcept
-{
-  if (!state_estimate_.valid ||
-    control_fsm_->currentStateName() != FSM_StateName::BALANCE_STAND)
-  {
-    return false;
-  }
-  if (std::abs(measuredBodyHeight() - kDm1RlDefaultBodyHeight) > 0.015F ||
-    std::abs(standing_height_command_ - kDm1RlDefaultBodyHeight) > 0.008F ||
-    std::abs(state_estimate_.rpy.x()) > 0.08F ||
-    std::abs(state_estimate_.rpy.y()) > 0.08F)
-  {
-    return false;
-  }
-  constexpr float kJointPositionTolerance = 0.12F;
-  constexpr float kJointVelocityTolerance = 0.25F;
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    if (!joint_states_[leg].valid) {return false;}
-    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-      const auto index = static_cast<Eigen::Index>(joint);
-      const std::size_t flat_index = leg * kJointsPerLeg + joint;
-      if (std::abs(joint_states_[leg].position(index) -
-          kDm1RlDefaultJointPosition[flat_index]) > kJointPositionTolerance ||
-        std::abs(joint_states_[leg].velocity(index)) > kJointVelocityTolerance)
-      {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-void RobotRunner::setRlPolicy(RlPolicyPtr policy) noexcept
-{
-  control_fsm_->setRlPolicy(std::move(policy));
-}
-
-/*把速度传递给 FSM 内部的 Locomotion*/
 void RobotRunner::setWalkingForwardSpeed(float speed)
 {
   control_fsm_->setLocomotionForwardVelocity(speed);
@@ -386,11 +298,6 @@ void RobotRunner::setWalkingForwardSpeed(float speed)
 void RobotRunner::setLocomotionGait(GaitType gait) noexcept
 {
   control_fsm_->setLocomotionGait(gait);
-}
-
-void RobotRunner::requestStandCycleRestart() noexcept
-{
-  control_fsm_->data.stand_cycle_restart_requested = true;
 }
 
 void RobotRunner::setLocomotionVelocityCommand(
@@ -434,13 +341,9 @@ void RobotRunner::reset()
   standing_height_command_initialized_ = false;
   stance_joint_limits_armed_ = false;
   desired_state_initialized_ = false;
-  rl_posture_transition_pending_ = false;
-  rl_entry_posture_latched_ = false;
-  rl_entry_stable_time_s_ = 0.0F;
   prone_down_active_ = false;
   prone_down_complete_ = false;
   prone_down_height_command_ = quadruped_.nominalBodyHeight();
-  control_fsm_->setRlEntryPostureActive(false);
   control_fsm_->initialize();
   setHomeCalfContactsEnabled(control_parameters_.start_in_prone_home);
   disableCommands();
@@ -577,8 +480,7 @@ bool RobotRunner::collectJointCommands()
   // 模型关节范围，保证 3 的控制与 4 换载前完全相同。
   if (stance_joint_limits_armed_ && standing_height_target_ <= 0.33F &&
     !prone_down_active_ && leg_controller_.legsEnabled() &&
-    state == FSM_StateName::BALANCE_STAND &&
-    !control_fsm_->data.rl_entry_posture_active)
+    state == FSM_StateName::BALANCE_STAND)
   {
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       auto & command = leg_controller_.commands[leg];
@@ -635,16 +537,16 @@ void RobotRunner::disableCommands() noexcept
 
 bool RobotRunner::run()
 {
-  // 1. 推进一步态，并用实测支撑力补充计划接触概率。
+  // 1. 推进一步态，并生成 MIT 风格的接触相位快照。
   //让步态调度器前进一步。它会更新：当前 gait phase；
   //每条腿的接触概率；摆动/支撑状态。
   gait_scheduler_.step();
-  auto contact_probabilities =
-    gait_scheduler_.gait_data.estimatorContactProbabilities();
-  // 经典 MIT 链路直接使用步态调度器的接触先验。实测接触仍由估计器内部
-  // 作为测量更新使用，避免额外的 0.5 s 接触融合阶段改变 MPC/WBC 相位。
+  control_fsm_->data.gait_frame = gait_scheduler_.gaitFrame(
+    mpc::kDefaultMpcHorizon);
+  const auto & gait_frame = control_fsm_->data.gait_frame;
+  // MIT 使用连续支撑相位作为估计器信任度，摆动腿不参与零速度约束。
   contact_estimator_->run();
-  state_estimator_->setContactProbabilities(contact_probabilities);
+  state_estimator_->setContactProbabilities(gait_frame.contact_probability);
   /*运行状态估计器。如果失败：*/
   if (!state_estimator_->run()) {
     std::fprintf(stderr, "RobotRunner 失败：状态估计器未产生有效状态。\n");
@@ -713,13 +615,6 @@ bool RobotRunner::run()
     desired_state_initialized_ = true;
   }
 
-  // RL 进入前先由 BalanceStand 把机身带到训练默认高度；在此之前不
-  // 运行 Locomotion，因此策略历史不会包含站立姿态过渡帧。
-  if (rl_posture_transition_pending_) {
-    standing_height_target_ = kDm1RlDefaultBodyHeight;
-    desired_state_.body_position_world.z() = kDm1RlDefaultBodyHeight;
-  }
-
   // 5. 更新高度目标，最后由 FSM 选择站立或行走控制器并生成命令。
   if (prone_down_active_) {
     const float maximum_step = prone_down_height_rate_ * control_time_step_;
@@ -733,22 +628,11 @@ bool RobotRunner::run()
   control_fsm_->runFSM();
   // FSM_State_LieDown remains active after the fold so MPC/WBC can damp the
   // floating base. Report completion at that hold-phase handoff, never while
-  // the RL locomotion state is active.
+  // locomotion is active.
   if (prone_down_active_ &&
     control_fsm_->lieDownComplete())
   {
     prone_down_complete_ = true;
-  }
-  if (rl_posture_transition_pending_) {
-    rl_entry_stable_time_s_ = rlEntryPostureStable() ?
-      rl_entry_stable_time_s_ + control_time_step_ : 0.0F;
-  }
-  if (rl_posture_transition_pending_ && rl_entry_stable_time_s_ >= 0.20F)
-  {
-    desired_state_.mode = pending_rl_mode_;
-    rl_posture_transition_pending_ = false;
-    rl_entry_posture_latched_ = true;
-    control_fsm_->setRlEntryPostureActive(false);
   }
   const bool commands_valid = collectJointCommands();
   if (!commands_valid) {

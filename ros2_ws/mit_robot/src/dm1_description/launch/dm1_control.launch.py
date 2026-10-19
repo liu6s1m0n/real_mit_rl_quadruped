@@ -39,18 +39,15 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "hardware_sim",
             default_value="false",
-            description="Run the complete hardware driver/controller path against simulated devices",
+            description=(
+                "Run the complete hardware driver/controller path "
+                "against simulated devices"
+            ),
         ),
         DeclareLaunchArgument(
             "torque_limit",
             default_value="88",
             description="Hardware simulation torque limit; match the hardware_main run",
-        ),
-        DeclareLaunchArgument(
-            "walk_mode",
-            default_value="mpc",
-            # 换模型要修改的地方：launch 参数说明中的模型编号
-            description="Walking controller selection: mpc or rl (model_4210/model_4245)",
         ),
         *_desktop_session_environment(),
         OpaqueFunction(function=_controller_node),
@@ -59,7 +56,6 @@ def generate_launch_description():
 
 def _controller_node(context):
     arguments = [
-        "--walk-mode", LaunchConfiguration("walk_mode").perform(context),
         "--render-gpu", LaunchConfiguration("render_gpu").perform(context),
     ]
     hardware_sim = LaunchConfiguration("hardware_sim").perform(context).lower()

@@ -11,7 +11,6 @@
 #include <array>
 #include <cstddef>
 #include <memory>
-#include <utility>
 
 #include "FSM/FSM_State.h"
 #include "FSM/FSM_State_BalanceStand.h"
@@ -79,17 +78,12 @@ public:
   FSM_OperatingMode operatingMode() const noexcept {return operating_mode_;}
   //打开或关闭 WBC。
   void setUseWbc(bool enabled) noexcept {data.use_wbc = enabled;}
-  void setRlPolicy(RlPolicyPtr policy) noexcept {data.rl_policy = std::move(policy);}
   /** 设置 Locomotion 状态使用的固定前进速度，单位 m/s。 */
   void setLocomotionForwardVelocity(T velocity);
   /** 设置 Locomotion 的机身系前后、左右速度和偏航角速度。 */
   void setLocomotionVelocityCommand(
     T forward_velocity, T lateral_velocity, T yaw_rate);
   void setLocomotionGait(GaitType gait) noexcept {data.locomotion_gait = gait;}
-  /** 标记 RL 入场姿态过渡，让 BalanceStand 使用 RL 训练参考姿态。 */
-  void setRlEntryPostureActive(bool active) noexcept
-  {data.rl_entry_posture_active = active;}
-
   //所有状态共享的数据。
   ControlFSMData < T > data;
   //所有状态对象。

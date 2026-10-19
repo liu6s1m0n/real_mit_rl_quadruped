@@ -21,7 +21,6 @@
 #include "model/robot_control_parameters.hpp"
 #include "sensor/imu.hpp"
 #include "sensor/leg.hpp"
-#include "controller/RlPolicy.hpp"
 
 /** 拥有并执行完整的估计器、FSM、MPC、WBC 控制管线。 */
 /*  RobotRunner 的职责不是推进 MuJoCo 仿真，而是：
@@ -72,14 +71,10 @@ public:
   bool requestProneDown() noexcept;
   /** 趴卧轨迹已达到目标并切换到趴卧保持。 */
   bool proneDownComplete() const noexcept {return prone_down_complete_;}
-  /** 注入已经通过 golden-vector 校验的 RL 推理后端。 */
-  void setRlPolicy(RlPolicyPtr policy) noexcept;
   /** 将前进速度透传给 ControlFSM 内的 Locomotion/MPC，单位 m/s。 */
   void setWalkingForwardSpeed(float speed);
   /** 设置机身系前后、左右速度和偏航角速度，单位 m/s、rad/s。 */
   void setLocomotionGait(GaitType gait) noexcept;
-  /** 请求 4 号一次抬落重新执行（仅在上一次结束后生效）。 */
-  void requestStandCycleRestart() noexcept;
   void setLocomotionVelocityCommand(
     float forward_velocity, float lateral_velocity, float yaw_rate);
   /** 设置站立目标高度，实际命令会按 standing_height_rate_limit_ 平滑跟随。 */
@@ -112,8 +107,6 @@ public:
   bool standingReady() const noexcept;
   /** 移动不再等待经典步态准入条件；保留接口供桥接层兼容调用。 */
   bool locomotionEntryReady() const noexcept;
-  /** RL 入场姿态是否已经连续满足高度、关节和姿态条件。 */
-  bool rlEntryReady() const noexcept;
 private:
   /*保存四条腿传感器对象的所有权。*/
   using LegSensorOwners = std::array<std::unique_ptr<LegSensor>, kNumLegs>;
@@ -140,7 +133,6 @@ private:
   /** 仅在 DM1 Home 启用整段小腿贴地代理，运动前关闭以免擦地。 */
   void setHomeCalfContactsEnabled(bool enabled) noexcept;
   float measuredBodyHeight() const noexcept;
-  bool rlEntryPostureStable() const noexcept;
   void initializeController(OrientationEstimatorMode orientation_mode);
   float currentTime() const noexcept;
  
@@ -209,10 +201,6 @@ private:
   bool stance_joint_limits_armed_ = false;
   /*是否已经建立首次闭环期望状态*/
   bool desired_state_initialized_ = false;
-  bool rl_posture_transition_pending_ = false;
-  bool rl_entry_posture_latched_ = false;
-  ControlMode pending_rl_mode_ = ControlMode::WalkRl;
-  float rl_entry_stable_time_s_ = 0.0F;
   bool prone_down_active_ = false;
   bool prone_down_complete_ = false;
 };

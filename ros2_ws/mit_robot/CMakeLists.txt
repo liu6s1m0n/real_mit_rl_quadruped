@@ -38,91 +38,18 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
+
+# qpOASES is vendored from the MIT Cheetah third-party tree so the controller
+# uses the same online active-set QP backend without relying on a system install.
+file(GLOB MYMIT_QPOASES_SOURCES CONFIGURE_DEPENDS
+  third_party/qpOASES/src/*.cpp
+)
 find_package(geometry_msgs REQUIRED)
 find_package(mujoco_vendor REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-
-# model_4210.pt is a regular PyTorch training checkpoint, not TorchScript.
-# Convert it during the build to a generated C++ header so the running MuJoCo
-# executable has no Python/libtorch runtime dependency.
-set(MYMIT_RL_PYTHON "/opt/rl-gym/venv/bin/python" CACHE FILEPATH
-  "Python interpreter with PyTorch used to export the frozen RL actor")
-# Active checkpoint: frozen model_4210 directional hip refinement artifact.
-# Previous checkpoint (kept commented for rollback):
-# /home/simon/RL_Robot/logs/dm1_trot_phase_refine_3510/Sep04_10-46-32_trot_phase_refine_from3510_100/model_3610.pt
-# /home/simon/.codex/worktrees/b9d0/RL_Robot/logs/dm1_trot_hip_refine/Sep04_09-08-42_trot_hip_refine_200/model_3485.pt
-# Earlier frozen baseline:
-# /home/simon/RL_Robot/frozen_models/dm1_walking_complete_model3285/model_3285.pt
-# 换模型要修改的地方：checkpoint 路径
-set(MYMIT_DM1_RL_CHECKPOINT_DEFAULT
-  "/home/simon/RL_Robot/frozen_models/dm1_trot_directional_hip_refine_model4210/model_4210.pt")
-set(MYMIT_DM1_RL_CHECKPOINT_4245_DEFAULT
-  "/home/simon/RL_Robot/logs/trot/dm1_trot_directional_yaw_recovery_refine_4235/Sep10_17-51-24_directional_yaw_recovery_from4235_10_no_mirror/model_4245.pt")
-# Migrate an existing build cache that still points at the old model, while
-# preserving an explicitly supplied custom checkpoint.
-if(NOT DEFINED MYMIT_DM1_RL_CHECKPOINT OR
-  MYMIT_DM1_RL_CHECKPOINT MATCHES "/model_(3285|3485|3610|3810|3960)\\.pt$" OR
-  MYMIT_DM1_RL_CHECKPOINT MATCHES
-    "/logs/trot/dm1_trot_directional_hip_refine_4160/.*/model_4210\\.pt$")
-  set(MYMIT_DM1_RL_CHECKPOINT "${MYMIT_DM1_RL_CHECKPOINT_DEFAULT}"
-    CACHE FILEPATH "Frozen DM1 model_4210 checkpoint" FORCE)
-else()
-  set(MYMIT_DM1_RL_CHECKPOINT "${MYMIT_DM1_RL_CHECKPOINT}"
-    CACHE FILEPATH "Frozen DM1 model_4210 checkpoint")
-endif()
-if(NOT EXISTS "${MYMIT_RL_PYTHON}")
-  message(FATAL_ERROR "MYMIT_RL_PYTHON does not exist: ${MYMIT_RL_PYTHON}")
-endif()
-if(NOT EXISTS "${MYMIT_DM1_RL_CHECKPOINT}")
-  message(FATAL_ERROR
-    "MYMIT_DM1_RL_CHECKPOINT does not exist: ${MYMIT_DM1_RL_CHECKPOINT}")
-endif()
-set(MYMIT_DM1_RL_CHECKPOINT_4245 "${MYMIT_DM1_RL_CHECKPOINT_4245_DEFAULT}"
-  CACHE FILEPATH "Frozen DM1 model_4245 checkpoint")
-if(NOT EXISTS "${MYMIT_DM1_RL_CHECKPOINT_4245}")
-  message(FATAL_ERROR
-    "MYMIT_DM1_RL_CHECKPOINT_4245 does not exist: ${MYMIT_DM1_RL_CHECKPOINT_4245}")
-endif()
-# 换模型要修改的地方：生成头文件名
-set(MYMIT_DM1_RL_HEADER
-  "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_4210.hpp")
-set(MYMIT_DM1_RL_HEADER_4245
-  "${CMAKE_CURRENT_BINARY_DIR}/generated/dm1_policy_4245.hpp")
-add_custom_command(
-  OUTPUT "${MYMIT_DM1_RL_HEADER}"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory
-    "${CMAKE_CURRENT_BINARY_DIR}/generated"
-  COMMAND "${MYMIT_RL_PYTHON}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
-    --checkpoint "${MYMIT_DM1_RL_CHECKPOINT}"
-    --model-id 4210
-    --output "${MYMIT_DM1_RL_HEADER}"
-  DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
-    "${MYMIT_DM1_RL_CHECKPOINT}"
-  COMMENT "Exporting frozen DM1 model_4210 for C++ RL inference"
-  VERBATIM
-)
-add_custom_command(
-  OUTPUT "${MYMIT_DM1_RL_HEADER_4245}"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory
-    "${CMAKE_CURRENT_BINARY_DIR}/generated"
-  COMMAND "${MYMIT_RL_PYTHON}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
-    --checkpoint "${MYMIT_DM1_RL_CHECKPOINT_4245}"
-    --model-id 4245
-    --output "${MYMIT_DM1_RL_HEADER_4245}"
-  DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/tools/export_dm1_policy_header.py"
-    "${MYMIT_DM1_RL_CHECKPOINT_4245}"
-  COMMENT "Exporting frozen DM1 model_4245 for C++ RL inference"
-  VERBATIM
-)
-add_custom_target(mymit_robot_frozen_rl_policy DEPENDS
-  "${MYMIT_DM1_RL_HEADER}" "${MYMIT_DM1_RL_HEADER_4245}")
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FootContact.msg"
@@ -176,12 +103,11 @@ endif()
 
 # 与 ROS 2/MuJoCo 解耦的 DM1 数学模型参数库
 add_library(mymit_robot_model
-  src/Array.cc
   src/MPC/ConvexMPCLocomotion.cpp
   src/MPC/Gait.cpp
   src/MPC/RobotState.cpp
   src/MPC/SolverMPC.cpp
-  src/QuadProg++.cc
+  ${MYMIT_QPOASES_SOURCES}
   src/FSM/ControlFSM.cpp
   src/FSM/FSM_State_BalanceStand.cpp
   src/FSM/FSM_State_LieDown.cpp
@@ -204,7 +130,6 @@ add_library(mymit_robot_model
   src/controller/GaitScheduler.cpp
   src/controller/OrientationEstimator.cpp
   src/controller/PositionVelocityEstimator.cpp
-  src/controller/frozen_dwaq_policy.cpp
   src/controller/leg_controller.cpp
   src/model/quadruped.cpp
   src/sensor/imu.cpp
@@ -213,6 +138,7 @@ add_library(mymit_robot_model
   Middlewares/dm_imu/src/bsp_crc.cpp
 )
 target_compile_features(mymit_robot_model PUBLIC cxx_std_17)
+target_compile_definitions(mymit_robot_model PRIVATE __NO_COPYRIGHT__)
 target_include_directories(mymit_robot_model BEFORE PRIVATE
   "${MYMIT_LOCAL_MUJOCO_INCLUDE}"
 )
@@ -220,9 +146,9 @@ target_include_directories(mymit_robot_model PRIVATE
   "${CMAKE_CURRENT_BINARY_DIR}/generated"
   "${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dm_imu/include"
 )
-add_dependencies(mymit_robot_model mymit_robot_frozen_rl_policy)
 target_include_directories(mymit_robot_model PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/qpOASES/include>
   $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(mymit_robot_model

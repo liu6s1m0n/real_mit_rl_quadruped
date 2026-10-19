@@ -22,9 +22,7 @@ enum class FSM_StateName
   RECOVERY_STAND,
   BALANCE_STAND,
   LOCOMOTION,
-  LIE_DOWN,
-  WALK_RL,
-  STAIRS_RL
+  LIE_DOWN
 };
 
 template < typename T >
@@ -84,8 +82,6 @@ protected:
       case ControlMode::BalanceStand: return FSM_StateName::BALANCE_STAND;
       case ControlMode::Locomotion:
       case ControlMode::WalkClassic:
-      case ControlMode::WalkRl:
-      case ControlMode::StairsRl:
         return FSM_StateName::LOCOMOTION;
       case ControlMode::ProneDown: return FSM_StateName::LIE_DOWN;
       case ControlMode::StandUp: return FSM_StateName::STAND_UP;

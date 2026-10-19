@@ -320,7 +320,7 @@ TEST(Dm1MpcWalkDiagnostic, TrotWalkInPlaceStaysBalanced)
   SimulationActuatorWriter writer(model.get());
   ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
 
-  runner.setLocomotionGait(GaitType::TROT_WALK);
+  runner.setLocomotionGait(GaitType::TROT);
   const auto report = runDirection(
     model.get(), data.get(), runner, writer,
     Vec3<float>(0.0F, 0.0F, 0.0F), 6000);

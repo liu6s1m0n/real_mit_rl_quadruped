@@ -35,7 +35,6 @@
 
 #include "RobotRunner.hpp"
 #include "StandingHeightIpc.hpp"
-#include "controller/frozen_dwaq_policy.hpp"
 #include "model/robot_control_parameters.hpp"
 #include "teleop/keyboard_teleop.hpp"
 #include "teleop/operator_command.hpp"
@@ -72,8 +71,6 @@ protected:
       case GLFW_KEY_0: decoded = '0'; break;
       case GLFW_KEY_1: decoded = '1'; break;
       case GLFW_KEY_2: decoded = '2'; break;
-      case GLFW_KEY_3: decoded = '3'; break;
-      case GLFW_KEY_4: decoded = '4'; break;
       case GLFW_KEY_W: decoded = 'W'; break;
       case GLFW_KEY_S: decoded = 'S'; break;
       case GLFW_KEY_A: decoded = 'A'; break;
@@ -120,14 +117,12 @@ enum MotionCommand : int
   kRight = 5,
   kRotateCounterClockwise = 6,
   kRotateClockwise = 7,
-  kSelectMpc = 8,
-  kSelectRl = 9,
-  kEnableMotors = 10,
-  kDisableMotors = 11,
-  kStop = 12,
-  kProneDown = 13,
-  /// 原地对角小跑：实际执行 TROT_WALK，0.5 s 周期、支撑 60%、摆动 40%。
-  kMarchInPlace = 14
+  kEnableMotors = 8,
+  kDisableMotors = 9,
+  kStop = 10,
+  kProneDown = 11,
+  /// 原地对角小跑，使用 MIT TROT 时序。
+  kMarchInPlace = 12
 };
 
 int commandForButton(const char * name)
@@ -141,8 +136,6 @@ int commandForButton(const char * name)
   if (std::strcmp(name, "Right") == 0) {return kRight;}
   if (std::strcmp(name, "Rotate CCW") == 0) {return kRotateCounterClockwise;}
   if (std::strcmp(name, "Rotate CW") == 0) {return kRotateClockwise;}
-  if (std::strcmp(name, "Use MPC") == 0) {return kSelectMpc;}
-  if (std::strcmp(name, "Use RL") == 0) {return kSelectRl;}
   if (std::strcmp(name, "Enable motors") == 0) {return kEnableMotors;}
   if (std::strcmp(name, "Disable motors") == 0) {return kDisableMotors;}
   if (std::strcmp(name, "Stop") == 0) {return kStop;}
@@ -226,8 +219,6 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
     {mjITEM_BUTTON, "Right", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Rotate CCW", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Rotate CW", 2, nullptr, "", 0},
-    {mjITEM_BUTTON, "Use MPC", 2, nullptr, "", 0},
-    {mjITEM_BUTTON, "Use RL", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Stand up", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Enable motors", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Disable motors", 2, nullptr, "", 0},
@@ -239,9 +230,7 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
   if (g_hardware_simulation) {
     std::vector<mjuiDef> controls;
     for (const auto & control : height_controls) {
-      if (std::strcmp(control.name, "Height (m)") == 0 ||
-        std::strcmp(control.name, "Use MPC") == 0 ||
-        std::strcmp(control.name, "Use RL") == 0) {continue;}
+      if (std::strcmp(control.name, "Height (m)") == 0) {continue;}
       controls.push_back(control);
     }
     std::strcpy(controls.front().name, "Hardware controller");
@@ -407,7 +396,6 @@ void runPhysics(
   float slow_walking_forward_speed,
   float fast_walking_forward_speed, float walking_backward_speed,
   float walking_lateral_speed, float turning_yaw_rate,
-  ControlMode initial_walking_mode, const RlPolicyPtr & rl_policy,
   std::exception_ptr & failure)
 {
   // 该函数运行在物理线程；渲染线程通过 simulation.mtx 与它共享 mjData。
@@ -434,10 +422,6 @@ void runPhysics(
     const SimulationActuatorWriter actuator_writer(model);
     // RobotRunner 负责状态估计、步态/WBC 等控制流程；本文件只负责仿真桥接。
     RobotRunner runner(model, data, robot_type);
-    // 只有 RL 模式会使用这个策略；MPC 模式仍走原有 Locomotion 路径。
-    runner.setRlPolicy(rl_policy);
-    const std::string rl_model_name = rl_policy == nullptr ?
-      "none" : rl_policy->metadata().name;
     StandingHeightReceiver height_receiver;
     teleop::OperatorCommandArbiter arbiter;
 
@@ -446,11 +430,10 @@ void runPhysics(
     std::printf(
       "MuJoCo %s control started: dt=%.4f s, slow/fast=%.2f/%.2f m/s, "
       "backward=%.2f m/s, lateral=%.2f m/s, turning=%.2f rad/s, "
-      "default mode=%s\n",
+      "default mode=MPC\n",
       "DM1",
       model->opt.timestep, slow_walking_forward_speed, fast_walking_forward_speed,
-      walking_backward_speed, walking_lateral_speed, turning_yaw_rate,
-      initial_walking_mode == ControlMode::WalkRl ? rl_model_name.c_str() : "MPC");
+      walking_backward_speed, walking_lateral_speed, turning_yaw_rate);
 
     bool controller_ready = false;
     bool control_active = false;
@@ -459,7 +442,6 @@ void runPhysics(
     std::size_t consecutive_failures = 0;
     double previous_simulation_time = data->time;
     float previous_slider_height = standing_height.load();
-    ControlMode walking_mode = initial_walking_mode;
     bool keyboard_fault_reported = false;
     const teleop::VelocityProfile velocity_profile{
       slow_walking_forward_speed, fast_walking_forward_speed,
@@ -508,20 +490,7 @@ void runPhysics(
         gui_commands.push_back(
           teleop::OperatorCommand{teleop::CommandType::DisableMotors});
       }
-      if (pending_command == kSelectMpc || pending_command == kSelectRl) {
-        if (!arbiter.motionActive()) {
-          walking_mode = pending_command == kSelectRl ?
-            ControlMode::WalkRl : ControlMode::Locomotion;
-          std::printf(
-            "Walking controller selected: %s (takes effect on the next direction command)\n",
-            walking_mode == ControlMode::WalkRl ? rl_model_name.c_str() : "MPC");
-        } else {
-          std::printf(
-            "Controller selection ignored while walking; press Stand up first\n");
-        }
-      }
       if (pending_command == kMarchInPlace) {
-        walking_mode = ControlMode::Locomotion;
         std::printf(
           "Motion selected: March in place TROT "
           "(TROT 0.5 s, 50%% stance), body velocity=(0, 0, 0)\n");
@@ -538,7 +507,7 @@ void runPhysics(
       } else if (pending_command == kProneDown) {
         gui_commands.push_back(
           teleop::OperatorCommand{teleop::CommandType::ProneDown});
-      } else if ((pending_command > kStand && pending_command < kSelectMpc) ||
+      } else if ((pending_command > kStand && pending_command < kEnableMotors) ||
         pending_command == kMarchInPlace)
       {
         teleop::OperatorCommand command;
@@ -579,8 +548,7 @@ void runPhysics(
       arbiter.expireMotion(std::chrono::steady_clock::now());
       if (arbiter.takeHelpRequest()) {
         std::printf(
-          "Keys: U enable, 0 disable, 1 stand, 2 march, 3 four-contact diagnostic, "
-          "4 four-contact load transfer, "
+          "Keys: U enable, 0 disable, 1 stand, 2 march, "
           "P prone down, W/S forward/back, A/D left/right, "
           "Q/E rotate, Space stop, Esc exit, H help\n");
       }
@@ -627,7 +595,7 @@ void runPhysics(
           stand_up_pending = false;
           prone_down_reported = false;
           std::printf(
-            "Prone-down request accepted: MPC/WBC descent active (RL policy bypassed)\n");
+            "Prone-down request accepted: MPC/WBC descent active\n");
         }
       }
       if (arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive()) {
@@ -642,29 +610,14 @@ void runPhysics(
           const auto velocity = teleop::velocityForMotion(motion, velocity_profile);
           runner.setLocomotionVelocityCommand(
             velocity.forward, velocity.lateral, velocity.yaw);
-          GaitType gait = GaitType::TROT_WALK;
-          if (motion == teleop::Motion::MarchInPlace) {
-            walking_mode = ControlMode::Locomotion;
-            gait = GaitType::TROT;
-          } else if (motion == teleop::Motion::FourContactDiagnostic) {
-            walking_mode = ControlMode::Locomotion;
-            gait = GaitType::STAND;
-          } else if (motion == teleop::Motion::FourContactLoadTransfer) {
-            walking_mode = ControlMode::Locomotion;
-            gait = GaitType::STAND_CYCLE;
-          }
-          runner.setLocomotionGait(gait);
-          runner.setControlMode(walking_mode);
+          runner.setLocomotionGait(GaitType::TROT);
+          runner.setControlMode(ControlMode::Locomotion);
         }
       }
       if (simulation_running) {
         // 控制计算使用当前传感器状态，随后写力矩，最后推进一个物理时间步。
-        // BalanceStand/MPC follows the external height command. RL walking has
-        // one owner for its training posture: RobotRunner starts the 0.32 ->
-        // 0.38 m transition and keeps that target after entry, so the GUI
-        // height slider cannot overwrite the RL contract every frame.
-        if (control_active &&
-          !(walking_mode == ControlMode::WalkRl && arbiter.motionActive())) {
+        // BalanceStand/MPC follows the external height command.
+        if (control_active) {
           runner.setStandingHeight(commanded_height);
         }
         const FSM_StateName state_before_control = runner.currentStateName();
@@ -903,9 +856,6 @@ SimulationBridge::SimulationBridge(std::string scene_path, RobotType robot_type)
 : scene_path_(std::move(scene_path)), robot_type_(robot_type)
 {
   if (scene_path_.empty()) {throw std::invalid_argument("scene path must not be empty");}
-  // 预先准备 RL 后端，便于程序启动为 MPC 后仍可通过界面切到 RL。
-  // MPC 路径不会调用它，也不会改变原有 MPC/WBC 计算。
-  rl_policy_ = std::make_shared<FrozenDwaqPolicy>();
 }
 
 /**
@@ -958,29 +908,6 @@ void SimulationBridge::setTurningYawRate(float yaw_rate)
     throw std::invalid_argument("turning yaw rate must be within [0, 1.5] rad/s");
   }
   turning_yaw_rate_ = yaw_rate;
-}
-
-void SimulationBridge::setWalkingControllerMode(ControlMode mode)
-{
-  if (mode == ControlMode::Locomotion) {
-    walking_mode_ = mode;
-    return;
-  }
-  if (mode == ControlMode::WalkRl) {
-    walking_mode_ = mode;
-    rl_policy_ = std::make_shared<FrozenDwaqPolicy>(rl_model_);
-    return;
-  }
-  throw std::invalid_argument(
-          "walking controller mode must be ControlMode::Locomotion (MPC) or WalkRl (RL)");
-}
-
-void SimulationBridge::setRlModel(FrozenDwaqModel model)
-{
-  rl_model_ = model;
-  if (walking_mode_ == ControlMode::WalkRl) {
-    rl_policy_ = std::make_shared<FrozenDwaqPolicy>(rl_model_);
-  }
 }
 
 /**
@@ -1058,7 +985,7 @@ int SimulationBridge::run()
       std::ref(keyboard),
       slow_walking_forward_speed_,
       fast_walking_forward_speed_, walking_backward_speed_, walking_lateral_speed_,
-      turning_yaw_rate_, walking_mode_, rl_policy_, std::ref(failure));
+      turning_yaw_rate_, std::ref(failure));
   }
   // 当前线程进入渲染循环，直到用户关闭窗口或物理线程发生异常。
   simulation->RenderLoop();

@@ -11,8 +11,6 @@
 #include <atomic>
 #include <string>
 
-#include "controller/frozen_dwaq_policy.hpp"
-#include "controller/RlPolicy.hpp"
 #include "model/robot_types.hpp"
 #include "HardwareSimulation.hpp"
 
@@ -64,18 +62,7 @@ public:
    */
   void setTurningYawRate(float yaw_rate);
 
-  /**
-   * @brief 选择行走控制器；MPC 保持原有 Locomotion 控制链，RL 使用选定模型。
-   * @param mode 只接受 ControlMode::Locomotion（MPC）或 ControlMode::WalkRl（RL）。
-   */
-  void setWalkingControllerMode(ControlMode mode);
-
-  /** @brief 选择 RL 模型；默认使用已验证的 model_4210。 */
-  void setRlModel(FrozenDwaqModel model);
   void setHardwareSimulation(const HardwareSimulationOptions & options);
-
-  /** @brief 读取启动时/下一次行走使用的控制器选择。 */
-  ControlMode walkingControllerMode() const noexcept {return walking_mode_;}
 
   /** @brief 读取当前目标站立高度，单位 m。 */
   float standingHeight() const noexcept {return standing_height_.load();}
@@ -104,9 +91,6 @@ private:
   float walking_lateral_speed_ = 0.25F;       ///< 左右平移档速度绝对值，m/s。
   float turning_yaw_rate_ = 0.35F;            ///< 原地自转角速度绝对值，rad/s。
   double standing_height_slider_ = 0.32;      ///< MuJoCo UI 滑块使用的双精度高度缓存，m。
-  ControlMode walking_mode_ = ControlMode::Locomotion;  ///< MPC 或 frozen RL。
-  FrozenDwaqModel rl_model_ = FrozenDwaqModel::Model4210;
-  RlPolicyPtr rl_policy_;                    ///< 仅 RL 模式注入，MPC 不触碰。
   HardwareSimulationOptions hardware_simulation_;
 };
 

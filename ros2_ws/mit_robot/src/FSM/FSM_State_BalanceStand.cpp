@@ -30,7 +30,7 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
     parameters.balance_body_orientation_kp,
     parameters.balance_body_orientation_kd);
   wbc_ctrl_->setFootPositionGains(
-    Vec3<T>::Constant(T(500)), Vec3<T>::Constant(T(10)));
+    parameters.wbc_foot_position_kp, parameters.wbc_foot_position_kd);
   wbc_ctrl_->setJointGains(
     parameters.balance_joint_kp, parameters.balance_joint_kd);
   wbc_ctrl_->setFloatingBaseWeight(parameters.balance_floating_base_weight);
@@ -120,12 +120,10 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
 {
   // MIT BalanceStand：水平位置与航向锁定入场值，roll/pitch 保持水平，
   // 仅高度跟随外部目标；速度、加速度目标均为零。
-  const auto & estimate = *this->_data->state_estimate;
   wbc_data_.pBody_des = initial_body_position_;
   wbc_data_.vBody_des.setZero();
   wbc_data_.aBody_des.setZero();
   wbc_data_.pBody_RPY_des = initial_body_rpy_;
-  wbc_data_.pBody_RPY_des.z() = estimate.rpy.z();
   wbc_data_.vBody_Ori_des.setZero();
 
   //读取外部期望高度
@@ -149,10 +147,9 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
   const T support_force =
     this->_data->quadruped->totalMass() * T(9.81) / static_cast<T>(kNumLegs);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    wbc_data_.pFoot_des[leg] = estimate.position_world +
-      estimate.rotation_world_from_body *
-      (this->_data->quadruped->hipLocation(static_cast<LegId>(leg)) +
-      this->_data->leg_controller->datas[leg].p);
+    // MIT BalanceStand uses contact constraints for all four feet; the
+    // support-foot position task is therefore unused in this state.
+    wbc_data_.pFoot_des[leg].setZero();
     wbc_data_.vFoot_des[leg].setZero();
     wbc_data_.aFoot_des[leg].setZero();
     wbc_data_.Fr_des[leg] = Vec3<T>(T(0), T(0), support_force);
@@ -175,18 +172,6 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
     return;
   }
 
-  const Mat3<T> rotation_body_from_world =
-    estimate.rotation_world_from_body.transpose();
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    auto & command = this->_data->leg_controller->commands[leg];
-    command.foot_position_desired = rotation_body_from_world *
-      (wbc_data_.pFoot_des[leg] - estimate.position_world) -
-      this->_data->quadruped->hipLocation(static_cast<LegId>(leg));
-    command.foot_velocity_desired = rotation_body_from_world * wbc_data_.vFoot_des[leg];
-    command.kp_cartesian = Mat3<T>::Zero();
-    command.kd_cartesian = Mat3<T>::Identity() * T(7);
-  }
-
   // 站立与行走统一直接使用 WBC 前馈，保持求解器给出的动力学比例。
   T maximum_feedforward_torque = T(0);
   for (const auto & command : this->_data->leg_controller->commands) {
@@ -204,37 +189,6 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
   // 四足接触（12 维约束）加机身 6 维任务已唯一确定构型，KinWBC 不存在
   // 零空间漂移，因此与 MIT 一致直接使用 WBC 的 q_des/qd_des 与前馈力矩。
   ++posture_ramp_iteration_;
-  if (desired.mode != ControlMode::WalkRl &&
-    !this->_data->rl_entry_posture_active)
-  {
-    return;
-  }
-
-  // RL 入场单独处理：RL 的第一帧历史必须建立在训练默认姿态上，因此把关节
-  // 参考从入场姿态平滑过渡到 RL 默认姿态；WBIC 前馈与反力仍保留。
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    const LegId leg_id = static_cast<LegId>(leg);
-    auto & command = this->_data->leg_controller->commands[leg];
-    const auto & leg_model = this->_data->quadruped->leg(leg_id);
-    Vec3<T> home;
-    for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-      home[static_cast<Eigen::Index>(joint)] =
-        static_cast<T>(kDm1RlDefaultJointPosition[
-          leg * kJointsPerLeg + joint]);
-    }
-    const T posture_alpha = this->_data->control_parameters->start_in_prone_home ?
-      std::clamp(static_cast<T>(posture_ramp_iteration_) / T(2000), T(0), T(1)) :
-      T(1);
-    const T smooth_alpha = posture_alpha * posture_alpha *
-      (T(3) - T(2) * posture_alpha);
-    command.position_desired = entry_joint_positions_[leg] +
-      smooth_alpha * (home - entry_joint_positions_[leg]);
-    command.position_desired = command.position_desired.cwiseMax(
-      leg_model.joints.lower_limit).cwiseMin(leg_model.joints.upper_limit);
-    command.velocity_desired.setZero();
-    command.kp_joint = this->_data->control_parameters->joint_kp;
-    command.kd_joint = this->_data->control_parameters->joint_kd;
-  }
 }
 
 template class FSM_State_BalanceStand<float>;

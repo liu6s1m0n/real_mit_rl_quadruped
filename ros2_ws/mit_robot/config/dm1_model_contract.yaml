@@ -28,25 +28,7 @@ control:
   # 仅放慢大腿（HFE）展开速度；髋关节和小腿保持 stand_up_duration_s 的速度。
   stand_up_thigh_speed_scale: 0.75
   physics_timestep_s: 0.002
-  policy_period_s: 0.02
-  policy_observation_size: 45
-  policy_history_length: 6
-  policy_action_scale: 0.25
-  # model_4210 的方向精修阶段训练闭环参数；部署端必须保持一致。
-  policy_filter_time_constant_s: 0.05
-  policy_max_action_delta: 0.15
-  policy_max_target_velocity_rad_s: 3.0
-  modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, walk_rl, stairs_rl]
-rl:
-  # 换模型要修改的地方：模型编号和 SHA256
-  flat_checkpoint: model_4210
-  flat_checkpoint_sha256: 3f4c65ec73d435b7fb16ad24bb240114c01b79502c6eb1037daa887740a0e06b
-  alternate_flat_checkpoint: model_4245
-  alternate_flat_checkpoint_sha256: 65700456169a3d7d17ab279fb0c48b6b306717345f8ae90dbc2218e1384a6f34
-  stairs_checkpoint: model_4700
-  stairs_checkpoint_sha256: cc653d0b1b60459e45a0ce7b3face8a927f1fb4d8113f4bef7366c44ca81ec6d
-  stairs_is_simulation_baseline_only: true
-  inference_uses_vae_posterior_mean: true
+  modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, prone_down]
 mjcf:
   file: src/dm1_description/dm1/dm1.xml
   sha256: b1a94f53f7362251e2bc7277e62dbcd9bacac7f11d0cb8e3c90e2136eee1f41f

@@ -43,14 +43,8 @@ enum class Motion : std::uint8_t
   Right,
   RotateCounterClockwise,
   RotateClockwise,
-  /// 原地对角小跑：实际执行 TROT_WALK，周期 0.5 s、支撑 60%、摆动 40%，FR+RL 与 FL+RR 交替抬起。
+  /// 原地对角小跑，使用 MIT TROT 时序。
   MarchInPlace,
-  /// 四脚接触、零速度、不摆腿；使用踏步 MPC/WBC 的阶段①诊断。
-  FourContactDiagnostic,
-  /// 四脚零速入场后逐渐将 FL+RR 的负载转给 FR+RL，保持四脚接触。
-  FourContactLoadTransfer,
-  /// 三腿站立，按 FR→FL→RR→RL 逐腿抬落并持续循环。
-  SingleLegLift,
 };
 
 struct VelocityCommand
@@ -110,10 +104,6 @@ public:
   bool quitRequested() const noexcept {return quit_requested_;}
   bool motionActive() const noexcept {return motion_.has_value();}
   Motion motion() const noexcept {return motion_.value_or(Motion::Forward);}
-  // 步态选择与方向命令分开锁存；空格停止或方向切换不会覆盖2/3选择。
-  Motion selectedGaitMotion() const noexcept {return selected_gait_motion_;}
-  // 每次收到运动按键都递增，用于识别同一按键的重复按下（如再次按 4）。
-  std::uint32_t motionPresses() const noexcept {return motion_presses_;}
 
   bool takeEnableRequest() noexcept
   {
@@ -177,8 +167,6 @@ public:
 private:
   MotorOutputState state_ = MotorOutputState::Locked;
   std::optional<Motion> motion_;
-  Motion selected_gait_motion_ = Motion::MarchInPlace;
-  std::uint32_t motion_presses_ = 0;
   std::chrono::steady_clock::time_point last_motion_at_{};
   bool motion_watchdog_enabled_ = true;
   bool enable_requested_ = false;

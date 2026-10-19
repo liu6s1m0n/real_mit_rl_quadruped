@@ -59,7 +59,7 @@ MuJoCo 仅提供机械动力学和设备端替身：CAN 字节交给原始电机
 操作顺序与实机键盘模式相同：等待启动反馈通过 → `Enable motors`/`U` →
 等待 1.2 秒关节初始化 → `Stand up`/`1` → 站稳后 `2` 或方向按钮；
 `Stop`/空格停止，`0` 失能，Esc 退出。暂停或 Reset 会停止旧硬件桥并清空设备命令；
-继续后重新执行启动检查，电机保持锁定。高度滑块和 RL 选择按钮在该模式不显示，
+继续后重新执行启动检查，电机保持锁定。高度滑块在该模式不显示，
 因为当前完整实机程序使用固定站起目标和 MPC/WBC。
 
 默认总力矩上限与当前 `hardware_main` 一样为 **88 Nm**；
@@ -119,24 +119,10 @@ ctest --test-dir build/mymit_robot \
 它不覆盖原始驱动和设备时序。新的完整测试覆盖真实串口标定/协议、
 站起/原地小跑/停止、FL 小腿无输出和间歇写入失败。
 
-### 启动 RL 仿真
-
-```bash
-ros2 run mymit_robot mymit_robot_user \
-  --walk-mode rl \
-  --render-gpu auto
-```
-
 ### 使用 ROS 2 launch 启动控制仿真
 
 ```bash
 ros2 launch mymit_robot dm1_control.launch.py
-```
-
-使用 RL 模式：
-
-```bash
-ros2 launch mymit_robot dm1_control.launch.py walk_mode:=rl
 ```
 
 ### 只查看模型，不启动控制器
@@ -157,10 +143,7 @@ MuJoCo GUI 仍可独立控制。方向键和 GUI 方向按钮都是锁存选择�
 | `0` | 电机上锁/失能，最高优先级 |
 | `1` | 请求站起；行走中回到 BalanceStand |
 | `2` | 原地踏步：对角小跑（TROT，0.5 秒周期、50% 支撑，FR+RL 与 FL+RR 交替抬起） |
-| `3` | 四脚零速度诊断：保持四脚接触，不自动摆腿 |
-| `4` | 一次换载抬落：FL+RR 卸载并抬起，再恢复四脚支撑 |
-| `5` | 三腿支撑单腿循环：按 FR→FL→RR→RL 逐腿抬落并持续循环 |
-| `P` | 请求趴卧；由 MPC/WBC 下降并用 Joint-PD 收腿保持，RL 不参与 |
+| `P` | 请求趴卧；由 MPC/WBC 下降并用 Joint-PD 收腿保持 |
 | `W` / `S` | 前进 / 后退 |
 | `A` / `D` | 左移 / 右移 |
 | `Q` / `E` | 逆时针 / 顺时针原地旋转 |
@@ -168,8 +151,7 @@ MuJoCo GUI 仍可独立控制。方向键和 GUI 方向按钮都是锁存选择�
 | `H` | 打印帮助 |
 | `Esc` | 上锁并退出 |
 
-在 RL 仿真中也使用同一个 `P` 趴卧命令；它会从 RL 行走状态直接切换到独立的
-`LIE_DOWN` 状态，下降阶段复用现有 MPC/WBC，完成后进入安全的 `JointPd` 保持。
+`P` 趴卧命令会切换到独立的 `LIE_DOWN` 状态，下降阶段复用现有 MPC/WBC，完成后进入 `JointPd` 保持。
 
 MuJoCo Reset 后会重新上锁；上锁时仍执行 `mj_step()`，机器人会在重力和接触动力学
 作用下自然下落，不会暂停物理仿真。

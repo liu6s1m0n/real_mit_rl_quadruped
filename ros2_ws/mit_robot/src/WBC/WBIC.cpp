@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <stdexcept>
 
 /**
@@ -139,24 +140,41 @@ bool WBIC<T>::_MakeTorqueInternal(DVec<T> & cmd)
   // 浮动基座没有执行器，其 6 维动力学平衡必须作为等式约束严格满足。
   _SetEqualityConstraint(qddot_pre);
 
-  // QuadProg 的约定为 CE^T z + ce0 = 0，CI^T z + ci0 >= 0。
-  const double f = solve_quadprog(G, g0, CE, ce0, CI, ci0, z);
-  // std::cout<<"\n wbic old time: "<<timer.getMs()<<std::endl;
-  if (!std::isfinite(f)) {return false;}
+  // qpOASES 统一使用 lbA <= A*z <= ubA；等式约束的上下界相同。
+  const Eigen::Index rows = static_cast<Eigen::Index>(_dim_eq_cstr + _dim_Uf);
+  DMat<double> constraints = DMat<double>::Zero(rows, _dim_opt);
+  DVec<double> constraint_lower = DVec<double>::Constant(rows, -qp_adapter::kInfinity);
+  DVec<double> constraint_upper = DVec<double>::Constant(rows, qp_adapter::kInfinity);
+  if (_dim_eq_cstr > 0) {
+    constraints.topRows(static_cast<Eigen::Index>(_dim_eq_cstr)) = _dyn_CE.template cast<double>();
+    constraint_lower.head(static_cast<Eigen::Index>(_dim_eq_cstr)) = _dyn_ce0.template cast<double>();
+    constraint_upper.head(static_cast<Eigen::Index>(_dim_eq_cstr)) = _dyn_ce0.template cast<double>();
+  }
+  if (_dim_Uf > 0) {
+    constraints.bottomRows(static_cast<Eigen::Index>(_dim_Uf)) = _dyn_CI.template cast<double>();
+    constraint_lower.tail(static_cast<Eigen::Index>(_dim_Uf)) = _dyn_ci0.template cast<double>();
+  }
+  const DVec<double> variable_lower = DVec<double>::Constant(_dim_opt, -qp_adapter::kInfinity);
+  const DVec<double> variable_upper = DVec<double>::Constant(_dim_opt, qp_adapter::kInfinity);
+  double objective = std::numeric_limits<double>::infinity();
+  const bool solved = qp_adapter::solve(
+    G, g0, constraints, variable_lower, variable_upper,
+    constraint_lower, constraint_upper, z, &objective);
+  if (!solved || !std::isfinite(objective)) {return false;}
   for (size_t i = 0; i < _dim_opt; ++i) {
-    if (!std::isfinite(z[i])) {return false;}
+    if (!std::isfinite(z(static_cast<Eigen::Index>(i)))) {return false;}
   }
 
   // pretty_print(qddot_pre, std::cout, "qddot_cmd");
   for (size_t i(0); i < _dim_floating; ++i) {
     // 把优化得到的浮动基座修正量叠加到任务层级给出的名义加速度上。
-    qddot_pre[i] += z[i];
+    qddot_pre[i] += z(static_cast<Eigen::Index>(i));
   }
   _GetSolution(qddot_pre, cmd);
 
   _data->_opt_result = DVec<T>(_dim_opt);
   for (size_t i(0); i < _dim_opt; ++i) {
-    _data->_opt_result[i] = z[i];
+    _data->_opt_result[i] = z(static_cast<Eigen::Index>(i));
   }
 
   return cmd.allFinite();
@@ -178,15 +196,6 @@ bool WBIC<T>::_MakeTorqueInternal(DVec<T> & cmd)
   // pretty_print(JtDotQdot, std::cout, "Jtdotqdot");
   // pretty_print(xddot, std::cout, "xddot");
 
-  // printf("CE:\n");
-  // std::cout<<CE<<std::endl;
-  // printf("ce0:\n");
-  // std::cout<<ce0<<std::endl;
-
-  // printf("CI:\n");
-  // std::cout<<CI<<std::endl;
-  // printf("ci0:\n");
-  // std::cout<<ci0<<std::endl;
 }
 
 template<typename T>
@@ -274,32 +283,15 @@ void WBIC<T>::_SetEqualityConstraint(const DVec<T> & qddot)
     _dyn_ce0 = -WB::Sv_ * (WB::A_ * qddot + WB::cori_ + WB::grav_);
   }
 
-  for (size_t i(0); i < _dim_eq_cstr; ++i) {
-    for (size_t j(0); j < _dim_opt; ++j) {
-      CE[j][i] = _dyn_CE(i, j);
-    }
-    ce0[i] = -_dyn_ce0[i];
-  }
-  // pretty_print(_dyn_CE, std::cout, "WBIC: CE");
-  // pretty_print(_dyn_ce0, std::cout, "WBIC: ce0");
 }
 
 /*完全没看懂*/
 template<typename T>
 void WBIC<T>::_SetInEqualityConstraint()
 {
-  // 将每只支撑脚的摩擦锥与法向力边界转换成 QuadProg 使用的不等式格式。
+  // 将每只支撑脚的摩擦锥与法向力边界转换成 qpOASES 的行约束。
   _dyn_CI.block(0, _dim_floating, _dim_Uf, _dim_rf) = _Uf;
   _dyn_ci0 = _Uf_ieq_vec - _Uf * _Fr_des;
-
-  for (size_t i(0); i < _dim_Uf; ++i) {
-    for (size_t j(0); j < _dim_opt; ++j) {
-      CI[j][i] = _dyn_CI(i, j);
-    }
-    ci0[i] = -_dyn_ci0[i];
-  }
-  // pretty_print(_dyn_CI, std::cout, "WBIC: CI");
-  // pretty_print(_dyn_ci0, std::cout, "WBIC: ci0");
 }
 
 template<typename T>
@@ -366,7 +358,7 @@ void WBIC<T>::_GetSolution(const DVec<T> & qddot, DVec<T> & cmd)
     _data->_Fr = DVec<T>(_dim_rf);
     // 优化量保存的是反力修正值，需要加回期望反力 Fr_des。
     for (size_t i(0); i < _dim_rf; ++i) {
-      _data->_Fr[i] = z[i + _dim_floating] + _Fr_des[i];
+      _data->_Fr[i] = z(static_cast<Eigen::Index>(i + _dim_floating)) + _Fr_des[i];
     }
     tot_tau =
       WB::A_ * qddot + WB::cori_ + WB::grav_ - _Jc.transpose() * _data->_Fr;
@@ -386,11 +378,13 @@ void WBIC<T>::_SetCost()
   // 对角权重分别惩罚基座加速度修正和接触力修正；权重越大越不希望该量变化。
   size_t idx_offset(0);
   for (size_t i(0); i < _dim_floating; ++i) {
-    G[i + idx_offset][i + idx_offset] = _data->_W_floating[i];
+    G(static_cast<Eigen::Index>(i + idx_offset), static_cast<Eigen::Index>(i + idx_offset)) =
+      static_cast<double>(_data->_W_floating[i]);
   }
   idx_offset += _dim_floating;
   for (size_t i(0); i < _dim_rf; ++i) {
-    G[i + idx_offset][i + idx_offset] = _data->_W_rf[i];
+    G(static_cast<Eigen::Index>(i + idx_offset), static_cast<Eigen::Index>(i + idx_offset)) =
+      static_cast<double>(_data->_W_rf[i]);
   }
   // pretty_print(_data->_W_floating, std::cout, "W floating");
   // pretty_print(_data->_W_rf, std::cout, "W rf");
@@ -435,18 +429,14 @@ void WBIC<T>::_SetOptimizationSize()
   _dim_opt = _dim_floating + _dim_rf;
   _dim_eq_cstr = _dim_floating;
 
-  // QuadProg 使用自己的数组类型保存目标、等式和不等式矩阵。
-  G.resize(0., _dim_opt, _dim_opt);
-  g0.resize(0., _dim_opt);
-  CE.resize(0., _dim_opt, _dim_eq_cstr);
-  ce0.resize(0., _dim_eq_cstr);
+  // qpOASES 使用 Eigen 矩阵保存代价；约束在求解前统一拼成行上下界。
+  G = DMat<double>::Zero(_dim_opt, _dim_opt);
+  g0 = DVec<double>::Zero(_dim_opt);
 
   // 同时保留 Eigen 矩阵，便于用块操作构造约束。
   _dyn_CE = DMat<T>::Zero(_dim_eq_cstr, _dim_opt);
   _dyn_ce0 = DVec<T>(_dim_eq_cstr);
   if (_dim_rf > 0) {
-    CI.resize(0., _dim_opt, _dim_Uf);
-    ci0.resize(0., _dim_Uf);
     _dyn_CI = DMat<T>::Zero(_dim_Uf, _dim_opt);
     _dyn_ci0 = DVec<T>(_dim_Uf);
 
@@ -458,8 +448,8 @@ void WBIC<T>::_SetOptimizationSize()
     _Uf.setZero();
     _Uf_ieq_vec = DVec<T>(_dim_Uf);
   } else {
-    CI.resize(0., _dim_opt, 0);
-    ci0.resize(0., 0);
+    _dyn_CI.resize(0, _dim_opt);
+    _dyn_ci0.resize(0);
   }
 }
 

@@ -26,8 +26,6 @@ struct RobotSelection
   float standing_height;      ///< 启动后的默认站立高度，m。
   float lateral_speed;        ///< 该机型经过接触回归验证的默认横移速度，m/s。
   const char * render_gpu;    ///< OpenGL 渲染设备策略：auto 或 nvidia。
-  ControlMode walking_mode;   ///< MPC 或 frozen RL。
-  FrozenDwaqModel rl_model;   ///< RL 权重版本。
   HardwareSimulationOptions hardware_simulation;
 };
 
@@ -36,8 +34,6 @@ RobotSelection selectRobot(int argc, char ** argv)
   // launch_ros 会在自定义参数后追加“--ros-args -r ...”。这里只解析渲染
   // 选项，遇到 --ros-args 后把剩余参数完整留给 ROS 2。
   const char * render_gpu = "auto";
-  ControlMode walking_mode = ControlMode::Locomotion;
-  FrozenDwaqModel rl_model = FrozenDwaqModel::Model4210;
   HardwareSimulationOptions hardware_simulation;
   hardware_simulation.calibration_path = MYMIT_ROBOT_DM1_CALIBRATION_PATH;
   bool hardware_options_used = false;
@@ -78,36 +74,9 @@ RobotSelection selectRobot(int argc, char ** argv)
         throw std::invalid_argument("usage: mymit_robot_user [--render-gpu nvidia|auto]");
       }
       render_gpu = argv[++index];
-    } else if (std::strcmp(argv[index], "--walk-mode") == 0) {
-      if (index + 1 >= argc) {
-        throw std::invalid_argument(
-                "usage: mymit_robot_user [--walk-mode mpc|rl] "
-                "[--rl-model 4210|4245] [--render-gpu nvidia|auto]");
-      }
-      const char * mode = argv[++index];
-      if (std::strcmp(mode, "mpc") == 0) {
-        walking_mode = ControlMode::Locomotion;
-      } else if (std::strcmp(mode, "rl") == 0) {
-        walking_mode = ControlMode::WalkRl;
-      } else {
-        throw std::invalid_argument("walk mode must be mpc or rl");
-      }
-    } else if (std::strcmp(argv[index], "--rl-model") == 0) {
-      if (index + 1 >= argc) {
-        throw std::invalid_argument("rl model must be 4210 or 4245");
-      }
-      const char * model = argv[++index];
-      if (std::strcmp(model, "4210") == 0) {
-        rl_model = FrozenDwaqModel::Model4210;
-      } else if (std::strcmp(model, "4245") == 0) {
-        rl_model = FrozenDwaqModel::Model4245;
-      } else {
-        throw std::invalid_argument("rl model must be 4210 or 4245");
-      }
     } else {
       throw std::invalid_argument(
-              "usage: mymit_robot_user [--walk-mode mpc|rl] "
-              "[--rl-model 4210|4245] [--render-gpu nvidia|auto]");
+              "usage: mymit_robot_user [--render-gpu nvidia|auto]");
     }
   }
 
@@ -120,12 +89,9 @@ RobotSelection selectRobot(int argc, char ** argv)
   if (hardware_options_used && !hardware_simulation.enabled) {
     throw std::invalid_argument("hardware simulation options require --hardware-sim");
   }
-  if (hardware_simulation.enabled && walking_mode != ControlMode::Locomotion) {
-    throw std::invalid_argument("hardware_main currently uses MPC/WBC; hardware simulation requires --walk-mode mpc");
-  }
   return {
     MYMIT_ROBOT_DM1_SCENE_PATH, 0.32F, kDm1WalkingLateralSpeed, render_gpu,
-    walking_mode, rl_model, hardware_simulation};
+    hardware_simulation};
 }
 
 /**
@@ -193,8 +159,7 @@ int main(int argc, char ** argv)
 {
   if (argc == 2 && std::strcmp(argv[1], "--help") == 0) {
     std::printf(
-      "Usage: mymit_robot_user [--hardware-sim] [--walk-mode mpc|rl] "
-      "[--rl-model 4210|4245] [--render-gpu auto|nvidia]\n"
+      "Usage: mymit_robot_user [--hardware-sim] [--render-gpu auto|nvidia]\n"
       "Hardware simulation (all actual hardware algorithms, simulated devices):\n"
       "  --calibration FILE              same calibration format as hardware_main\n"
       "  --torque-limit NM               same default as hardware_main: 88\n"
@@ -216,8 +181,6 @@ int main(int argc, char ** argv)
     configureGpuRendering(robot.render_gpu);
     SimulationBridge bridge(robot.scene_path, RobotType::DM1);
     bridge.setHardwareSimulation(robot.hardware_simulation);
-    bridge.setRlModel(robot.rl_model);
-    bridge.setWalkingControllerMode(robot.walking_mode);
     bridge.setStandingHeight(robot.standing_height);
     bridge.setSlowWalkingForwardSpeed(kSlowWalkingForwardSpeed);
     bridge.setFastWalkingForwardSpeed(kFastWalkingForwardSpeed);

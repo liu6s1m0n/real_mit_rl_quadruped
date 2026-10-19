@@ -162,30 +162,6 @@ void GaitScheduler<T>::step()
 {
   modifyGait();
 
-  if (gait_data.current_gait == GaitType::STAND_CYCLE) {
-    gait_data.initial_phase = std::min(T(1),
-      gait_data.initial_phase + dt_ / gait_data.period_time_nominal);
-    const T time = std::round(gait_data.initial_phase * gait_data.period_time_nominal / dt_) * dt_;
-    for (Eigen::Index foot = 0; foot < static_cast<Eigen::Index>(kNumLegs); ++foot) {
-      const bool moving_leg = stand_cycle_swing_[static_cast<std::size_t>(foot)];
-      const bool swing = moving_leg && time >= T(0.6) && time < T(0.84);
-      const int previous = gait_data.contact_state_scheduled(foot);
-      gait_data.contact_state_previous(foot) = previous;
-      gait_data.contact_state_scheduled(foot) = swing ? 0 : 1;
-      gait_data.liftoff_scheduled(foot) = swing && previous != 0 ? 1 : 0;
-      gait_data.touchdown_scheduled(foot) = !swing && previous == 0 ? 1 : 0;
-      gait_data.phase_variable(foot) = gait_data.initial_phase;
-      gait_data.phase_stance(foot) = swing ? T(1) : !moving_leg ? T(0.5) :
-        time < T(0.6) ? time / T(0.6) : std::clamp((time - T(0.84)) / T(0.4), T(0), T(0.5));
-      gait_data.phase_swing(foot) = swing ? (time - T(0.6)) / T(0.24) : T(0);
-      gait_data.time_stance(foot) = moving_leg ? T(0.8) : T(1.04);
-      gait_data.time_swing(foot) = moving_leg ? T(0.24) : T(0);
-      gait_data.time_stance_remaining(foot) = moving_leg && time < T(0.6) ? T(0.6) - time : T(0);
-      gait_data.time_swing_remaining(foot) = swing ? T(0.84) - time : T(0);
-    }
-    return;
-  }
-
   if (gait_data.current_gait != GaitType::STAND) {
     gait_data.initial_phase = wrapPhase(
       gait_data.initial_phase + dt_ / gait_data.period_time_nominal);
@@ -332,12 +308,6 @@ void GaitScheduler<T>::createGait()
         "STAND", T(10), T(1), all_legs,
         Vec4<T>(T(0.5), T(0.5), T(0.5), T(0.5)), unit_scale, false);
       break;
-  /*一次四脚→对角两脚→四脚的短促抬落；末端不循环。*/
-    case GaitType::STAND_CYCLE:
-      configureGait(
-        "STAND_CYCLE", T(1.04), T(1), all_legs,
-        Vec4<T>::Zero(), unit_scale, false);
-      break;
   /*周期 = 0.5 s  支撑比例 = 0.625  摆动比例 = 0.375 每条腿相位错开，用于平稳行走。*/
     case GaitType::AMBLE:
       configureGait(
@@ -345,13 +315,6 @@ void GaitScheduler<T>::createGait()
         Vec4<T>(T(0), T(0.5), T(0.25), T(0.75)), unit_scale, true);
       break;
     
-    // 保留 TROT_WALK 按钮/枚举入口，经典控制统一采用 MIT 的 TROT 时序。
-    case GaitType::TROT_WALK:
-      configureGait(
-        "TROT_WALK", parameters_.trot_period_time, T(0.5), all_legs,
-        Vec4<T>(T(0), T(0.5), T(0.5), T(0)), unit_scale, true);
-      break;
-
     // 与 MPC 接触表一致：10 段 x dtMPC，50% 支撑；周期由调用方按 MPC 段长设置。
     case GaitType::TROT:
       configureGait(
@@ -394,15 +357,6 @@ void GaitScheduler<T>::createGait()
       configureGait(
         "PRONK", T(0.5), T(0.5), all_legs, Vec4<T>::Zero(), unit_scale, true);
       break;
-    /*第一条腿的相位缩放也是 0*/
-    case GaitType::THREE_FOOT:
-      configureGait(
-        "THREE_FOOT", T(0.4), T(0.666),
-        Eigen::Vector4i(0, 1, 1, 1),
-        Vec4<T>(T(0), T(0.666), T(0), T(0.333)),
-        Vec4<T>(T(0), T(1), T(1), T(1)), true);
-      break;
-
     case GaitType::CUSTOM:
       // 保留当前时序数据，供上层在 requestGait(CUSTOM) 前填充自定义参数。
       gait_data.gait_name = "CUSTOM";
@@ -490,6 +444,54 @@ void GaitScheduler<T>::printGaitInfo() const
     gait_data.time_stance_remaining.transpose() << '\n';
   std::cout << "  swing remaining(s): " <<
     gait_data.time_swing_remaining.transpose() << std::endl;
+}
+
+template<typename T>
+GaitFrame<T> GaitScheduler<T>::gaitFrame(std::size_t horizon) const
+{
+  if (horizon == 0) {
+    throw std::invalid_argument("gait frame horizon must be positive");
+  }
+
+  GaitFrame<T> frame;
+  frame.mpc_table.assign(horizon * kNumLegs, 0);
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const Eigen::Index foot = static_cast<Eigen::Index>(leg);
+    frame.contact_state[leg] = gait_data.contact_state_scheduled(foot) != 0;
+    frame.contact_probability[leg] = T(0);
+    frame.swing_phase[leg] = gait_data.phase_swing(foot);
+    frame.stance_time[leg] = gait_data.time_stance(foot);
+    frame.swing_time[leg] = gait_data.time_swing(foot);
+  }
+
+  if (gait_data.current_gait == GaitType::STAND) {
+    frame.contact_probability.fill(T(1));
+    std::fill(frame.mpc_table.begin(), frame.mpc_table.end(), 1);
+    return frame;
+  }
+
+  frame.contact_probability = gait_data.estimatorContactProbabilities();
+
+  // phase_variable includes each leg's phase_offset.  Recover the common gait
+  // phase, then apply MIT's iteration + 1 prediction for every MPC row.
+  const T base_phase = wrapPhase(
+    gait_data.phase_variable(0) - gait_data.phase_offset(0));
+  const std::size_t current_segment = std::min(
+    horizon - 1,
+    static_cast<std::size_t>(base_phase * static_cast<T>(horizon)));
+  for (std::size_t step = 0; step < horizon; ++step) {
+    const std::size_t segment = (current_segment + step + 1) % horizon;
+    const T phase = static_cast<T>(segment) / static_cast<T>(horizon);
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const Eigen::Index foot = static_cast<Eigen::Index>(leg);
+      if (gait_data.gait_enabled(foot) == 0) {continue;}
+      const T local_phase = wrapPhase(phase + gait_data.phase_offset(foot));
+      const T switching = gait_data.switching_phase(foot);
+      frame.mpc_table[step * kNumLegs + leg] =
+        switching >= T(1) || (switching > T(0) && local_phase < switching) ? 1 : 0;
+    }
+  }
+  return frame;
 }
 
 template struct GaitSchedulerParameters<float>;

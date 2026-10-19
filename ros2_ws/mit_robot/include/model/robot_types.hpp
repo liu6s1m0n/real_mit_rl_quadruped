@@ -80,10 +80,8 @@ enum class ControlMode : std::uint8_t
   StandUp = 4,
   RecoveryStand = 5,
   WalkClassic = 6,
-  WalkRl = 7,
-  StairsRl = 8,
   /** MPC/WBC body-height transition from standing to the grounded prone pose. */
-  ProneDown = 9
+  ProneDown = 7
 };
 
 /**

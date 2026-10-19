@@ -3,8 +3,8 @@
 硬件、IMU、电机监听和仿真启动命令见：
 [RUN_COMMANDS.md](mit_robot/docs/RUN_COMMANDS.md)。
 
-本工作空间只登记 DM1。C++ 模型、MuJoCo XML、RL 输入输出和真实硬件
-MIT 接口共享同一份契约，避免以另一机型参数误驱动 DM1。
+本工作空间只登记 DM1。C++ 模型、MuJoCo XML 和真实硬件 MIT 接口共享同一份
+契约，避免以另一机型参数误驱动 DM1。
 
 ## 启动
 
@@ -14,25 +14,19 @@ source /opt/ros/humble/setup.bash
 colcon build --packages-select mymit_robot
 source install/setup.bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
-# 换模型要修改的地方：当前模型编号
-# 默认是原有 MPC/WBC；也可启动时选择冻结的 model_4210 RL
-ros2 run mymit_robot mymit_robot_user --walk-mode rl --render-gpu auto
 ```
 
 启动带站立/方向按钮的 MuJoCo 控制窗口：
 
 ```bash
 ros2 launch mymit_robot dm1_control.launch.py
-# 或直接让 launch 以 model_4210 RL 启动
-ros2 launch mymit_robot dm1_control.launch.py walk_mode:=rl
 ```
 
 窗口打开后机器人处于趴地零位且电机默认上锁；先按 `Shift+U` 或点击 `Enable motors`，
 再按 `1`/点击 `Stand up`，站起完成后再发送方向命令。方向按键/按钮会锁存当前速度，
 按 `Space` 或点击 `Stop` 显式停止。
-默认方向按钮进入原有经典 MPC/WBC 行走链。也可以使用 `--walk-mode rl` 启动
-model_4210，或在窗口中先点击 `Use RL` / `Use MPC` 再点击方向按钮。切换策略前
-先点击 `Stand up` 回到 BalanceStand；行走过程中不会热切换。
+默认方向按钮进入经典 MPC/WBC 行走链。行走前先点击 `Stand up` 回到
+BalanceStand；方向控制通过同一条行走链执行。
 
 只查看 MuJoCo 模型：
 
@@ -55,15 +49,7 @@ ros2 launch mymit_robot dm1_display.launch.py
 ## 控制模式
 
 保留 Passive、JointPd、BalanceStand、StandUp、RecoveryStand、经典
-MPC/WBC 行走、平地 RL 行走和楼梯 RL 行走。平地 policy 的观测为 45 维、
-历史长度 6、50 Hz、动作缩放 0.25；stairs checkpoint 只作为仿真基线，
-需要冻结策略白名单后才能请求部署模式。控制器之间必须先回到 BalanceStand，
-不能在 Locomotion 内热切换。
-
-`model_4210.pt` 是构建时从
-`/home/simon/RL_Robot/logs/trot/dm1_trot_directional_hip_refine_4160/Sep04_17-39-42_directional_hip_from4160_50/`
-提取为 C++ 权重的，运行程序不依赖 Python 或 PyTorch；其 SHA256 由 RL 接口
-契约校验。上一版 `model_3610.pt` 仅保留为注释回退记录，不参与构建。
+MPC/WBC 行走和 ProneDown。控制模式之间通过 BalanceStand 过渡。
 
 ## 真机接入
 

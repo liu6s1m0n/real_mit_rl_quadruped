@@ -7,7 +7,7 @@
 #ifndef WHOLE_BODY_IMPULSE_CONTROL_H
 #define WHOLE_BODY_IMPULSE_CONTROL_H
 
-#include "Utilities/QuadProg++.hh"
+#include "Utilities/QpOases.hpp"
 #include "WBC/ContactSpec.hpp"
 #include "WBC/Task.hpp"
 #include "WBC/WBC.hpp"
@@ -136,19 +136,13 @@ private:
   /** @brief 当前一次求解所使用的输入输出缓存。 */
   WBIC_ExtraData<T> * _data;
 
-  GolDIdnani::GVect<double> z;   ///< QP 解：[浮动基加速度修正；接触力修正]。
-  GolDIdnani::GMatr<double> G;   ///< QP 二次代价矩阵，使 1/2 z^T G z 最小。
-  GolDIdnani::GVect<double> g0;  ///< QP 线性代价向量；当前问题通常设为零。
+  DVec<double> z;   ///< QP 解：[浮动基加速度修正；接触力修正]。
+  DMat<double> G;   ///< QP 二次代价矩阵，使 1/2 z^T G z 最小。
+  DVec<double> g0;  ///< QP 线性代价向量；当前问题通常设为零。
 
-  GolDIdnani::GMatr<double> CE;   ///< 求解器格式的等式矩阵，满足 CE^T z + ce0 = 0。
-  GolDIdnani::GVect<double> ce0;  ///< 等式约束常数项，主要来自浮动基动力学残差。
-
-  GolDIdnani::GMatr<double> CI;   ///< 求解器格式的不等式矩阵，满足 CI^T z + ci0 >= 0。
-  GolDIdnani::GVect<double> ci0;  ///< 摩擦锥及法向力上下界的不等式常数项。
-
-  DMat<T> _dyn_CE;   ///< Eigen 格式的动力学等式系数，转置后复制给 CE。
+  DMat<T> _dyn_CE;   ///< Eigen 格式的动力学等式系数。
   DVec<T> _dyn_ce0;  ///< Eigen 格式的动力学等式残差。
-  DMat<T> _dyn_CI;   ///< Eigen 格式的接触力不等式系数，转置后复制给 CI。
+  DMat<T> _dyn_CI;   ///< Eigen 格式的接触力不等式系数。
   DVec<T> _dyn_ci0;  ///< Eigen 格式的接触力不等式余量。
 
   DMat<T> _eye;           ///< num_qdot 维单位阵，用于构造任务零空间投影。

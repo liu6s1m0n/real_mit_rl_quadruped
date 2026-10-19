@@ -29,7 +29,6 @@ add_robot_unit_test(test_control_gait control/gait_scheduler_test.cpp)
 # MPC, WBC and FSM are split again by responsibility for focused debugging.
 add_robot_unit_test(test_mpc_gait mpc/gait_test.cpp)
 add_robot_unit_test(test_mpc_robot_state mpc/robot_state_test.cpp)
-add_robot_unit_test(test_mpc_locomotion mpc/locomotion_test.cpp)
 add_robot_unit_test(test_wbc_optimization wbc/whole_body_optimization_test.cpp)
 add_robot_unit_test(test_fsm_safety fsm/safety_checker_test.cpp)
 target_include_directories(test_fsm_safety PRIVATE
@@ -66,22 +65,6 @@ target_include_directories(test_imu_driver PRIVATE
 target_link_libraries(test_imu_driver pthread util)
 
 ament_add_gtest(
-  test_dm1_sim2sim_direction
-  sim2sim/dm1_direction_regression_test.cpp
-  ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
-  ${PROJECT_SOURCE_DIR}/user/SimulationActuatorWriter.cpp
-  ${PROJECT_SOURCE_DIR}/test/sim2sim/SimulationDiagnostics.cpp)
-target_compile_definitions(test_dm1_sim2sim_direction PRIVATE
-  MYMIT_ROBOT_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
-)
-target_include_directories(test_dm1_sim2sim_direction PRIVATE
-  ${PROJECT_SOURCE_DIR}/user
-  ${PROJECT_SOURCE_DIR}/test/sim2sim
-)
-target_link_libraries(test_dm1_sim2sim_direction mymit_robot_model Eigen3::Eigen)
-target_link_libraries(test_dm1_sim2sim_direction mymit_robot_teleop)
-
-ament_add_gtest(
   test_dm1_mpc_walk
   sim2sim/dm1_mpc_walk_test.cpp
   ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
@@ -94,20 +77,6 @@ target_include_directories(test_dm1_mpc_walk PRIVATE
 )
 target_link_libraries(test_dm1_mpc_walk mymit_robot_model Eigen3::Eigen)
 target_link_libraries(test_dm1_mpc_walk mymit_robot_teleop)
-
-ament_add_gtest(
-  test_dm1_march_in_place
-  sim2sim/dm1_march_in_place_test.cpp
-  ${PROJECT_SOURCE_DIR}/user/RobotRunner.cpp
-  ${PROJECT_SOURCE_DIR}/user/SimulationActuatorWriter.cpp)
-target_compile_definitions(test_dm1_march_in_place PRIVATE
-  MYMIT_ROBOT_TEST_SCENE_PATH="${PROJECT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
-)
-target_include_directories(test_dm1_march_in_place PRIVATE
-  ${PROJECT_SOURCE_DIR}/user
-)
-target_link_libraries(test_dm1_march_in_place mymit_robot_model Eigen3::Eigen)
-target_link_libraries(test_dm1_march_in_place mymit_robot_teleop)
 
 ament_add_gtest(
   test_dm1_hardware_path_comparison

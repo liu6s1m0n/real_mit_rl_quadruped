@@ -11,10 +11,10 @@
 
 #include <array>
 #include <cstddef>
+#include <vector>
 
-#include "MPC/Gait.h"
 #include "MPC/SolverMPC.h"
-#include "controller/GaitScheduler.hpp"
+#include "controller/GaitFrame.hpp"
 
 namespace mpc
 {
@@ -28,16 +28,8 @@ struct LocomotionResult
   DesiredState<T> command{};
   /** @brief 四条腿当前控制时刻的世界坐标系地面反力。 */
   std::array<Vec3<T>, kNumLegs> reaction_forces_world{};
-  /** @brief 四条腿当前支撑阶段的归一化相位。 */
-  std::array<T, kNumLegs> contact_phase{};
-  /** @brief 四条腿当前摆动阶段的归一化相位。 */
-  std::array<T, kNumLegs> swing_phase{};
-  /** @brief 四条腿的支撑持续时间，单位 s。 */
-  std::array<T, kNumLegs> stance_time{};
-  /** @brief 四条腿的摆动持续时间，单位 s。 */
-  std::array<T, kNumLegs> swing_time{};
-  /** @brief 当前预测表第一行给出的接触状态，true 表示支撑。 */
-  std::array<bool, kNumLegs> contact_state{};
+  /** @brief 本周期唯一的步态快照，供 WBC 和摆腿直接复用。 */
+  GaitFrame<T> gait_frame{};
   /** @brief 本控制周期是否实际执行并刷新了 MPC 优化解。 */
   bool mpc_updated = false;
   /** @brief 最近一次 MPC 优化是否在迭代上限前收敛。 */
@@ -58,17 +50,14 @@ public:
    * @param control_time_step 外部高速控制周期，单位 s。
    * @param iterations_between_mpc 两次 MPC 求解之间的控制周期数。
    * @param settings 接触力求解器参数。
-   * @param iterations_per_gait_segment 每个步态段对应的控制周期数；为 0 时沿用求解间隔。
    */
   ConvexMPCLocomotion(
     const Quadruped<T> & quadruped, T control_time_step,
     std::size_t iterations_between_mpc = 15,
-    const SolverSettings<T> & settings = SolverSettings<T>{},
-    std::size_t iterations_per_gait_segment = 0);
+    const SolverSettings<T> & settings = SolverSettings<T>{});
 
   /** @brief 清零周期、命令斜坡和缓存的 MPC 输出。 */
   void initialize() noexcept;
-  void setGait(GaitType gait);
   /** 设置四脚法向力范围；变化时使旧 MPC 反力缓存失效。 */
   void setNormalForceBounds(const NormalForceBounds<T> & bounds);
   const SolverSettings<T> & solverSettings() const noexcept {return solver_.settings();}
@@ -93,18 +82,6 @@ public:
    * @throws std::invalid_argument 偏移非有限或超过 5 cm 时抛出。
    */
   void setPositionOffsetWorld(const Vec2<T> & offset);
-  /**
-   * @brief 由 FSM 提供 STAND_CYCLE 动作时钟，单位 s。
-   *
-   * 设置后接触表与摆动相位按该时间计算，等待承重确认时可整体暂停；
-   * 未设置（负值）时沿用内部迭代计时。initialize() 会清除。
-   */
-  void setStandCycleTime(T time) noexcept {stand_cycle_time_ = time;}
-  /** 设置 STAND_CYCLE 中摆动的腿（4 号 FL+RR，5 号 FR）。 */
-  void setStandCycleSwingLegs(const std::array<bool, kNumLegs> & legs) noexcept
-  {
-    stand_cycle_swing_ = legs;
-  }
   /** @brief 返回零速位置锚点；尚未初始化时下一次 run() 会锚定到当前估计。 */
   Vec3<T> positionAnchorWorld(const StateEstimate<T> & estimate) const noexcept
   {
@@ -115,14 +92,15 @@ public:
    * @param estimate 当前状态估计。
    * @param desired 外部期望机身状态。
    * @param foot_positions_world 当前四条腿足端世界系位置。
-   * @return 步态相位、当前接触状态和最近一次有效反力。
+   * @param gait_frame 本控制周期唯一的步态快照。
+   * @return 统一步态快照和最近一次有效反力。
    */
   LocomotionResult<T> run(
     const StateEstimate<T> & estimate, const DesiredState<T> & desired,
-    const std::array<Vec3<T>, kNumLegs> & foot_positions_world);
+    const std::array<Vec3<T>, kNumLegs> & foot_positions_world,
+    const GaitFrame<T> & gait_frame);
 
 private:
-  OffsetDurationGait & activeGait() noexcept;
   /**
    * @brief 将外部目标和速度命令转换为 MPC 内部目标状态。
    * @param estimate 当前状态估计，用于偏航连续化和位置锚定。
@@ -136,41 +114,36 @@ private:
   T control_time_step_;
   /** @brief 两次 MPC 求解之间的高速控制周期数。 */
   std::size_t iterations_between_mpc_;
-  /** @brief 每个离散步态段对应的高速控制周期数。 */
-  std::size_t iterations_per_gait_segment_;
-  /** @brief 当前高速控制周期编号。 */
-  std::size_t iteration_ = 0;
-  /** @brief 当前使用的步态类型。 */
-  GaitType gait_type_ = GaitType::STAND;
+  /** @brief 当前控制周期编号，仅用于 MPC 求解刷新，不推进步态。 */
+  std::size_t control_iteration_ = 0;
   /** @brief 用户输入的机身坐标系平面速度。 */
   Vec2<T> velocity_body_ = Vec2<T>::Zero();
-  /** @brief 经加速度限幅后真正进入 MPC 的机身坐标系速度。 */
+  /** @brief MIT 一阶滤波后的机身坐标系速度。 */
   Vec2<T> commanded_velocity_body_ = Vec2<T>::Zero();
   /** @brief 用户输入的偏航角速度，单位 rad/s。 */
   T yaw_rate_ = T(0);
-  /** @brief 经加速度限幅后真正使用的偏航角速度，单位 rad/s。 */
+  /** @brief 当前使用的偏航角速度，单位 rad/s。 */
   T commanded_yaw_rate_ = T(0);
   /** @brief 连续化后的目标偏航角，单位 rad。 */
   T command_yaw_ = T(0);
 
-  /** @brief 平面速度命令的最大变化率，单位 m/s^2。 */
-  T maximum_linear_acceleration_ = T(0.75);
-  /** @brief 偏航角速度命令的最大变化率，单位 rad/s^2。 */
-  T maximum_yaw_acceleration_ = T(0.8);
+  /** @brief MIT 速度一阶滤波系数。 */
+  T velocity_filter_ = T(0.1);
+  /** @brief MIT 速度相关 roll/pitch 补偿积分量。 */
+  T rpy_integral_roll_ = T(0);
+  T rpy_integral_pitch_ = T(0);
   /** @brief 速度遥控模式下用于 MPC 的世界坐标位置锚点。 */
   Vec3<T> command_position_world_ = Vec3<T>::Zero();
   /** @brief 叠加在位置锚点上的世界系水平偏移。 */
   Vec2<T> position_offset_world_ = Vec2<T>::Zero();
-  /** @brief 外部 STAND_CYCLE 动作时钟；负值表示使用内部迭代计时。 */
-  T stand_cycle_time_ = T(-1);
-  /** STAND_CYCLE 摆动腿掩码，默认 4 号的 FL+RR。 */
-  std::array<bool, kNumLegs> stand_cycle_swing_{false, true, true, false};
   /** @brief 是否已经用初始目标初始化过目标偏航角。 */
   bool command_initialized_ = false;
   /** @brief 最近一次有效求解得到的四腿世界系反力。 */
   std::array<Vec3<T>, kNumLegs> cached_reaction_forces_world_{};
   /** @brief 上一次有效反力对应的接触状态。 */
   std::array<bool, kNumLegs> cached_contact_state_{};
+  /** @brief 上一次有效反力对应的完整 MIT 预测表。 */
+  std::vector<int> cached_mpc_table_;
   /** @brief 反力缓存是否有效。 */
   bool cached_solution_valid_ = false;
   /** @brief 最近一次缓存求解是否收敛。 */
@@ -178,12 +151,6 @@ private:
   NormalForceBounds<T> normal_force_bounds_{};
   /** @brief 底层有限时域接触力 MPC 求解器。 */
   SolverMPC<T> solver_;
-  /** @brief 始终四脚支撑的站立步态。 */
-  OffsetDurationGait stand_;
-  /** @brief 50% 支撑率的对角小跑，用于按键 2 原地踏步。 */
-  OffsetDurationGait trot_;
-  /** @brief TROT_WALK 枚举入口，与 MIT TROT 同为 50% 支撑、0.26 s 周期。 */
-  OffsetDurationGait trot_walk_;
 };
 
 extern template struct LocomotionResult<float>;

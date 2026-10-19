@@ -27,13 +27,12 @@ FSM_State_LieDown<T>::FSM_State_LieDown(ControlFSMData<T> * control_fsm_data)
   // 与行走一致：MPC 每段 dtMPC 求解一次，预测接触表每段 dtMPC。
   const std::size_t mpc_interval = mpcSegmentIterations(
     parameters, control_fsm_data->control_time_step);
-  const std::size_t gait_segment_interval = mpc_interval;
   mpc::SolverSettings<T> solver_settings;
   solver_settings.time_step =
-    control_fsm_data->control_time_step * static_cast<T>(gait_segment_interval);
+    control_fsm_data->control_time_step * static_cast<T>(mpc_interval);
   mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
     *control_fsm_data->quadruped, control_fsm_data->control_time_step,
-    mpc_interval, solver_settings, gait_segment_interval);
+    mpc_interval, solver_settings);
   wbc_ctrl_ = std::make_unique<LocomotionCtrl<T>>(
     model::makeFloatingBaseModel(*control_fsm_data->quadruped));
   // Keep the existing BalanceStand task weighting for the descent. The
@@ -70,7 +69,6 @@ void FSM_State_LieDown<T>::onEnter()
   fold_iteration_ = 0;
   hold_body_position_world_ = Vec3<T>::Zero();
   mpc_->initialize();
-  mpc_->setGait(GaitType::STAND);
   this->_data->gait_scheduler->requestGait(GaitType::STAND);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & feedback = this->_data->leg_controller->datas[leg];
@@ -99,8 +97,10 @@ template<typename T>
 void FSM_State_LieDown<T>::runMpcLowering()
 {
   const auto feet_world = footPositionsWorld();
+  const auto & gait_frame = this->_data->gait_frame;
   const auto result = mpc_->run(
-    *this->_data->state_estimate, *this->_data->desired_state, feet_world);
+    *this->_data->state_estimate, *this->_data->desired_state, feet_world,
+    gait_frame);
   if (!result.valid) {
     std::fprintf(stderr,
       "[FSM][LIE_DOWN] 失能前判断：MPC result.valid=false。\n");

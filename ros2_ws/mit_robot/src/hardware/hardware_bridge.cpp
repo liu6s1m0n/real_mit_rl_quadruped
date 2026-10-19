@@ -202,7 +202,6 @@ int HardwareBridge::runKeyboardControl(
     return 9;
   }
   teleop::OperatorCommandArbiter arbiter;
-  std::uint32_t last_motion_presses = 0;
   bool output_enabled = false;
   bool control_active = false;
   bool stand_up_pending = false;
@@ -232,8 +231,7 @@ int HardwareBridge::runKeyboardControl(
   imu_log::print(
     imu_log::Level::Info,
     "键盘控制已启动：电机初始处于锁定状态。按 Shift+U/0 使能/失能，1 站立，"
-    "2 原地踏步，3 四脚零速度诊断（禁止摆腿），4 一次抬落（FL+RR），"
-    "5 四腿依次单腿抬落并循环，P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
+    "2 原地踏步，P 趴下；按 H 查看帮助，Esc 失能并退出。\n");
 
   while (!stop_requested.load()) {
     reportSendFailures(sender);
@@ -258,8 +256,7 @@ int HardwareBridge::runKeyboardControl(
     if (arbiter.takeHelpRequest()) {
       imu_log::print(
         imu_log::Level::Info,
-        "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，3 四脚零速度诊断（阶段①，不摆腿），"
-        "4 一次抬落（FL+RR），5 四腿依次单腿抬落并循环，"
+        "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，"
         "P 趴下，W/S 前进/后退，A/D 左移/右移，Q/E 旋转，"
         "空格停止，Esc 退出，H 帮助。\n");
     }
@@ -379,32 +376,8 @@ int HardwareBridge::runKeyboardControl(
         const auto velocity = teleop::velocityForMotion(arbiter.motion());
         runner_.setLocomotionVelocityCommand(
           velocity.forward, velocity.lateral, velocity.yaw);
-        // 2 号踏步保留原控制；3 号仅改变接触计划，复用踏步 MPC/WBC。
-        GaitType gait = GaitType::TROT_WALK;
-        if (arbiter.motion() == teleop::Motion::MarchInPlace) {
-          gait = GaitType::TROT;
-        } else if (arbiter.motion() == teleop::Motion::FourContactDiagnostic) {
-          gait = GaitType::STAND;
-        } else if (arbiter.motion() == teleop::Motion::FourContactLoadTransfer) {
-          gait = GaitType::STAND_CYCLE;
-          // 已在执行 4 号时再次按 4：请求结束后重新抬落一次。
-          if (arbiter.motionPresses() != last_motion_presses &&
-            runner_.currentStateName() == FSM_StateName::LOCOMOTION)
-          {
-            runner_.requestStandCycleRestart();
-          }
-        } else if (arbiter.motion() == teleop::Motion::SingleLegLift) {
-          // 5 号：四腿依次单腿抬落并循环，复用 4 号一次抬落的全部流程。
-          gait = GaitType::THREE_FOOT;
-          if (arbiter.motionPresses() != last_motion_presses &&
-            runner_.currentStateName() == FSM_StateName::LOCOMOTION)
-          {
-            runner_.requestStandCycleRestart();
-          }
-        }
-        runner_.setLocomotionGait(gait);
+        runner_.setLocomotionGait(GaitType::TROT);
         runner_.setControlMode(ControlMode::Locomotion);
-        last_motion_presses = arbiter.motionPresses();
       }
     }
     const float timestamp = static_cast<float>(now_s);

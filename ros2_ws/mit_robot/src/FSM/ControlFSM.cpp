@@ -92,9 +92,10 @@ ControlFSM<T>::ControlFSM(
   // 估计器的接触先验必须与 MPC 接触表同周期：10 段 x 整数帧 dtMPC。
   auto gait_parameters = gait_scheduler.parameters();
   gait_parameters.trot_period_time =
-    static_cast<T>(mpc::SolverSettings<T>{}.horizon) * control_time_step *
+    static_cast<T>(mpc::kDefaultMpcHorizon) * control_time_step *
     static_cast<T>(mpcSegmentIterations(*control_parameters_, control_time_step));
   gait_scheduler.setParameters(gait_parameters);
+  data.gait_frame = gait_scheduler.gaitFrame(mpc::SolverSettings<T>{}.horizon);
 
   statesList.passive = std::make_unique<FSM_State_Passive<T>>(&data);
   statesList.joint_pd = std::make_unique<JointPdState<T>>(&data);
@@ -257,9 +258,6 @@ FSM_State<T> * ControlFSM<T>::getNextState(FSM_StateName state_name) noexcept
     case FSM_StateName::BALANCE_STAND: return statesList.balance_stand.get();
     case FSM_StateName::LOCOMOTION: return statesList.locomotion.get();
     case FSM_StateName::LIE_DOWN: return statesList.lie_down.get();
-    case FSM_StateName::WALK_RL:
-    case FSM_StateName::STAIRS_RL:
-      return statesList.locomotion.get();
     case FSM_StateName::INVALID: return nullptr;
   }
   return nullptr;

@@ -27,32 +27,9 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   EXPECT_FLOAT_EQ(march_velocity.lateral, 0.0F);
   EXPECT_FLOAT_EQ(march_velocity.yaw, 0.0F);
 
-  const auto diagnostic = teleop::decodeKey('3');
-  ASSERT_TRUE(diagnostic.has_value());
-  EXPECT_EQ(diagnostic->type, CommandType::Motion);
-  EXPECT_EQ(diagnostic->motion, teleop::Motion::FourContactDiagnostic);
-  const auto diagnostic_velocity = teleop::velocityForMotion(diagnostic->motion);
-  EXPECT_FLOAT_EQ(diagnostic_velocity.forward, 0.0F);
-  EXPECT_FLOAT_EQ(diagnostic_velocity.lateral, 0.0F);
-  EXPECT_FLOAT_EQ(diagnostic_velocity.yaw, 0.0F);
-
-  const auto transfer = teleop::decodeKey('4');
-  ASSERT_TRUE(transfer.has_value());
-  EXPECT_EQ(transfer->type, CommandType::Motion);
-  EXPECT_EQ(transfer->motion, teleop::Motion::FourContactLoadTransfer);
-  const auto transfer_velocity = teleop::velocityForMotion(transfer->motion);
-  EXPECT_FLOAT_EQ(transfer_velocity.forward, 0.0F);
-  EXPECT_FLOAT_EQ(transfer_velocity.lateral, 0.0F);
-  EXPECT_FLOAT_EQ(transfer_velocity.yaw, 0.0F);
-
-  const auto single_leg = teleop::decodeKey('5');
-  ASSERT_TRUE(single_leg.has_value());
-  EXPECT_EQ(single_leg->type, CommandType::Motion);
-  EXPECT_EQ(single_leg->motion, teleop::Motion::SingleLegLift);
-  const auto single_leg_velocity = teleop::velocityForMotion(single_leg->motion);
-  EXPECT_FLOAT_EQ(single_leg_velocity.forward, 0.0F);
-  EXPECT_FLOAT_EQ(single_leg_velocity.lateral, 0.0F);
-  EXPECT_FLOAT_EQ(single_leg_velocity.yaw, 0.0F);
+  EXPECT_FALSE(teleop::decodeKey('3').has_value());
+  EXPECT_FALSE(teleop::decodeKey('4').has_value());
+  EXPECT_FALSE(teleop::decodeKey('5').has_value());
 
   const auto prone_down = teleop::decodeKey('P');
   ASSERT_TRUE(prone_down.has_value());
@@ -236,21 +213,3 @@ TEST(OperatorCommandTest, WindowInputHasItsOwnQueue)
 }
 
 }  // namespace
-
-TEST(OperatorCommandTest, DirectionKeysRetainMarchSelectionAcrossStopAndBatches)
-{
-  teleop::OperatorCommandArbiter arbiter;
-  arbiter.apply(*teleop::decodeKey('U'));
-  arbiter.markEnabled();
-  EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
-  arbiter.applyBatch({*teleop::decodeKey('2'), *teleop::decodeKey('w')});
-  EXPECT_EQ(arbiter.motion(), teleop::Motion::Forward);
-  EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
-  for (const char key : {'s', 'a', 'd', 'q', 'e', ' ', 'w'}) {
-    arbiter.apply(*teleop::decodeKey(key));
-    EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
-  }
-  arbiter.applyBatch({*teleop::decodeKey('2'), *teleop::decodeKey('a')});
-  EXPECT_EQ(arbiter.selectedGaitMotion(), teleop::Motion::MarchInPlace);
-  EXPECT_EQ(arbiter.motion(), teleop::Motion::Left);
-}

@@ -4,7 +4,7 @@
  *
  * 构造与 MIT convexMPC/SolverMPC.cpp 一致：13 维状态 [rpy, p, omega_world, v, -g]，
  * 连续模型经矩阵指数离散，代价 2(B'SB + alpha I)，约束为四棱锥摩擦和法向力上下界。
- * 摆动腿变量在建模时直接消去，剩余 QP 用 QuadProg++ 精确求解。
+ * 摆动腿变量在建模时直接消去，剩余 QP 用 qpOASES 求解。
  */
 #ifndef MYMIT_ROBOT_MPC_SOLVER_MPC_H_
 #define MYMIT_ROBOT_MPC_SOLVER_MPC_H_
@@ -18,18 +18,21 @@
 namespace mpc
 {
 
+/** MIT convex-MPC uses a ten-segment prediction window for the trot gait. */
+inline constexpr std::size_t kDefaultMpcHorizon = 10;
+
 template<typename T>
 struct SolverSettings
 {
-  std::size_t horizon = 10;   ///< 预测窗包含的离散时刻数（MIT 为 10）。
-  T time_step = T(0.026);     ///< 预测步长 dtMPC，s（MIT 为 0.002 * 13）。
+  std::size_t horizon = kDefaultMpcHorizon;   ///< 预测窗包含的离散时刻数（MIT 为 10）。
+  T time_step = T(0.030);     ///< 预测步长 dtMPC，s（500 Hz 下 15 个控制周期）。
 
   T friction_coefficient = T(0.4);  ///< 四棱锥摩擦约束的摩擦系数 mu。
   T minimum_normal_force = T(0);    ///< 支撑脚允许的最小法向力，N。
   T maximum_normal_force = T(120);  ///< 单只支撑脚允许的最大法向力，N（MIT f_max）。
   T alpha = T(4e-5);                ///< 反力二次正则权重（MIT alpha）。
   T x_drag = T(0);                  ///< MIT 机身高度/前向速度阻尼项。
-  /** 状态权重 Q：[roll, pitch, yaw, x, y, z, wx, wy, wz, vx, vy, vz]，与 MIT 相同。 */
+  /** 状态权重 Q：[yaw, pitch, roll, x, y, z, wx, wy, wz, vx, vy, vz]，与 MIT 相同。 */
   std::array<T, 12> state_weights{
     T(0.25), T(0.25), T(10), T(2), T(2), T(50),
     T(0), T(0), T(0.3), T(0.2), T(0.2), T(0.1)};
@@ -45,7 +48,7 @@ struct SolverResult
   std::array<Vec3<T>, kNumLegs> reaction_forces_world{};  ///< 当前时刻四脚世界系地面反力，N。
   std::vector<T> force_trajectory;  ///< 整个预测窗的最优接触力序列，按时刻和腿拼接。
   T cost = T(0);               ///< QP 最优目标值（不含常数项）。
-  bool converged = false;      ///< QuadProg++ 返回有限最优值时为 true。
+  bool converged = false;      ///< qpOASES 返回成功且解有限时为 true。
   bool valid = false;          ///< 输出维度、数值和约束是否均可用于控制。
 };
 

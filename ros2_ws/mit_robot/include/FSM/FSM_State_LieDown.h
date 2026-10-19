@@ -23,7 +23,7 @@
  * the existing MPC/WBC contact model active for a grounded hold.
  * After folding, the state remains active in a grounded MPC/WBC hold so the
  * floating base is damped; it does not hand off to joint-only control.
- * This state deliberately has no RlPolicy dependency.
+ * This state owns the MPC/WBC descent and prone hold.
  */
 template<typename T>
 class FSM_State_LieDown final : public FSM_State<T>

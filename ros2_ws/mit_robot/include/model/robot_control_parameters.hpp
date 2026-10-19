@@ -58,16 +58,13 @@ struct RobotControlParameters
   // 取整为整数帧；TROT 周期 = 10 段 x dtMPC，摆动期为其一半。
   T mpc_time_step;
 
-  // RL 部署契约：45 维单帧观测、6 帧历史、50 Hz 策略。
-  T rl_policy_period;
-  std::size_t rl_observation_size;
-  std::size_t rl_history_length;
-  T rl_action_scale;
-  T rl_action_filter_time_constant;
-  T rl_max_action_delta;
-  T rl_max_target_velocity;
-  T rl_continuous_torque_limit;
-  T rl_peak_torque_limit;
+  // MIT WBC 摆腿任务和外层足端速度阻尼；经典站立/行走共用。
+  // 这些参数保留当前 DM1 已验证数值，避免在集中参数时改变控制增益。
+  Vec3<T> wbc_foot_position_kp = Vec3<T>::Constant(T(500));
+  Vec3<T> wbc_foot_position_kd = Vec3<T>::Constant(T(10));
+  T wbc_foot_velocity_damping = T(7);
+  T locomotion_floating_base_weight = T(0.1);
+  T locomotion_reaction_force_weight = T(1);
 };
 
 template<typename T>
@@ -113,9 +110,8 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     T(0.06), T(0.30),
     // MPC 预测段长 dtMPC（500 Hz 下 15 帧，扫参选定 0.030 s）。
     T(0.030),
-    // RL周期、观测维数、历史长度、动作比例、滤波常数、单步变化、速度和力矩限制。
-    T(0.02), std::size_t(45), std::size_t(6), T(0.25), T(0.05),
-    T(0.15), T(3.0), T(30.0), T(97.0)};
+    // 经典 MPC/WBC 控制链参数到此结束。
+    };
 }
 
 /** @brief dtMPC 换算成整数控制帧（MIT iterationsBetweenMPC），至少 1 帧。 */

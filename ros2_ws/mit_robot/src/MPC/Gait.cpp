@@ -111,7 +111,9 @@ const std::vector<int> & OffsetDurationGait::contactTable()
 {
   // 表采用 [预测步][腿号] 的连续布局：1 表示支撑，0 表示摆动。
   for (std::size_t step = 0; step < horizon_; ++step) {
-    const std::size_t segment = (phase_segment_ + step) % horizon_;
+    // MIT Cheetah's getMpcTable() starts at iteration + 1: row zero is the
+    // next predicted segment, while contactPhase/swingPhase remain current.
+    const std::size_t segment = (phase_segment_ + step + 1) % horizon_;
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       const std::size_t relative = (segment + horizon_ - offsets_[leg]) % horizon_;
       table_[step * kNumLegs + leg] = relative < durations_[leg] ? 1 : 0;

@@ -12,16 +12,16 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
+#include "controller/GaitFrame.hpp"
 #include "model/robot_types.hpp"
 
 /** @brief 预定义步态类型。 */
 enum class GaitType : std::uint8_t
 {
   STAND = 0,
-  STAND_CYCLE,
   AMBLE,
-  TROT_WALK,
   TROT,
   TROT_RUN,
   PACE,
@@ -29,7 +29,6 @@ enum class GaitType : std::uint8_t
   ROTARY_GALLOP,
   TRAVERSE_GALLOP,
   PRONK,
-  THREE_FOOT,
   CUSTOM,
   TRANSITION_TO_STAND
 };
@@ -56,8 +55,8 @@ struct GaitSchedulerParameters
   GaitType gait_type = GaitType::STAND;
   T gait_period_time = T(0.5);       ///< 覆盖步态周期，s。
   T gait_switching_phase = T(0.5);   ///< 覆盖支撑相占整周期的比例。
-  /** TROT/TROT_WALK 周期，s；必须等于 MPC 预测窗 10 段 x dtMPC（MIT 为 0.26）。 */
-  T trot_period_time = T(0.26);
+  /** TROT 周期，s；必须等于 MPC 预测窗 10 段 x dtMPC。 */
+  T trot_period_time = T(0.30);
 
   /** @brief 检查枚举、周期和切换相是否可用。 */
   bool isValid() const noexcept;
@@ -140,7 +139,10 @@ struct GaitData
     return probabilities;
   }
 
-  /** 返回状态估计器使用的平滑接触可信度，降低触地/离地边界的约束权重。 */
+  /**
+   * 返回 MIT 风格的连续支撑相位：支撑相为 [0, 1] 的相位进度，摆动相为 0。
+   * 该量只供状态估计器使用；WBC/MPC 接触拓扑仍由二值状态决定。
+   */
   std::array<T, kNumLegs> estimatorContactProbabilities() const noexcept
   {
     std::array<T, kNumLegs> probabilities{};
@@ -148,17 +150,13 @@ struct GaitData
       probabilities.fill(T(1));
       return probabilities;
     }
-    constexpr T transition_fraction = T(0.2);
     for (std::size_t index = 0; index < kNumLegs; ++index) {
       const Eigen::Index foot = static_cast<Eigen::Index>(index);
       if (contact_state_scheduled(foot) == 0) {
         probabilities[index] = T(0);
         continue;
       }
-      const T phase = std::clamp(phase_stance(foot), T(0), T(1));
-      probabilities[index] = std::clamp(
-        std::min(phase / transition_fraction,
-        (T(1) - phase) / transition_fraction), T(0), T(1));
+      probabilities[index] = std::clamp(phase_stance(foot), T(0), T(1));
     }
     return probabilities;
   }
@@ -187,22 +185,6 @@ public:
 
   /** @brief 推进一个控制周期。 */
   void step();
-  /**
-   * @brief 对齐 STAND_CYCLE 动作时钟：下一次 step() 后的时间等于 time，单位 s。
-   * 其他步态下不起作用。
-   */
-  /** 设置 STAND_CYCLE 摆动腿掩码（4 号 FL+RR，5 号 FR）。 */
-  void setStandCycleSwingLegs(const std::array<bool, kNumLegs> & legs) noexcept
-  {
-    stand_cycle_swing_ = legs;
-  }
-  void setStandCycleTime(T time) noexcept
-  {
-    if (gait_data.current_gait != GaitType::STAND_CYCLE) {return;}
-    gait_data.initial_phase = std::clamp(
-      (time - dt_) / gait_data.period_time_nominal, T(0), T(1));
-  }
-
   /** @brief 更新由上层传入的步态参数快照。 */
   void setParameters(const GaitSchedulerParameters<T> & parameters);
 
@@ -223,6 +205,14 @@ public:
 
   /** @brief 打印当前步态与四腿相位。 */
   void printGaitInfo() const;
+
+  /**
+   * @brief 返回本控制周期的统一步态快照。
+   *
+   * 当前接触/摆动数据来自调度器；MPC 表按 MIT 约定从下一离散段开始。
+   * 此函数只读，不推进步态相位。
+   */
+  GaitFrame<T> gaitFrame(std::size_t horizon) const;
 
   /** @brief 返回最近一次参数快照。 */
   const GaitSchedulerParameters<T> & parameters() const noexcept
@@ -248,7 +238,6 @@ private:
 
   GaitSchedulerParameters<T> parameters_{};
   T dt_ = T(0);
-  std::array<bool, kNumLegs> stand_cycle_swing_{false, true, true, false};
 };
 
 static_assert(kNumLegs == 4, "GaitScheduler requires exactly four legs");

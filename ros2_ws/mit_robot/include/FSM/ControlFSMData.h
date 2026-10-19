@@ -12,7 +12,6 @@
 
 #include "controller/GaitScheduler.hpp"
 #include "controller/leg_controller.hpp"
-#include "controller/RlPolicy.hpp"
 #include "model/quadruped.hpp"
 #include "model/robot_control_parameters.hpp"
 #include "model/robot_types.hpp"
@@ -29,17 +28,13 @@ struct ControlFSMData
   const std::array < JointState < T >, kNumLegs > * joint_states = nullptr;
   LegController < T > *leg_controller = nullptr;
   GaitScheduler < T > *gait_scheduler = nullptr;
+  /** One immutable gait snapshot shared by estimation, MPC, WBC and swing. */
+  GaitFrame<T> gait_frame{};
   DesiredState < T > *desired_state = nullptr;
   //参数 控制周期
   T control_time_step = T(0.001);
   bool use_wbc = true;
-  GaitType locomotion_gait = GaitType::TROT_WALK;
-  // 4 号一次抬落结束后再次按 4：由 Locomotion 消费并从头重新执行一次。
-  bool stand_cycle_restart_requested = false;
-  // BalanceStand uses the RL joint reference while this posture transition is
-  // active; this flag is not itself a locomotion mode.
-  bool rl_entry_posture_active = false;
-  RlPolicyPtr rl_policy;
+  GaitType locomotion_gait = GaitType::TROT;
 
   bool valid() const noexcept
   {

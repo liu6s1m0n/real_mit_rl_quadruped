@@ -39,13 +39,12 @@ ros2 launch mymit_robot dm1_display.launch.py
 ## 统一模型契约
 
 完整参数见 `config/dm1_model_contract.yaml`。四腿顺序固定为 `FR, FL, RR, RL`，
-每腿关节顺序固定为 `hip, thigh, calf`。MuJoCo、RL 和真机都使用电机坐标：
+每腿关节顺序固定为 `hip, thigh, calf`。MuJoCo 和真机都使用电机坐标：
 12 个电机零位为全零，机械安装零偏由控制器统一处理为 `(0, -0.203, -2.22)`。
 
 站姿目标为四腿统一 `[0, -0.597, 1.004] rad`，
 标称机身高度为 `0.32 m`。
-MuJoCo 仿真使用 `0.002 s` 物理步长，平地 RL policy 以 `50 Hz` 运行，
-stairs checkpoint 仅作为仿真基线，未标记为可直接部署策略。
+MuJoCo 仿真使用 `0.002 s` 物理步长，经典 MPC/WBC 控制链按 500 Hz 运行。
 
 真实电机接入使用 `include/hardware/dm1_mit_interface.hpp`：必须显式提供
 12 个电机 ID、方向和零位，并在发送前通过反馈超时、温度、电压、驱动器故障

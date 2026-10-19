@@ -1,9 +1,6 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -106,7 +103,7 @@ struct Report
   std::size_t missing_contacts = 0;
 };
 
-Report runFullBridge(HardwareSimulationOptions settings, int motion_key = '2')
+Report runFullBridge(HardwareSimulationOptions settings)
 {
   Plant plant(settings);
   Dm1HardwareDriver driver("sim0", "sim1", plant.devices->imuDevice(), plant.calibration, plant.devices.get());
@@ -115,19 +112,6 @@ Report runFullBridge(HardwareSimulationOptions settings, int motion_key = '2')
   options.keyboard_control = true;
   options.torque_limit_nm = settings.torque_limit_nm;
   Report report;
-  std::ofstream truth_log;
-  if (motion_key == '3') {
-    if (const char * dir = std::getenv("DM1_LOG_DIR")) {
-      std::filesystem::create_directories(dir);
-      truth_log.open(std::filesystem::path(dir) / ("dm1_truth_four_contact_" +
-        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".csv"));
-      truth_log << "t_s,fsm,ready,true_z,true_roll,true_pitch,actual_contacts";
-      for (const auto * leg : {"FR", "FL", "RR", "RL"}) {
-        for (const auto * joint : {"hip", "thigh", "calf"}) {truth_log << ',' << leg << '_' << joint << "_q_true";}
-      }
-      truth_log << '\n';
-    }
-  }
   auto start = HardwareSimulation::Clock::time_point{};
   bool enable_sent = false, stand_sent = false, march_sent = false, stop_sent = false;
   bool ready = false;
@@ -140,8 +124,8 @@ Report runFullBridge(HardwareSimulationOptions settings, int motion_key = '2')
     int key = 0;
     if (elapsed > 0.25 && !enable_sent) {enable_sent = true; key = 'U';}
     else if (elapsed > 1.8 && !stand_sent) {stand_sent = true; key = '1';}
-    else if (report.standing >= 350 && ready && !march_sent) {march_sent = true; key = motion_key;}
-    else if (report.marching >= (motion_key == '3' ? 1500U : 700U) && !stop_sent) {stop_sent = true; key = ' ';}
+    else if (report.standing >= 350 && ready && !march_sent) {march_sent = true; key = '2';}
+    else if (report.marching >= 700U && !stop_sent) {stop_sent = true; key = ' ';}
     else if (stop_sent && report.stop_returned_to_stand) {key = 27;}
     if (settings.weak_joint >= 0 && report.weak_tracking_error > 0.4 && elapsed > 4) {key = 27;}
     if (elapsed > 18) {stop.store(true);}
@@ -169,7 +153,7 @@ Report runFullBridge(HardwareSimulationOptions settings, int motion_key = '2')
       std::lock_guard<std::recursive_mutex> lock(plant.mutex);
       const char * legs[] = {"FR", "FL", "RR", "RL"};
       const char * axes[] = {"hip", "thigh", "calf"};
-      if (motion_key == '3' && (ready || state == FSM_StateName::LOCOMOTION)) {
+      if (ready || state == FSM_StateName::LOCOMOTION) {
         const int trunk = mj_name2id(plant.model.get(), mjOBJ_BODY, "trunk");
         const auto * rotation = plant.data->xmat + 9 * trunk;
         const double z = plant.data->xpos[3 * trunk + 2];
@@ -190,18 +174,6 @@ Report runFullBridge(HardwareSimulationOptions settings, int motion_key = '2')
           }
         }
         if (state == FSM_StateName::LOCOMOTION && contacts != 4) {++report.missing_contacts;}
-        if (truth_log.is_open()) {
-          truth_log << std::fixed << std::setprecision(9) << estimate.timestamp << ','
-                    << (state == FSM_StateName::LOCOMOTION ? "LOCOMOTION" : "BALANCE_STAND")
-                    << ',' << ready << ',' << z << ',' << roll << ',' << pitch << ',' << contacts;
-          for (const auto * leg : legs) {
-            for (const auto * axis : axes) {
-              const int joint = mj_name2id(plant.model.get(), mjOBJ_JOINT, (std::string(leg) + "_" + axis + "_joint").c_str());
-              truth_log << ',' << plant.data->qpos[plant.model->jnt_qposadr[joint]];
-            }
-          }
-          truth_log << '\n';
-        }
       }
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         for (std::size_t axis = 0; axis < kJointsPerLeg; ++axis) {
@@ -251,24 +223,6 @@ TEST(Dm1FullHardwareSimulation, CompleteBridgeStandsMarchesAndStops)
   EXPECT_TRUE(report.stop_returned_to_stand);
   EXPECT_TRUE(report.disabled);
   EXPECT_GT(report.writes, 1200U);
-}
-
-TEST(Dm1FullHardwareSimulation, Key3StandingFeedbackMatchesPhysicalModel)
-{
-  const auto report = runFullBridge({}, '3');
-  EXPECT_EQ(report.result, 0);
-  EXPECT_GE(report.marching, 1500U);
-  EXPECT_EQ(report.fallback, 0U);
-  EXPECT_EQ(report.missing_contacts, 0U);
-  EXPECT_GT(report.min_height, 0.30);
-  EXPECT_LT(report.height_estimation_error, 0.015);
-  EXPECT_LT(report.roll_estimation_error, 0.02);
-  EXPECT_LT(report.pitch_estimation_error, 0.02);
-  EXPECT_TRUE(report.stop_returned_to_stand);
-  EXPECT_TRUE(report.disabled);
-  std::printf("key3_comparison height_error=%.6f roll_error=%.6f pitch_error=%.6f missing_contacts=%zu\n",
-    report.height_estimation_error, report.roll_estimation_error,
-    report.pitch_estimation_error, report.missing_contacts);
 }
 
 TEST(Dm1FullHardwareSimulation, MissingCalfOutputExposesTrackingFailure)

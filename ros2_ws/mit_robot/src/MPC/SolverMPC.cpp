@@ -1,6 +1,6 @@
 /**
  * @file SolverMPC.cpp
- * @brief MIT Cheetah 凸 MPC：13 维线性模型、矩阵指数离散、稠密 QP 和 QuadProg++ 求解。
+ * @brief MIT Cheetah 凸 MPC：13 维线性模型、矩阵指数离散、稠密 QP 和 qpOASES 求解。
  */
 
 #include "MPC/SolverMPC.h"
@@ -16,7 +16,7 @@
 
 #include <unsupported/Eigen/MatrixFunctions>
 
-#include "Utilities/QuadProg++.hh"
+#include "Utilities/QpOases.hpp"
 
 // 与 MIT convexMPC/SolverMPC.cpp 的 ct_ss_mats / c2qp / solve_mpc 一一对应。
 // 内部统一用 double 计算，避免 float 下 B'SB 条件数过大。
@@ -155,9 +155,11 @@ SolverResult<T> SolverMPC<T>::solve(
   std::vector<Eigen::Matrix<double, kStates, kInputs>> input_response(horizon);
   for (std::size_t k = 0; k < horizon; ++k) {input_response[k] = powers[k] * b_dt;}
 
-  // 初始状态与 MIT 一致：[rpy, p, omega_world, v, -g]。
+  // MIT convex MPC 的内部姿态顺序为 [yaw, pitch, roll]。
   Eigen::Matrix<double, kStates, 1> x0;
-  x0 << state.rpy.template cast<double>(), body_position,
+  x0 << static_cast<double>(state.rpy.z()),
+    static_cast<double>(state.rpy.y()),
+    static_cast<double>(state.rpy.x()), body_position,
     state.angular_velocity_world.template cast<double>(),
     state.velocity_world.template cast<double>(), -kGravity;
 
@@ -168,7 +170,8 @@ SolverResult<T> SolverMPC<T>::solve(
     const auto & desired = trajectory[static_cast<std::size_t>(r)];
     const Eigen::Vector3d desired_rpy = desired.body_rpy.template cast<double>();
     Eigen::Matrix<double, kStates, 1> x_desired;
-    x_desired << desired_rpy, desired.body_position_world.template cast<double>(),
+    x_desired << desired_rpy.z(), desired_rpy.y(), desired_rpy.x(),
+      desired.body_position_world.template cast<double>(),
       rotationFromRpy(desired_rpy) * desired.body_angular_velocity.template cast<double>(),
       desired.body_velocity_world.template cast<double>(), 0.0;
     for (Eigen::Index i = 0; i < kInputs; ++i) {
@@ -212,7 +215,7 @@ SolverResult<T> SolverMPC<T>::solve(
   VecD gradient = 2.0 * (weighted_b.transpose() * free_error);
 
   // 四棱锥摩擦：mu fz ± fx >= 0、mu fz ± fy >= 0；法向力 fmin <= fz <= fmax。
-  // QuadProg++ 约定 CI' x + ci0 >= 0。
+  // 先按原 MIT 形式构造余量，再转换为 qpOASES 的行上下界。
   const double mu = static_cast<double>(settings_.friction_coefficient);
   const Eigen::Index constraints = static_cast<Eigen::Index>(variables.size() * 6);
   MatD ci = MatD::Zero(n, constraints);
@@ -228,16 +231,22 @@ SolverResult<T> SolverMPC<T>::solve(
     ci(x + 2, c + 4) = 1.0; ci0(c + 4) = -force_min[leg];
     ci(x + 2, c + 5) = -1.0; ci0(c + 5) = force_max[leg];
   }
-  const MatD ce = MatD::Zero(n, 0);
-  const VecD ce0 = VecD::Zero(0);
   VecD solution = VecD::Zero(n);
   const bool diagnostics = std::getenv("DM1_MPC_DIAGNOSTICS") != nullptr &&
     std::getenv("DM1_MPC_DIAGNOSTICS")[0] == '1';
   const auto qp_start = std::chrono::steady_clock::now();
-  const double cost = solve_quadprog(hessian, gradient, ce, ce0, ci, ci0, solution);
+  const MatD qp_constraints = ci.transpose();
+  const VecD variable_lower = VecD::Constant(n, -qp_adapter::kInfinity);
+  const VecD variable_upper = VecD::Constant(n, qp_adapter::kInfinity);
+  const VecD constraint_lower = -ci0;
+  const VecD constraint_upper = VecD::Constant(constraints, qp_adapter::kInfinity);
+  double cost = std::numeric_limits<double>::infinity();
+  const bool solved = qp_adapter::solve(
+    hessian, gradient, qp_constraints, variable_lower, variable_upper,
+    constraint_lower, constraint_upper, solution, &cost);
   const double qp_elapsed_ms = std::chrono::duration<double, std::milli>(
     std::chrono::steady_clock::now() - qp_start).count();
-  if (!std::isfinite(cost) || !solution.allFinite()) {
+  if (!solved || !std::isfinite(cost) || !solution.allFinite()) {
     if (diagnostics) {std::fprintf(stderr, "[MPC][DIAGNOSTIC] solve_failed qp_ms=%.6f\n", qp_elapsed_ms);}
     return SolverResult<T>{};
   }

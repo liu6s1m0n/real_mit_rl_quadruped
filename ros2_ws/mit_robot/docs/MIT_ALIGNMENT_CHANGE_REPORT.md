@@ -9,7 +9,9 @@ QP 耗时、求解失败和最小约束裕量日志。设置 `DM1_MPC_DIAGNOSTIC
 
 ```cpp
 VecD solution = VecD::Zero(n);
-const double cost = solve_quadprog(hessian, gradient, ce, ce0, ci, ci0, solution);
+const bool solved = qp_adapter::solve(
+  hessian, gradient, qp_constraints, variable_lower, variable_upper,
+  constraint_lower, constraint_upper, solution, &cost);
 if (!std::isfinite(cost) || !solution.allFinite()) {return SolverResult<T>{};}
 ```
 
@@ -20,7 +22,9 @@ VecD solution = VecD::Zero(n);
 const bool diagnostics = std::getenv("DM1_MPC_DIAGNOSTICS") != nullptr &&
   std::getenv("DM1_MPC_DIAGNOSTICS")[0] == '1';
 const auto qp_start = std::chrono::steady_clock::now();
-const double cost = solve_quadprog(hessian, gradient, ce, ce0, ci, ci0, solution);
+const bool solved = qp_adapter::solve(
+  hessian, gradient, qp_constraints, variable_lower, variable_upper,
+  constraint_lower, constraint_upper, solution, &cost);
 const double qp_elapsed_ms = std::chrono::duration<double, std::milli>(
   std::chrono::steady_clock::now() - qp_start).count();
 if (!std::isfinite(cost) || !solution.allFinite()) {
@@ -158,7 +162,7 @@ TEST(Dm1Contract, MpcTracePreservesForceTrajectoryAndReportsTimeStep)
   const auto log = ::testing::internal::GetCapturedStderr();
   EXPECT_EQ(quiet.force_trajectory, logged.force_trajectory);
   EXPECT_EQ(quiet.cost, logged.cost);
-  EXPECT_NE(log.find("t_s=2.5 dt_mpc_s=0.026"), std::string::npos);
+  EXPECT_NE(log.find("t_s=2.5 dt_mpc_s=0.030"), std::string::npos);
   EXPECT_NE(log.find("min_constraint_margin="), std::string::npos);
 }
 ```
