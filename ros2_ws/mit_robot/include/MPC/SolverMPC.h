@@ -37,6 +37,9 @@ struct SolverSettings
     T(0), T(0.25), T(10), T(2), T(2), T(50),
     T(0), T(0), T(0), T(0.2), T(0.2), T(0.1)};
 
+  // MPC 计算重心相对机身原点的机身系偏移，m；仅修正求解，不改机械模型。
+  Vec3<T> com_offset_body = Vec3<T>::Zero();
+
   /** @brief 检查预测时域、力约束和权重是否有效。 */
   bool isValid() const noexcept;
 };

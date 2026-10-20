@@ -27,6 +27,8 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   mpc::SolverSettings<T> solver_settings;
   solver_settings.time_step =
     control_fsm_data->control_time_step * static_cast<T>(mpc_interval);
+  // 重心校准恢复为零偏移，MPC 使用原机身参考位置。
+  solver_settings.com_offset_body.setZero();
   //创建 MPC 控制器。传入:机器人模型；控制周期；MPC 步态时间间隔。  
   mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
     *control_fsm_data->quadruped, control_fsm_data->control_time_step,
@@ -158,6 +160,16 @@ FSM_StateName FSM_State_Locomotion<T>::checkTransition()
     return this->nextStateName;
   }
 
+  // 一次对角踏步落地后回站；外层桥接会清除锁存运动，等待下一次按键。
+  if (!entry_transition_active_ &&
+    (applied_gait_ == GaitType::TWO_LEG_STAND ||
+    applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE) &&
+    this->_data->locomotion_gait == applied_gait_ &&
+    this->_data->gait_scheduler->gait_data.initial_phase >= T(1) &&
+    this->_data->desired_state->mode == ControlMode::Locomotion)
+  {
+    this->_data->desired_state->mode = ControlMode::BalanceStand;
+  }
   const ControlMode requested_mode = this->_data->desired_state->mode;
   this->nextStateName = this->stateForMode(requested_mode);
   this->transitionDuration = T(0);
@@ -279,6 +291,15 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   auto & trajectory = swing_trajectories_.at(leg);
   trajectory.reset();
   trajectory.setInitialPosition(initial_position);
+  if (applied_gait_ == GaitType::TWO_LEG_STAND ||
+    applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE)
+  {
+    // 原地抬落一次：复用 TROT 的 Bezier 轨迹，落点固定为本次离地位置。
+    trajectory.setFinalPosition(initial_position);
+    trajectory.setHeight(swing_height_);
+    swing_active_[leg] = true;
+    return;
+  }
   // 落脚点必须相对当前机身/髋部规划，不能在上一次世界足点上反复累加步长；
   // 否则机身稍有打滑，脚就会越走越远并最终把腿拉直。
   const auto & estimate = *this->_data->state_estimate;
@@ -434,22 +455,6 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       // 支撑时足端位置任务不会加入 WBC；同步当前值仅用于诊断，并清除上一摆动态。
       swing_active_[leg] = false;
       wbc_data_.pFoot_des[leg] = feet_world[leg];
-      wbc_data_.vFoot_des[leg].setZero();
-      wbc_data_.aFoot_des[leg].setZero();
-      continue;
-    }
-
-    if (applied_gait_ == GaitType::TWO_LEG_STAND ||
-      applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE)
-    {
-      // Lift the non-support diagonal once and hold it in place. The body
-      // task, contact constraints, and MPC forces still run through WBC.
-      if (!swing_active_[leg]) {
-        two_leg_hold_targets_[leg] = feet_world[leg];
-        two_leg_hold_targets_[leg].z() += swing_height_;
-        swing_active_[leg] = true;
-      }
-      wbc_data_.pFoot_des[leg] = two_leg_hold_targets_[leg];
       wbc_data_.vFoot_des[leg].setZero();
       wbc_data_.aFoot_des[leg].setZero();
       continue;

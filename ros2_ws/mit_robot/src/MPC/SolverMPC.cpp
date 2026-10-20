@@ -10,7 +10,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -62,7 +64,8 @@ bool SolverSettings<T>::isValid() const noexcept
     friction_coefficient > T(0) && minimum_normal_force >= T(0) &&
     maximum_normal_force >= minimum_normal_force &&
     std::isfinite(static_cast<double>(alpha)) && alpha > T(0) &&
-    std::isfinite(static_cast<double>(x_drag)) && x_drag >= T(0) && weights_valid;
+    std::isfinite(static_cast<double>(x_drag)) && x_drag >= T(0) && weights_valid &&
+    com_offset_body.allFinite() && com_offset_body.norm() <= T(0.05);
 }
 
 template<typename T>
@@ -128,9 +131,16 @@ SolverResult<T> SolverMPC<T>::solve(
   Eigen::Matrix<double, kStates, kInputs> b_ct =
     Eigen::Matrix<double, kStates, kInputs>::Zero();
   const Eigen::Vector3d body_position = state.position_world.template cast<double>();
+  // 所有 MPC 平移状态和接触力臂使用同一个计算重心；外部仍使用机身原点。
+  const Eigen::Vector3d com_offset_world =
+    state.rotation_world_from_body.template cast<double>() *
+    settings_.com_offset_body.template cast<double>();
+  const Eigen::Vector3d com_position = body_position + com_offset_world;
+  const Eigen::Vector3d com_velocity = state.velocity_world.template cast<double>() +
+    state.angular_velocity_world.template cast<double>().cross(com_offset_world);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const Eigen::Vector3d lever =
-      state.foot_position_world[leg].template cast<double>() - body_position;
+      state.foot_position_world[leg].template cast<double>() - com_position;
     const Eigen::Index column = static_cast<Eigen::Index>(leg * 3);
     b_ct.block<3, 3>(6, column) = inertia_inverse * skew(lever);
     b_ct.block<3, 3>(9, column) = Eigen::Matrix3d::Identity() / mass;
@@ -159,21 +169,31 @@ SolverResult<T> SolverMPC<T>::solve(
   Eigen::Matrix<double, kStates, 1> x0;
   x0 << static_cast<double>(state.rpy.z()),
     static_cast<double>(state.rpy.y()),
-    static_cast<double>(state.rpy.x()), body_position,
+    static_cast<double>(state.rpy.x()), com_position,
     state.angular_velocity_world.template cast<double>(),
-    state.velocity_world.template cast<double>(), -kGravity;
+    com_velocity, -kGravity;
 
   // ---------- 权重 S 与参考轨迹 X_d ----------
+  const bool diagnostics = std::getenv("DM1_MPC_DIAGNOSTICS") != nullptr &&
+    std::getenv("DM1_MPC_DIAGNOSTICS")[0] == '1';
+  VecD reference = diagnostics ? VecD(kStates * steps) : VecD{};
   VecD weights(kStates * steps);
   VecD free_error(kStates * steps);
   for (Eigen::Index r = 0; r < steps; ++r) {
     const auto & desired = trajectory[static_cast<std::size_t>(r)];
     const Eigen::Vector3d desired_rpy = desired.body_rpy.template cast<double>();
+    const Eigen::Matrix3d desired_rotation = rotationFromRpy(desired_rpy);
+    const Eigen::Vector3d desired_omega_world =
+      desired_rotation * desired.body_angular_velocity.template cast<double>();
+    const Eigen::Vector3d desired_offset_world =
+      desired_rotation * settings_.com_offset_body.template cast<double>();
     Eigen::Matrix<double, kStates, 1> x_desired;
     x_desired << desired_rpy.z(), desired_rpy.y(), desired_rpy.x(),
-      desired.body_position_world.template cast<double>(),
-      rotationFromRpy(desired_rpy) * desired.body_angular_velocity.template cast<double>(),
-      desired.body_velocity_world.template cast<double>(), 0.0;
+      desired.body_position_world.template cast<double>() + desired_offset_world,
+      desired_omega_world,
+      desired.body_velocity_world.template cast<double>() +
+      desired_omega_world.cross(desired_offset_world), 0.0;
+    if (diagnostics) {reference.segment<kStates>(kStates * r) = x_desired;}
     for (Eigen::Index i = 0; i < kInputs; ++i) {
       weights(kStates * r + i) =
         static_cast<double>(settings_.state_weights[static_cast<std::size_t>(i)]);
@@ -191,9 +211,43 @@ SolverResult<T> SolverMPC<T>::solve(
     }
   }
   result.force_trajectory.assign(horizon * 12, T(0));
+  // 仅记录求解实际使用的状态/参考，顺序为每步 [yaw pitch roll p omega_world v -g]。
+  if (diagnostics) {
+    std::ostringstream line;
+    line << std::setprecision(17) << "[MPC][INPUT] t_s=" << state.timestamp
+         << " dt_mpc_s=" << settings_.time_step << " horizon=" << horizon
+         << " mass=" << mass << " mu=" << settings_.friction_coefficient
+         << " alpha=" << settings_.alpha << " x_drag=" << settings_.x_drag
+         << " x0=[" << x0.transpose() << "] x_ref=[" << reference.transpose()
+         << "] state_weights=[";
+    for (const auto value : settings_.state_weights) {line << value << ' ';}
+    line << "] inertia_body_row_major=[";
+    for (int row = 0; row < 3; ++row) {line << inertia_body.row(row) << ' ';}
+    line << "] foot_world=[";
+    for (const auto & foot : state.foot_position_world) {line << foot.transpose() << ' ';}
+    line << "] force_min=[";
+    for (const auto value : force_min) {line << value << ' ';}
+    line << "] force_max=[";
+    for (const auto value : force_max) {line << value << ' ';}
+    line << "] contact_table=[";
+    for (const auto value : contact_table) {line << value << ' ';}
+    line << "]\n";
+    std::fputs(line.str().c_str(), stderr);
+  }
+  const auto trace_result = [&]() {
+      if (!diagnostics) {return;}
+      std::ostringstream line;
+      line << std::setprecision(17) << "[MPC][RESULT] t_s=" << state.timestamp
+           << " valid=" << result.valid << " converged=" << result.converged
+           << " cost=" << result.cost << " force_trajectory=[";
+      for (const auto force : result.force_trajectory) {line << force << ' ';}
+      line << "]\n";
+      std::fputs(line.str().c_str(), stderr);
+    };
   if (variables.empty()) {
     result.converged = true;
     result.valid = true;
+    trace_result();
     return result;
   }
 
@@ -232,8 +286,6 @@ SolverResult<T> SolverMPC<T>::solve(
     ci(x + 2, c + 5) = -1.0; ci0(c + 5) = force_max[leg];
   }
   VecD solution = VecD::Zero(n);
-  const bool diagnostics = std::getenv("DM1_MPC_DIAGNOSTICS") != nullptr &&
-    std::getenv("DM1_MPC_DIAGNOSTICS")[0] == '1';
   const auto qp_start = std::chrono::steady_clock::now();
   const MatD qp_constraints = ci.transpose();
   const VecD variable_lower = VecD::Constant(n, -qp_adapter::kInfinity);
@@ -247,7 +299,7 @@ SolverResult<T> SolverMPC<T>::solve(
   const double qp_elapsed_ms = std::chrono::duration<double, std::milli>(
     std::chrono::steady_clock::now() - qp_start).count();
   if (!solved || !std::isfinite(cost) || !solution.allFinite()) {
-    if (diagnostics) {std::fprintf(stderr, "[MPC][DIAGNOSTIC] solve_failed qp_ms=%.6f\n", qp_elapsed_ms);}
+    if (diagnostics) {std::fprintf(stderr, "[MPC][DIAGNOSTIC] t_s=%.9g valid=0 solve_failed qp_ms=%.6f\n", static_cast<double>(state.timestamp), qp_elapsed_ms);}
     return SolverResult<T>{};
   }
 
@@ -260,9 +312,12 @@ SolverResult<T> SolverMPC<T>::solve(
     }
     std::fprintf(stderr,
       "[MPC][DIAGNOSTIC] t_s=%.9g dt_mpc_s=%.9g horizon=%zu contact_variables=%zu cost=%.9g "
-      "min_constraint_margin=%.9g qp_ms=%.6f\n",
+      "min_constraint_margin=%.9g qp_ms=%.6f com_offset_body_m=(%.6f,%.6f,%.6f)\n",
       static_cast<double>(state.timestamp), static_cast<double>(settings_.time_step),
-      horizon, variables.size(), cost, minimum_constraint_margin, qp_elapsed_ms);
+      horizon, variables.size(), cost, minimum_constraint_margin, qp_elapsed_ms,
+      static_cast<double>(settings_.com_offset_body.x()),
+      static_cast<double>(settings_.com_offset_body.y()),
+      static_cast<double>(settings_.com_offset_body.z()));
   }
 
   for (std::size_t v = 0; v < variables.size(); ++v) {
@@ -282,6 +337,7 @@ SolverResult<T> SolverMPC<T>::solve(
   result.cost = static_cast<T>(cost);
   result.converged = true;
   result.valid = true;
+  trace_result();
   return result;
 }
 

@@ -298,6 +298,7 @@ TEST(Dm1Contract, EnablingWbcDiagnosticsDoesNotChangeControlCommands)
 
 TEST(Dm1Contract, WbcTraceObservesRepeatedTimeFailuresAndRecoveryWithoutChangingCommands)
 {
+  DiagnosticEnvironment full_trace("1", "DM1_CONTROL_DIAGNOSTICS_FULL");
   test_support::FsmContext context(0.002F);
   LocomotionCtrl<float> quiet(model::makeFloatingBaseModel(context.quadruped));
   LocomotionCtrl<float> logged(model::makeFloatingBaseModel(context.quadruped));
@@ -349,6 +350,23 @@ TEST(Dm1Contract, WbcTraceObservesRepeatedTimeFailuresAndRecoveryWithoutChanging
       const auto residual = diagnosticVector(log, "dynamics_residual");
       ASSERT_EQ(residual.size(), 6U + kNumJoints);
       for (const float value : residual) {EXPECT_NEAR(value, 0.0F, 2.0e-4F);}
+      EXPECT_NE(log.find("[WBC][DIAGNOSTIC]"), std::string::npos) << log;
+      EXPECT_EQ(diagnosticVector(log, "task0_vel_des").size(), 3U);
+      EXPECT_EQ(diagnosticVector(log, "task1_acc_des").size(), 3U);
+      EXPECT_EQ(diagnosticVector(log, "task1_command").size(), 3U);
+      EXPECT_EQ(diagnosticVector(log, "qddot_wbc").size(), 18U);
+      EXPECT_EQ(diagnosticVector(log, "gravity").size(), 18U);
+      EXPECT_EQ(diagnosticVector(log, "coriolis").size(), 18U);
+      const auto force_des = diagnosticVector(log, "contact0_force_des");
+      ASSERT_EQ(force_des.size(), 3U);
+      EXPECT_FLOAT_EQ(force_des[2], input.Fr_des[0].z());
+      EXPECT_EQ(diagnosticVector(log, "reaction_force").size(), frame == 7 ? 6U : 12U);
+      if (frame == 7) {
+        EXPECT_EQ(diagnosticVector(log, "task2_command").size(), 3U);
+        EXPECT_EQ(diagnosticVector(log, "task3_command").size(), 3U);
+      }
+    } else {
+      EXPECT_EQ(log.find("[WBC][DIAGNOSTIC]"), std::string::npos);
     }
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       const auto & a = quiet_legs.commands[leg];
@@ -379,18 +397,184 @@ TEST(Dm1Contract, MpcTracePreservesForceTrajectoryAndReportsTimeStep)
   desired.valid = true;
   desired.body_position_world << 0.0, 0.0, 0.27;
   const std::vector<DesiredState<double>> trajectory(settings.horizon, desired);
-  std::vector<int> contacts(settings.horizon * kNumLegs, 1);
-  mpc::SolverResult<double> quiet, logged;
-  {DiagnosticEnvironment diagnostics("0", "DM1_MPC_DIAGNOSTICS"); quiet = solver.solve(state, trajectory, contacts);}
-  ::testing::internal::CaptureStderr();
-  {DiagnosticEnvironment diagnostics("1", "DM1_MPC_DIAGNOSTICS"); logged = solver.solve(state, trajectory, contacts);}
-  const auto log = ::testing::internal::GetCapturedStderr();
-  ASSERT_TRUE(quiet.valid);
-  ASSERT_TRUE(logged.valid);
-  EXPECT_EQ(quiet.force_trajectory, logged.force_trajectory);
-  EXPECT_EQ(quiet.cost, logged.cost);
-  EXPECT_NE(log.find("t_s=2.5 dt_mpc_s=0.03"), std::string::npos) << log;
-  EXPECT_NE(log.find("min_constraint_margin="), std::string::npos);
+  for (int mode = 0; mode < 4; ++mode) {
+    SCOPED_TRACE(mode);
+    std::vector<int> contacts(settings.horizon * kNumLegs, mode == 3 ? 0 : 1);
+    if (mode == 1 || mode == 2) {
+      // 两种对角支撑先摆动再落地，验证完整预测窗而非仅第一步。
+      for (std::size_t step = 0; step < settings.horizon / 2; ++step) {
+        contacts[step * kNumLegs + (mode == 1 ? 1 : 0)] = 0;
+        contacts[step * kNumLegs + (mode == 1 ? 2 : 3)] = 0;
+      }
+    }
+    mpc::SolverResult<double> quiet, logged;
+    {DiagnosticEnvironment diagnostics("0", "DM1_MPC_DIAGNOSTICS"); quiet = solver.solve(state, trajectory, contacts);}
+    ::testing::internal::CaptureStderr();
+    {DiagnosticEnvironment diagnostics("1", "DM1_MPC_DIAGNOSTICS"); logged = solver.solve(state, trajectory, contacts);}
+    const auto log = ::testing::internal::GetCapturedStderr();
+    ASSERT_TRUE(quiet.valid);
+    ASSERT_TRUE(logged.valid);
+    EXPECT_EQ(quiet.force_trajectory, logged.force_trajectory);
+    EXPECT_EQ(quiet.cost, logged.cost);
+    EXPECT_NE(log.find("t_s=2.5"), std::string::npos) << log;
+    const auto dt_field = log.find("dt_mpc_s=");
+    ASSERT_NE(dt_field, std::string::npos);
+    EXPECT_DOUBLE_EQ(std::stod(log.substr(dt_field + 9)), settings.time_step);
+    if (mode != 3) {EXPECT_NE(log.find("min_constraint_margin="), std::string::npos);}
+    const auto contact_trace = diagnosticVector(log, "contact_table");
+    ASSERT_EQ(contact_trace.size(), contacts.size());
+    for (std::size_t i = 0; i < contacts.size(); ++i) {EXPECT_EQ(contact_trace[i], contacts[i]);}
+    const auto forces = diagnosticVector(log, "force_trajectory");
+    ASSERT_EQ(forces.size(), logged.force_trajectory.size());
+    for (std::size_t i = 0; i < forces.size(); ++i) {
+      EXPECT_FLOAT_EQ(forces[i], static_cast<float>(logged.force_trajectory[i]));
+      if (!contacts[i / 3]) {EXPECT_FLOAT_EQ(forces[i], 0.0F);}
+    }
+    const auto initial = diagnosticVector(log, "x0");
+    ASSERT_EQ(initial.size(), 13U);
+    EXPECT_FLOAT_EQ(initial[5], 0.27F);
+    EXPECT_FLOAT_EQ(initial[12], -9.81F);
+    const auto reference = diagnosticVector(log, "x_ref");
+    ASSERT_EQ(reference.size(), settings.horizon * 13);
+    for (std::size_t step = 0; step < settings.horizon; ++step) {
+      EXPECT_FLOAT_EQ(reference[step * 13 + 5], 0.27F);
+      EXPECT_FLOAT_EQ(reference[step * 13 + 12], 0.0F);
+    }
+    EXPECT_EQ(diagnosticVector(log, "foot_world").size(), 12U);
+    EXPECT_EQ(diagnosticVector(log, "state_weights").size(), 12U);
+    EXPECT_EQ(diagnosticVector(log, "inertia_body_row_major").size(), 9U);
+    EXPECT_EQ(diagnosticVector(log, "force_min").size(), 4U);
+    EXPECT_EQ(diagnosticVector(log, "force_max").size(), 4U);
+  }
+}
+
+TEST(Dm1Contract, MpcComOffsetDefaultsToZeroAndRejectsInvalidCalibration)
+{
+  const auto robot = robots::dm1::makeModel<double>();
+  mpc::SolverSettings<double> settings;
+  EXPECT_TRUE(settings.com_offset_body.isZero());
+  EXPECT_TRUE(settings.isValid());
+  settings.com_offset_body.x() = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(settings.isValid());
+  EXPECT_THROW((mpc::SolverMPC<double>(robot, settings)), std::invalid_argument);
+  settings.com_offset_body << -0.051, 0.0, 0.0;
+  EXPECT_FALSE(settings.isValid());
+  EXPECT_THROW((mpc::SolverMPC<double>(robot, settings)), std::invalid_argument);
+}
+
+TEST(Dm1Contract, MpcRearwardComOffsetIncreasesRearSupportLoad)
+{
+  const auto robot = robots::dm1::makeModel<double>();
+  mpc::SolverSettings<double> settings;
+  StateEstimate<double> estimate;
+  estimate.valid = true;
+  estimate.position_world << 0.0, 0.0, 0.28;
+  const std::array<Vec3<double>, kNumLegs> feet{
+    Vec3<double>(0.2, -0.13, 0.0), Vec3<double>(0.2, 0.13, 0.0),
+    Vec3<double>(-0.2, -0.13, 0.0), Vec3<double>(-0.2, 0.13, 0.0)};
+  const auto state = mpc::RobotState<double>::fromEstimate(estimate, feet);
+  DesiredState<double> desired;
+  desired.valid = true;
+  desired.body_position_world = estimate.position_world;
+  const std::vector<DesiredState<double>> trajectory(settings.horizon, desired);
+  const std::vector<int> contacts(settings.horizon * kNumLegs, 1);
+  const auto baseline = mpc::SolverMPC<double>(robot, settings).solve(
+    state, trajectory, contacts);
+  settings.com_offset_body.x() = -0.010;
+  const auto corrected = mpc::SolverMPC<double>(robot, settings).solve(
+    state, trajectory, contacts);
+  ASSERT_TRUE(baseline.valid);
+  ASSERT_TRUE(corrected.valid);
+  const auto & before = baseline.reaction_forces_world;
+  const auto & after = corrected.reaction_forces_world;
+  EXPECT_GT(after[2].z() + after[3].z(), before[2].z() + before[3].z() + 0.2);
+  EXPECT_LT(after[0].z() + after[1].z(), before[0].z() + before[1].z() - 0.2);
+  EXPECT_NEAR(after[0].z(), after[1].z(), 0.1);
+  EXPECT_NEAR(after[2].z(), after[3].z(), 0.1);
+  double total_before = 0.0;
+  double total_after = 0.0;
+  double weighted_support_x = 0.0;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    total_before += before[leg].z();
+    total_after += after[leg].z();
+    weighted_support_x += feet[leg].x() * after[leg].z();
+  }
+  // 首段预测力不是静态平衡解；校准应主要改变分配，而非总竖直力。
+  EXPECT_NEAR(total_after, total_before, 0.1);
+  EXPECT_NEAR(weighted_support_x / total_after, -0.010, 0.003);
+}
+
+TEST(Dm1Contract, MpcComOffsetMatchesExplicitComStateAtDifferentHeadings)
+{
+  const auto robot = robots::dm1::makeModel<double>();
+  mpc::SolverSettings<double> settings;
+  settings.com_offset_body.x() = -0.010;
+  const auto zero_settings = mpc::SolverSettings<double>{};
+  // 参考求解器显式接收计算重心状态；同时覆盖不同朝向、倾斜和角速度。
+  for (const double yaw : {0.0, 1.5707963267948966}) {
+    SCOPED_TRACE(yaw);
+    StateEstimate<double> estimate;
+    estimate.valid = true;
+    estimate.position_world << 0.4, -0.3, 0.28;
+    estimate.rpy << 0.08, -0.06, yaw;
+    estimate.orientation_world_from_body =
+      Eigen::AngleAxisd(yaw, Vec3<double>::UnitZ()) *
+      Eigen::AngleAxisd(estimate.rpy.y(), Vec3<double>::UnitY()) *
+      Eigen::AngleAxisd(estimate.rpy.x(), Vec3<double>::UnitX());
+    estimate.rotation_world_from_body = estimate.orientation_world_from_body.toRotationMatrix();
+    estimate.velocity_world << 0.08, -0.03, 0.01;
+    estimate.angular_velocity_body << 0.12, -0.09, 0.21;
+    const std::array<Vec3<double>, kNumLegs> feet{
+      Vec3<double>(0.6, -0.43, 0.0), Vec3<double>(0.6, -0.17, 0.0),
+      Vec3<double>(0.2, -0.43, 0.0), Vec3<double>(0.2, -0.17, 0.0)};
+    const auto state = mpc::RobotState<double>::fromEstimate(estimate, feet);
+    auto com_state = state;
+    const Vec3<double> offset_world = estimate.rotation_world_from_body * settings.com_offset_body;
+    com_state.position_world += offset_world;
+    com_state.velocity_world += state.angular_velocity_world.cross(offset_world);
+    DesiredState<double> desired;
+    desired.valid = true;
+    desired.body_position_world = estimate.position_world + Vec3<double>(0.01, -0.02, 0.0);
+    desired.body_rpy = estimate.rpy + Vec3<double>(0.02, -0.015, 0.03);
+    desired.body_velocity_world << 0.06, -0.04, 0.01;
+    desired.body_angular_velocity << 0.11, -0.08, 0.19;
+    std::vector<DesiredState<double>> trajectory(settings.horizon, desired);
+    auto com_trajectory = trajectory;
+    for (std::size_t step = 0; step < trajectory.size(); ++step) {
+      trajectory[step].body_rpy.z() += 0.003 * step;
+      trajectory[step].body_position_world.x() += 0.002 * step;
+      com_trajectory[step] = trajectory[step];
+      const auto & rpy = trajectory[step].body_rpy;
+      const Mat3<double> rotation = (Eigen::AngleAxisd(rpy.z(), Vec3<double>::UnitZ()) *
+        Eigen::AngleAxisd(rpy.y(), Vec3<double>::UnitY()) *
+        Eigen::AngleAxisd(rpy.x(), Vec3<double>::UnitX())).toRotationMatrix();
+      const Vec3<double> reference_offset = rotation * settings.com_offset_body;
+      const Vec3<double> omega_world = rotation * trajectory[step].body_angular_velocity;
+      com_trajectory[step].body_position_world += reference_offset;
+      com_trajectory[step].body_velocity_world += omega_world.cross(reference_offset);
+    }
+    // 四脚支撑和按键 3/4 的两种对角支撑，摆动脚必须保持零规划反力。
+    for (const int mask : {15, 9, 6}) {
+      SCOPED_TRACE(mask);
+      std::vector<int> contacts(settings.horizon * kNumLegs);
+      for (std::size_t step = 0; step < settings.horizon; ++step) {
+        for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+          contacts[step * kNumLegs + leg] = (mask >> leg) & 1;
+        }
+      }
+      const auto actual = mpc::SolverMPC<double>(robot, settings).solve(state, trajectory, contacts);
+      const auto expected = mpc::SolverMPC<double>(robot, zero_settings).solve(
+        com_state, com_trajectory, contacts);
+      ASSERT_TRUE(actual.valid);
+      ASSERT_TRUE(expected.valid);
+      ASSERT_EQ(actual.force_trajectory.size(), expected.force_trajectory.size());
+      for (std::size_t i = 0; i < actual.force_trajectory.size(); ++i) {
+        EXPECT_NEAR(actual.force_trajectory[i], expected.force_trajectory[i], 1.0e-7);
+        const auto leg = (i % 12) / 3;
+        if (!((mask >> leg) & 1)) {EXPECT_DOUBLE_EQ(actual.force_trajectory[i], 0.0);}
+      }
+    }
+  }
 }
 
 TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)

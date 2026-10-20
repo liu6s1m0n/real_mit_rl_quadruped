@@ -17,6 +17,7 @@
 
 #include "RobotRunner.hpp"
 #include "SimulationActuatorWriter.hpp"
+#include "teleop/operator_command.hpp"
 #include "MPC/ConvexMPCLocomotion.h"
 #include "WBC/WBC_Ctrl/BodyOriTask.hpp"
 #include "model/floating_base_model_factory.hpp"
@@ -599,91 +600,100 @@ TEST(Dm1MpcWalkGate, TwoLegStandBypassesEntryGate)
   EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
 }
 
-TEST(Dm1MpcWalkDiagnostic, TwoLegStandCommandsBothFeetUp)
+void verifySingleDiagonalStep(int key, GaitType gait)
 {
   auto model = loadModel();
   auto data = makeData(model.get());
   RobotRunner runner(model.get(), data.get(), RobotType::DM1);
   SimulationActuatorWriter writer(model.get());
   ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
-  runner.setLocomotionGait(GaitType::TWO_LEG_STAND);
-  std::array<double, kNumLegs> maximum_commanded_lift{};
-  for (int step = 0; step < 250; ++step) {
-    runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
-    runner.setControlMode(ControlMode::Locomotion);
-    ASSERT_TRUE(runner.run());
-    if (runner.gaitScheduler().gait_data.current_gait == GaitType::TWO_LEG_STAND) {
-      EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
-      for (const std::size_t leg : {1U, 2U}) {
-        const auto leg_id = static_cast<LegId>(leg);
-        Vec3<float> commanded_foot;
-        Vec3<float> measured_joint;
-        for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-          const int id = mj_name2id(model.get(), mjOBJ_JOINT, kJointNames[leg][joint]);
-          measured_joint[joint] = data->qpos[model->jnt_qposadr[id]];
+  teleop::OperatorCommandArbiter arbiter;
+  arbiter.apply(teleop::decodeKey('U').value());
+  arbiter.markEnabled();
+  const std::array<const char *, kNumLegs> foot_names{
+    "FR_foot", "FL_foot", "RR_foot", "RL_foot"};
+  std::array<int, kNumLegs> foot_ids{};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    foot_ids[leg] = mj_name2id(model.get(), mjOBJ_BODY, foot_names[leg]);
+    ASSERT_GE(foot_ids[leg], 0);
+  }
+  const int trunk = mj_name2id(model.get(), mjOBJ_BODY, "trunk");
+  // 模拟正式桥接的锁存命令，落地回站后清除；同一个键再次按下可重做。
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    SCOPED_TRACE(repeat);
+    std::array<int, kNumLegs> liftoffs{}, touchdowns{};
+    std::array<bool, kNumLegs> previous_contact{true, true, true, true};
+    std::array<double, kNumLegs> initial_height{}, maximum_lift{};
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      initial_height[leg] = data->xpos[3 * foot_ids[leg] + 2];
+    }
+    int completion_step = -1;
+    int first_swing_step = -1;
+    int last_swing_step = -1;
+    arbiter.apply(teleop::decodeKey(key).value());
+    for (int step = 0; step < 800; ++step) {
+      if (arbiter.motionActive()) {
+        runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+        runner.setLocomotionGait(gait);
+        runner.setControlMode(ControlMode::Locomotion);
+      }
+      const auto before = runner.currentStateName();
+      ASSERT_TRUE(runner.run());
+      const auto & scheduled = runner.gaitScheduler().gait_data;
+      if (scheduled.current_gait == gait) {
+        for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+          const bool contact = scheduled.contactScheduled(static_cast<LegId>(leg));
+          liftoffs[leg] += previous_contact[leg] && !contact;
+          touchdowns[leg] += !previous_contact[leg] && contact;
+          previous_contact[leg] = contact;
+          if (!contact) {
+            if (first_swing_step < 0) {first_swing_step = step;}
+            last_swing_step = step;
+          }
         }
-        Vec3<float> measured_foot;
-        computeLegJacobianAndPosition(runner.quadruped(), measured_joint,
-          static_cast<Mat3<float> *>(nullptr), &measured_foot, leg_id);
-        computeLegJacobianAndPosition(runner.quadruped(),
-          runner.jointCommands()[leg].position_desired,
-          static_cast<Mat3<float> *>(nullptr), &commanded_foot, leg_id);
-        const double lift = (runner.stateEstimate().rotation_world_from_body *
-          (commanded_foot - measured_foot)).z();
-        maximum_commanded_lift[leg] = std::max(maximum_commanded_lift[leg], lift);
+      }
+      if (before == FSM_StateName::LOCOMOTION &&
+        runner.currentStateName() == FSM_StateName::BALANCE_STAND && arbiter.motionActive())
+      {
+        arbiter.stopMotion();
+        runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+        completion_step = step;
+      }
+      if (completion_step >= 0) {
+        EXPECT_EQ(runner.currentStateName(), FSM_StateName::BALANCE_STAND);
+      }
+      writer.write(runner, data.get(), true);
+      mj_step(model.get(), data.get());
+      EXPECT_GT(data->xpos[3 * trunk + 2], 0.26);
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        maximum_lift[leg] = std::max(maximum_lift[leg],
+          data->xpos[3 * foot_ids[leg] + 2] - initial_height[leg]);
       }
     }
-    writer.write(runner, data.get(), true);
-    mj_step(model.get(), data.get());
+    ASSERT_GE(first_swing_step, 0);
+    EXPECT_NEAR((last_swing_step - first_swing_step + 1) * 0.002, 0.15, 0.004);
+    ASSERT_GE(completion_step, last_swing_step);
+    EXPECT_LT(completion_step * 0.002, 0.45);
+    EXPECT_FALSE(arbiter.motionActive());
+    EXPECT_EQ(runner.gaitScheduler().gait_data.current_gait, GaitType::STAND);
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const bool swing = gait == GaitType::TWO_LEG_STAND ?
+        (leg == 1 || leg == 2) : (leg == 0 || leg == 3);
+      EXPECT_EQ(liftoffs[leg], swing ? 1 : 0);
+      EXPECT_EQ(touchdowns[leg], swing ? 1 : 0);
+      if (swing) {EXPECT_GT(maximum_lift[leg], 0.010);}
+      EXPECT_LT(std::abs(data->xpos[3 * foot_ids[leg] + 2] - initial_height[leg]), 0.010);
+    }
   }
-  EXPECT_EQ(runner.gaitScheduler().gait_data.current_gait, GaitType::TWO_LEG_STAND);
-  EXPECT_GT(maximum_commanded_lift[1], 0.005);
-  EXPECT_GT(maximum_commanded_lift[2], 0.005);
 }
 
-TEST(Dm1MpcWalkDiagnostic, TwoLegStandReverseCommandsTheOtherFeetUp)
+TEST(Dm1MpcWalkDiagnostic, TwoLegStandStepsOnceLandsAndCanRepeat)
 {
-  auto model = loadModel();
-  auto data = makeData(model.get());
-  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
-  SimulationActuatorWriter writer(model.get());
-  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
-  runner.setLocomotionGait(GaitType::TWO_LEG_STAND_REVERSE);
-  std::array<double, kNumLegs> maximum_commanded_lift{};
-  for (int step = 0; step < 250; ++step) {
-    runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
-    runner.setControlMode(ControlMode::Locomotion);
-    ASSERT_TRUE(runner.run());
-    if (runner.gaitScheduler().gait_data.current_gait ==
-      GaitType::TWO_LEG_STAND_REVERSE)
-    {
-      EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
-      for (const std::size_t leg : {0U, 3U}) {
-        const auto leg_id = static_cast<LegId>(leg);
-        Vec3<float> commanded_foot;
-        Vec3<float> measured_joint;
-        for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-          const int id = mj_name2id(model.get(), mjOBJ_JOINT, kJointNames[leg][joint]);
-          measured_joint[joint] = data->qpos[model->jnt_qposadr[id]];
-        }
-        Vec3<float> measured_foot;
-        computeLegJacobianAndPosition(runner.quadruped(), measured_joint,
-          static_cast<Mat3<float> *>(nullptr), &measured_foot, leg_id);
-        computeLegJacobianAndPosition(runner.quadruped(),
-          runner.jointCommands()[leg].position_desired,
-          static_cast<Mat3<float> *>(nullptr), &commanded_foot, leg_id);
-        const double lift = (runner.stateEstimate().rotation_world_from_body *
-          (commanded_foot - measured_foot)).z();
-        maximum_commanded_lift[leg] = std::max(maximum_commanded_lift[leg], lift);
-      }
-    }
-    writer.write(runner, data.get(), true);
-    mj_step(model.get(), data.get());
-  }
-  EXPECT_EQ(
-    runner.gaitScheduler().gait_data.current_gait,
-    GaitType::TWO_LEG_STAND_REVERSE);
-  EXPECT_GT(maximum_commanded_lift[0], 0.005);
-  EXPECT_GT(maximum_commanded_lift[3], 0.005);
+  verifySingleDiagonalStep('3', GaitType::TWO_LEG_STAND);
+}
+
+TEST(Dm1MpcWalkDiagnostic, TwoLegStandReverseStepsOnceLandsAndCanRepeat)
+{
+  verifySingleDiagonalStep('4', GaitType::TWO_LEG_STAND_REVERSE);
 }
 }  // namespace

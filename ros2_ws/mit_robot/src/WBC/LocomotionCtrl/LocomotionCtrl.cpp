@@ -1,6 +1,10 @@
 #include "WBC/LocomotionCtrl/LocomotionCtrl.hpp"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -187,6 +191,26 @@ bool LocomotionCtrl<T>::prepareTasksAndContacts(const void * input)
   const auto & input_data = *static_cast<const LocomotionCtrlData<T> *>(input);  // 上层 MPC/WBC 输入快照。
   if (!input_data.allFinite()) {return false;}
   active_contact_state_ = input_data.contact_state;
+  const char * full_diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS_FULL");
+  if (full_diagnostics && full_diagnostics[0] == '1') {
+    std::ostringstream line;
+    line << std::setprecision(9) << "[WBC][INPUT] body_p=[" << input_data.pBody_des.transpose()
+         << "] body_v=[" << input_data.vBody_des.transpose() << "] body_a=["
+         << input_data.aBody_des.transpose() << "] body_rpy=["
+         << input_data.pBody_RPY_des.transpose() << "] body_omega=["
+         << input_data.vBody_Ori_des.transpose() << "] contact_state=[";
+    for (const auto value : input_data.contact_state) {line << value << ' ';}
+    line << "] foot_p=[";
+    for (const auto & value : input_data.pFoot_des) {line << value.transpose() << ' ';}
+    line << "] foot_v=[";
+    for (const auto & value : input_data.vFoot_des) {line << value.transpose() << ' ';}
+    line << "] foot_a=[";
+    for (const auto & value : input_data.aFoot_des) {line << value.transpose() << ' ';}
+    line << "] force_des=[";
+    for (const auto & value : input_data.Fr_des) {line << value.transpose() << ' ';}
+    line << "]\n";
+    std::fputs(line.str().c_str(), stderr);
+  }
 
   // 外部输入使用易读的 RPY，姿态任务内部使用主动 body->world 四元数，
   // 以避免直接相减欧拉角；这里显式使用 ZYX 主动旋转顺序。

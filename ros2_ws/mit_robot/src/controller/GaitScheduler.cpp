@@ -26,6 +26,11 @@ bool overrideModeIsValid(GaitOverrideMode mode) noexcept
          static_cast<std::uint8_t>(GaitOverrideMode::OVERRIDE_NATURAL_TIMING);
 }
 
+bool isSingleDiagonalStep(GaitType gait) noexcept
+{
+  return gait == GaitType::TWO_LEG_STAND || gait == GaitType::TWO_LEG_STAND_REVERSE;
+}
+
 template<typename T>
 bool timingIsValid(T period_time, T switching_phase) noexcept
 {
@@ -162,9 +167,11 @@ void GaitScheduler<T>::step()
 {
   modifyGait();
 
+  const bool single_step = isSingleDiagonalStep(gait_data.current_gait);
+
   if (gait_data.current_gait != GaitType::STAND) {
-    gait_data.initial_phase = wrapPhase(
-      gait_data.initial_phase + dt_ / gait_data.period_time_nominal);
+    const T next_phase = gait_data.initial_phase + dt_ / gait_data.period_time_nominal;
+    gait_data.initial_phase = single_step ? std::min(next_phase, T(1)) : wrapPhase(next_phase);
   }
 
   for (std::size_t index = 0; index < kNumLegs; ++index) {
@@ -186,12 +193,13 @@ void GaitScheduler<T>::step()
 
     const T phase_increment = gait_data.current_gait == GaitType::STAND ?
       T(0) : gait_data.phase_scale(foot) * dt_ / gait_data.period_time_nominal;
-    gait_data.phase_variable(foot) = wrapPhase(
+    gait_data.phase_variable(foot) = single_step ? gait_data.initial_phase : wrapPhase(
       gait_data.phase_variable(foot) + phase_increment);
 
     const T phase = gait_data.phase_variable(foot);
     const T switch_phase = gait_data.switching_phase(foot);
     const bool in_stance =
+      (single_step && phase >= T(1)) ||
       switch_phase >= T(1) || (switch_phase > T(0) && phase <= switch_phase);
 
     if (in_stance) {
@@ -202,7 +210,7 @@ void GaitScheduler<T>::step()
         phase / switch_phase, T(0), T(1));
       gait_data.phase_swing(foot) = T(0);
       gait_data.time_stance_remaining(foot) =
-        gait_data.period_time(foot) * (switch_phase - phase);
+        gait_data.period_time(foot) * std::max(T(0), switch_phase - phase);
       gait_data.time_swing_remaining(foot) = T(0);
       gait_data.touchdown_scheduled(foot) =
         gait_data.contact_state_previous(foot) == 0 ? 1 : 0;
@@ -323,17 +331,19 @@ void GaitScheduler<T>::createGait()
       break;
 
     case GaitType::TWO_LEG_STAND:
-      // FR+RL remain fixed contacts; FL+RR are held by the WBC swing task.
+      // FR+RL 支撑；FL+RR 只执行一次与 TROT 同时长的摆动，随后四脚支撑。
       configureGait(
         "TWO_LEG_STAND", parameters_.trot_period_time, T(0.5), all_legs,
         Vec4<T>::Zero(), unit_scale, false);
+      gait_data.initial_phase = T(0.5);
       break;
 
     case GaitType::TWO_LEG_STAND_REVERSE:
-      // FL+RR remain fixed contacts; FR+RL are held by the WBC swing task.
+      // 同样的一次踏步，仅交换支撑腿和摆动腿。
       configureGait(
         "TWO_LEG_STAND_REVERSE", parameters_.trot_period_time, T(0.5), all_legs,
         Vec4<T>::Zero(), unit_scale, false);
+      gait_data.initial_phase = T(0.5);
       break;
 
     case GaitType::TROT_RUN:
@@ -431,7 +441,7 @@ void GaitScheduler<T>::calculateAuxiliaryGaitData()
       gait_data.switching_phase(foot) =
         (gait_data.current_gait == GaitType::TWO_LEG_STAND ||
         gait_data.current_gait == GaitType::TWO_LEG_STAND_REVERSE) ?
-        (support_leg ? T(1) : T(0)) : gait_data.switching_phase_nominal;
+        (support_leg ? T(1) : T(0.5)) : gait_data.switching_phase_nominal;
       gait_data.phase_variable(foot) = wrapPhase(
         gait_data.initial_phase + gait_data.phase_offset(foot));
       gait_data.time_stance(foot) =
@@ -496,13 +506,15 @@ GaitFrame<T> GaitScheduler<T>::gaitFrame(std::size_t horizon) const
 
   // phase_variable includes each leg's phase_offset.  Recover the common gait
   // phase, then apply MIT's iteration + 1 prediction for every MPC row.
-  const T base_phase = wrapPhase(
+  const bool single_step = isSingleDiagonalStep(gait_data.current_gait);
+  const T base_phase = single_step ? gait_data.initial_phase : wrapPhase(
     gait_data.phase_variable(0) - gait_data.phase_offset(0));
   const std::size_t current_segment = std::min(
     horizon - 1,
     static_cast<std::size_t>(base_phase * static_cast<T>(horizon)));
   for (std::size_t step = 0; step < horizon; ++step) {
-    const std::size_t segment = (current_segment + step + 1) % horizon;
+    const std::size_t segment = single_step ? current_segment + step + 1 :
+      (current_segment + step + 1) % horizon;
     const T phase = static_cast<T>(segment) / static_cast<T>(horizon);
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       const Eigen::Index foot = static_cast<Eigen::Index>(leg);
@@ -510,6 +522,7 @@ GaitFrame<T> GaitScheduler<T>::gaitFrame(std::size_t horizon) const
       const T local_phase = wrapPhase(phase + gait_data.phase_offset(foot));
       const T switching = gait_data.switching_phase(foot);
       frame.mpc_table[step * kNumLegs + leg] =
+        (single_step && phase >= T(1)) ||
         switching >= T(1) || (switching > T(0) && local_phase < switching) ? 1 : 0;
     }
   }

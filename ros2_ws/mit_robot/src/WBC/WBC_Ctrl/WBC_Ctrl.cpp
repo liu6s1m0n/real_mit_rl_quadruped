@@ -257,6 +257,8 @@ bool WBC_Ctrl<T>::runAndApply(
   constexpr double kControlCycleBudgetMs = 2.0;
   const char * diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS");
   const bool trace = diagnostics && diagnostics[0] == '1';
+  const char * full_diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS_FULL");
+  const bool full_trace = trace && full_diagnostics && full_diagnostics[0] == '1';
   // 诊断快照不参与控制；使用同一实例的上一周期，禁止跨实例共享历史。
   const auto previous = trace ? std::make_unique<Result>(result_) : nullptr;
   const T previous_timestamp = estimate_.timestamp;
@@ -319,7 +321,7 @@ bool WBC_Ctrl<T>::runAndApply(
     std::fputs(line.str().c_str(), stderr);
   }
   if (success && diagnostics && diagnostics[0] == '1' &&
-    (iteration_ <= 10 || iteration_ % 10 == 0))
+    (full_trace || iteration_ <= 10 || iteration_ % 10 == 0))
   {
     std::ostringstream line;
     line << std::setprecision(9) << "[WBC][DIAGNOSTIC] t_s=" << estimate.timestamp
@@ -331,6 +333,22 @@ bool WBC_Ctrl<T>::runAndApply(
          << " body_omega=[" << estimate.angular_velocity_body.transpose() << ']';
     for (std::size_t task = 0; task < tasks_.size(); ++task) {
       line << " task" << task << "_error=[" << tasks_[task]->getPosError().transpose() << ']';
+      if (full_trace) {
+        DVec<T> command;
+        tasks_[task]->getCommand(command);
+        line << " task" << task << "_vel_des=[" << tasks_[task]->getDesVel().transpose()
+             << "] task" << task << "_acc_des=[" << tasks_[task]->getDesAcc().transpose()
+             << "] task" << task << "_command=[" << command.transpose() << ']';
+      }
+    }
+    if (full_trace) {
+      line << " gravity=[" << gravity_.transpose() << "] coriolis=[" << coriolis_.transpose()
+           << "] reaction_force_weight=" << reaction_force_weight_;
+      // 接触按 FR/FL/RR/RL 中当前支撑腿的顺序紧凑排列，与 reaction_force 一致。
+      for (std::size_t contact = 0; contact < contacts_.size(); ++contact) {
+        line << " contact" << contact << "_force_des=["
+             << contacts_[contact]->getRFDesired().transpose() << ']';
+      }
     }
     line << " q_wbc=[" << (result_.joint_position - model_.getJointPositionOffsets()).transpose()
          << "] dq_wbc=[" << result_.joint_velocity.transpose()

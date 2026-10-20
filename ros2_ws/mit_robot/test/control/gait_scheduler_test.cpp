@@ -86,8 +86,8 @@ TEST(GaitSchedulerTest, TwoLegStandKeepsFrRlAndLiftsFlRr)
   const auto frame = scheduler.gaitFrame(horizon);
   for (std::size_t step = 0; step < horizon; ++step) {
     EXPECT_EQ(frame.mpc_table[step * kNumLegs + 0], 1);
-    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 1], 0);
-    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 2], 0);
+    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 1], step < horizon / 2 - 1 ? 0 : 1);
+    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 2], step < horizon / 2 - 1 ? 0 : 1);
     EXPECT_EQ(frame.mpc_table[step * kNumLegs + 3], 1);
   }
 }
@@ -103,10 +103,54 @@ TEST(GaitSchedulerTest, TwoLegStandReverseKeepsFlRrAndLiftsFrRl)
   EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(1), 1);
   EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(2), 1);
   EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(3), 0);
-  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(0), scheduler.gait_data.period_time(0));
-  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(3), scheduler.gait_data.period_time(3));
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(0), scheduler.gait_data.period_time(0) / 2);
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(3), scheduler.gait_data.period_time(3) / 2);
   EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(1), 0.0F);
   EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(2), 0.0F);
+}
+
+TEST(GaitSchedulerTest, SingleDiagonalStepsLandOnceAndNeverWrap)
+{
+  for (const auto gait : {GaitType::TWO_LEG_STAND, GaitType::TWO_LEG_STAND_REVERSE}) {
+    SCOPED_TRACE(static_cast<int>(gait));
+    GaitScheduler<float> scheduler(0.002F);
+    scheduler.step();  // 从完整支撑开始，统计真实离地和触地沿。
+    scheduler.requestGait(gait);
+    std::array<int, kNumLegs> liftoffs{}, touchdowns{};
+    int landing_step = -1;
+    for (int step = 0; step < 600; ++step) {
+      scheduler.step();
+      const auto & data = scheduler.gait_data;
+      const auto frame = scheduler.gaitFrame(10);
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        liftoffs[leg] += data.liftoff_scheduled(leg);
+        touchdowns[leg] += data.touchdown_scheduled(leg);
+        EXPECT_GE(data.time_stance_remaining(leg), 0.0F);
+        EXPECT_GE(data.time_swing_remaining(leg), 0.0F);
+        // MPC 在预测到落地后，不能再安排这条腿离地。
+        bool predicted_landed = false;
+        for (std::size_t row = 0; row < 10; ++row) {
+          const bool contact = frame.mpc_table[row * kNumLegs + leg] != 0;
+          if (predicted_landed) {EXPECT_TRUE(contact);}
+          predicted_landed = predicted_landed || contact;
+        }
+      }
+      if (data.initial_phase >= 1.0F) {
+        if (landing_step < 0) {landing_step = step;}
+        EXPECT_TRUE(data.contact_state_scheduled.isOnes());
+        EXPECT_TRUE(data.phase_swing.isZero());
+        for (const auto p : frame.contact_probability) {EXPECT_FLOAT_EQ(p, 1.0F);}
+        for (const int contact : frame.mpc_table) {EXPECT_EQ(contact, 1);}
+      }
+    }
+    EXPECT_NEAR((landing_step + 1) * 0.002, 0.15, 0.003);
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const bool swing = gait == GaitType::TWO_LEG_STAND ?
+        (leg == 1 || leg == 2) : (leg == 0 || leg == 3);
+      EXPECT_EQ(liftoffs[leg], swing ? 1 : 0);
+      EXPECT_EQ(touchdowns[leg], swing ? 1 : 0);
+    }
+  }
 }
 
 TEST(GaitSchedulerTest, EstimatorContactPhaseMatchesMitProgress)
