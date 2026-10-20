@@ -67,7 +67,7 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
 template<typename T>
 void FSM_State_Locomotion<T>::onEnter()
 {
-  this->_data->stand_handoff.pending = this->_data->stand_handoff.active = false;
+  this->_data->stand_handoff.pending = false;
   this->nextStateName = this->stateName;
   this->transitionData.zero();
   /*初始化 MPC 内部状态。包括：MPC 迭代器；步态相位；
@@ -188,12 +188,7 @@ TransitionData<T> FSM_State_Locomotion<T>::transition()
   {
     run();
     if (this->_data->use_wbc && this->_data->leg_controller->legsEnabled()) {
-      handoff.body.body_position_world = wbc_data_.pBody_des;
-      handoff.body.body_velocity_world = wbc_data_.vBody_des;
-      handoff.body.body_acceleration_world = wbc_data_.aBody_des;
-      handoff.body.body_rpy = wbc_data_.pBody_RPY_des;
-      handoff.body.body_angular_velocity = wbc_data_.vBody_Ori_des;
-      handoff.commands = this->_data->leg_controller->commands;
+      handoff.height = wbc_data_.pBody_des.z();
       handoff.pending = true;
     }
   }

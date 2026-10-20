@@ -36,14 +36,11 @@ struct ControlFSMData
   bool use_wbc = true;
   GaitType locomotion_gait = GaitType::TROT;
 
-  // One-shot handoff published only by a successful, normal locomotion exit.
+  // One-shot height reference published by a successful, normal locomotion exit.
   struct StandHandoff
   {
-    static constexpr T duration = T(0.1);
     bool pending = false;
-    bool active = false;
-    DesiredState<T> body;
-    std::array<LegControllerCommand<T>, kNumLegs> commands{};
+    T height = T(0);
   } stand_handoff;
 
   bool valid() const noexcept
