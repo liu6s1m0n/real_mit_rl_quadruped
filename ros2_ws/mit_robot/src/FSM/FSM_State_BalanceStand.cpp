@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "model/floating_base_model_factory.hpp"
+#include "MPC/RobotState.h"
 
 template<typename T>
 FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
@@ -43,7 +44,6 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
   wbc_ctrl_->setMaxNormalForce(parameters.maximum_normal_force);
 }
 
-/*仅在第一次启动，后续不会启动*/
 template<typename T>
 void FSM_State_BalanceStand<T>::onEnter()
 {
@@ -52,13 +52,13 @@ void FSM_State_BalanceStand<T>::onEnter()
   //请求站立步态
   this->_data->gait_scheduler->requestGait(GaitType::STAND);
 
-  // 进入状态时锁定当前水平位置和姿态，避免突然跳到世界原点。
-  //这样子就到导致了步行时刻突然切换站立直接翻到
+  // 普通入站从实测高度起身；正常回站继承最后一次 WBC 参考。
+  auto & handoff = this->_data->stand_handoff;
+  handoff.active = handoff.pending;
+  handoff.pending = false;
   initial_body_position_ = this->_data->state_estimate->position_world;
-  // 高度限速必须从真实趴卧高度开始；否则下面的有效低高度会被替换成
-  // 标称站立高度，导致首个 WBC 周期的高度目标发生跳变。
+  // 趴卧起身的高度限速从实测值开始。
   last_height_command_ = initial_body_position_.z();
-  //如果估计的机身高度低于20厘米，就认为高度估计不可靠，强行设置为30厘米。
   if (this->_data->control_parameters->start_in_prone_home &&
     initial_body_position_.z() <
     this->_data->control_parameters->minimum_standing_height)
@@ -68,10 +68,16 @@ void FSM_State_BalanceStand<T>::onEnter()
   // 世界航向沿用进入状态时的实测值，但站立目标始终保持机身水平。不能把
   // 切换瞬间的 roll/pitch 锁存为目标，否则已有倾斜会被 WBC 永久维持。
   initial_body_rpy_ << T(0), T(0), this->_data->state_estimate->rpy.z();
-  posture_ramp_iteration_ = 0;
-  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    entry_joint_positions_[leg] = this->_data->leg_controller->datas[leg].q;
+  if (handoff.active) {
+    initial_body_position_ = handoff.body.body_position_world;
+    initial_body_position_.template head<2>() +=
+      T(0.5) * handoff.duration * handoff.body.body_velocity_world.template head<2>();
+    last_height_command_ = handoff.body.body_position_world.z();
+    initial_body_rpy_.z() = handoff.body.body_rpy.z() + T(0.5) * handoff.duration *
+      mpc::RobotState<T>::rpyRateFromBodyAngularVelocity(
+      handoff.body.body_rpy, handoff.body.body_angular_velocity).z();
   }
+  posture_ramp_iteration_ = 0;
 }
 
 template<typename T>
@@ -117,14 +123,16 @@ template<typename T>
 void FSM_State_BalanceStand<T>::onExit()
 {
   iteration_ = 0;
+  this->_data->stand_handoff.active = false;
+  this->_data->stand_handoff.pending = false;
 }
 /*BalanceStandStep：真正的站立控制
             这是整个文件最重要的函数。*/
 template<typename T>
 void FSM_State_BalanceStand<T>::BalanceStandStep()
 {
-  // MIT BalanceStand：水平位置与航向锁定入场值，roll/pitch 保持水平，
-  // 仅高度跟随外部目标；速度、加速度目标均为零。
+  auto & handoff = this->_data->stand_handoff;
+  // 完成交接后锁定水平位置与航向，保持水平；高度继续跟随限速目标。
   wbc_data_.pBody_des = initial_body_position_;
   wbc_data_.vBody_des.setZero();
   wbc_data_.aBody_des.setZero();
@@ -133,7 +141,8 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
 
   //读取外部期望高度
   const DesiredState<T> & desired = *this->_data->desired_state;
-  if (desired.valid) {
+  // Keep the Hermite endpoint fixed during handoff; resume height commands afterwards.
+  if (desired.valid && !handoff.active) {
     wbc_data_.pBody_des.z() = desired.body_position_world.z();
   }
   // 额外限制单周期下降量，防止高度滑块快速下拉造成腿部瞬时折叠。
@@ -148,7 +157,43 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
   }
   last_height_command_ = wbc_data_.pBody_des.z();
 
-  // 四腿始终接触；期望反力取 mg/4 竖直分量，由 WBIC 在摩擦锥内修正。
+  const T u = std::min(T(1), T(posture_ramp_iteration_) *
+    this->_data->control_time_step / handoff.duration);
+  const T s = u * u * (T(3) - T(2) * u);
+  const T ds = T(6) * u * (T(1) - u) / handoff.duration;
+  if (handoff.active) {
+    // Quintic Hermite: preserve entry p/v/a and finish at rest.
+    const T u2 = u*u, u3 = u2*u, u4 = u3*u, u5 = u4*u;
+    const T h0 = T(1)-T(10)*u3+T(15)*u4-T(6)*u5;
+    const T h1 = u-T(6)*u3+T(8)*u4-T(3)*u5;
+    const T h2 = (u2-T(3)*u3+T(3)*u4-u5)/T(2);
+    const T d0 = -T(30)*u2+T(60)*u3-T(30)*u4;
+    const T d1 = T(1)-T(18)*u2+T(32)*u3-T(15)*u4;
+    const T d2 = (T(2)*u-T(9)*u2+T(12)*u3-T(5)*u4)/T(2);
+    const auto interpolate = [&](const Vec3<T> & start, const Vec3<T> & velocity,
+      const Vec3<T> & acceleration, Vec3<T> & position, Vec3<T> & speed, Vec3<T> & acc) {
+        const Vec3<T> delta = start-position;
+        position += h0*delta + handoff.duration*h1*velocity +
+          handoff.duration*handoff.duration*h2*acceleration;
+        speed = d0/handoff.duration*delta + d1*velocity + handoff.duration*d2*acceleration;
+        acc = (-T(60)*u+T(180)*u2-T(120)*u3)/(handoff.duration*handoff.duration)*delta +
+          (-T(36)*u+T(96)*u2-T(60)*u3)/handoff.duration*velocity +
+          (T(1)-T(9)*u+T(18)*u2-T(10)*u3)*acceleration;
+      };
+    interpolate(handoff.body.body_position_world, handoff.body.body_velocity_world,
+      handoff.body.body_acceleration_world, wbc_data_.pBody_des,
+      wbc_data_.vBody_des, wbc_data_.aBody_des);
+    Vec3<T> rpy_rate, unused_acceleration;
+    interpolate(handoff.body.body_rpy, mpc::RobotState<T>::rpyRateFromBodyAngularVelocity(
+      handoff.body.body_rpy, handoff.body.body_angular_velocity), Vec3<T>::Zero(),
+      wbc_data_.pBody_RPY_des, rpy_rate, unused_acceleration);
+    const T roll = wbc_data_.pBody_RPY_des.x(), pitch = wbc_data_.pBody_RPY_des.y();
+    wbc_data_.vBody_Ori_des << rpy_rate.x()-std::sin(pitch)*rpy_rate.z(),
+      std::cos(roll)*rpy_rate.y()+std::sin(roll)*std::cos(pitch)*rpy_rate.z(),
+      -std::sin(roll)*rpy_rate.y()+std::cos(roll)*std::cos(pitch)*rpy_rate.z();
+  }
+
+  // 四腿接触；期望反力 mg/4，由 WBIC 在摩擦锥内修正。
   const T support_force =
     this->_data->quadruped->totalMass() * T(9.81) / static_cast<T>(kNumLegs);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
@@ -191,8 +236,25 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
       static_cast<double>(maximum_feedforward_torque));
   }
 
-  // 四足接触（12 维约束）加机身 6 维任务已唯一确定构型，KinWBC 不存在
-  // 零空间漂移，因此与 MIT 一致直接使用 WBC 的 q_des/qd_des 与前馈力矩。
+  // Smooth only feedback references/gains; retain this frame's solved WBC torque.
+  if (handoff.active) {
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      auto & command = this->_data->leg_controller->commands[leg];
+      const auto & entry = handoff.commands[leg];
+      command.velocity_desired = (T(1)-u)*(T(1)-T(3)*u)*entry.velocity_desired +
+        s*command.velocity_desired + ds*(command.position_desired-entry.position_desired);
+      command.position_desired = (T(1)-s)*entry.position_desired + s*command.position_desired +
+        handoff.duration*u*(T(1)-u)*(T(1)-u)*entry.velocity_desired;
+      const auto & bounds = this->_data->quadruped->leg(static_cast<LegId>(leg)).joints;
+      command.position_desired = command.position_desired.cwiseMax(bounds.lower_limit).cwiseMin(bounds.upper_limit);
+      command.velocity_desired = command.velocity_desired.cwiseMax(-bounds.velocity_limit).cwiseMin(bounds.velocity_limit);
+      command.kp_joint = (T(1)-s)*entry.kp_joint + s*command.kp_joint;
+      command.kd_joint = (T(1)-s)*entry.kd_joint + s*command.kd_joint;
+      command.kd_cartesian = (T(1)-s)*entry.kd_cartesian;
+      command.foot_velocity_desired = entry.foot_velocity_desired;
+    }
+    if (u >= T(1)) {handoff.active = false;}
+  }
   ++posture_ramp_iteration_;
 }
 

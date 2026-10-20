@@ -732,6 +732,191 @@ TEST(Dm1Contract, UnsafeLocomotionLatchesBalanceStandWithoutRerunningController)
   EXPECT_EQ(desired.mode, ControlMode::BalanceStand);
   EXPECT_TRUE(locomotion.transition().done);
   EXPECT_TRUE(leg_controller.commands[0].position_desired.isConstant(0.123F));
+  EXPECT_FALSE(data.stand_handoff.pending);
+}
+
+TEST(Dm1Contract, NormalLocomotionExitPreservesHeightTargetsAndGains)
+{
+  DiagnosticEnvironment full("1", "DM1_CONTROL_DIAGNOSTICS_FULL");
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.estimate.position_world << 0.02F, -0.01F, 0.254F;
+  context.desired_state.body_position_world.z() = 0.28F;
+  context.desired_state.mode = ControlMode::Locomotion;
+  FSM_State_Locomotion<float> locomotion(&context.data());
+  locomotion.onEnter();
+  context.desired_state.mode = ControlMode::BalanceStand;
+  ASSERT_EQ(locomotion.checkTransition(), FSM_StateName::BALANCE_STAND);
+  ASSERT_TRUE(locomotion.transition().done);
+  auto & handoff = context.data().stand_handoff;
+  ASSERT_TRUE(handoff.pending);
+  EXPECT_FLOAT_EQ(handoff.body.body_position_world.z(), 0.28F);
+  const auto entry = handoff.commands;
+  locomotion.onExit();
+  FSM_State_BalanceStand<float> standing(&context.data());
+  standing.onEnter();
+  EXPECT_FALSE(handoff.pending);
+  ::testing::internal::CaptureStderr();
+  standing.run();
+  const auto log = ::testing::internal::GetCapturedStderr();
+  ASSERT_TRUE(context.leg_controller.legsEnabled()) << log;
+  const auto p = diagnosticVector(log, "body_p");
+  ASSERT_EQ(p.size(), 3U);
+  for (int axis = 0; axis < 3; ++axis) {
+    EXPECT_NEAR(p[axis], handoff.body.body_position_world[axis], 1.e-7F);
+  }
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & command = context.leg_controller.commands[leg];
+    EXPECT_TRUE(command.position_desired.isApprox(entry[leg].position_desired));
+    EXPECT_TRUE(command.velocity_desired.isApprox(entry[leg].velocity_desired));
+    EXPECT_TRUE(command.kp_joint.isApprox(entry[leg].kp_joint));
+    EXPECT_TRUE(command.kd_joint.isApprox(entry[leg].kd_joint));
+    EXPECT_TRUE(command.kd_cartesian.isApprox(entry[leg].kd_cartesian));
+  }
+  for (int i = 1; i <= 50; ++i) {
+    context.estimate.timestamp += 0.002F;
+    standing.run();
+  }
+  EXPECT_FALSE(handoff.active);
+  for (const auto & command : context.leg_controller.commands) {
+    EXPECT_TRUE(command.kp_joint.isApprox(context.parameters.balance_joint_kp));
+    EXPECT_TRUE(command.kd_joint.isApprox(context.parameters.balance_joint_kd));
+    EXPECT_TRUE(command.kd_cartesian.isZero());
+  }
+  standing.onExit();
+  standing.onEnter();
+  EXPECT_FALSE(handoff.active);
+}
+
+TEST(Dm1Contract, StandHandoffPreservesMovingBodyReferenceAndStopsSmoothly)
+{
+  DiagnosticEnvironment full("1", "DM1_CONTROL_DIAGNOSTICS_FULL");
+  DiagnosticEnvironment diagnostics("1");
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.estimate.position_world.z() = 0.254F;
+  context.desired_state.body_position_world.z() = 0.28F;
+  auto & h = context.data().stand_handoff;
+  h.pending = true;
+  h.body.body_position_world << 0.01F, -0.02F, 0.28F;
+  h.body.body_velocity_world << 0.08F, -0.04F, 0.F;
+  h.body.body_acceleration_world << 0.02F, -0.01F, 0.F;
+  h.body.body_rpy << 0.01F, -0.02F, 0.3F;
+  h.body.body_angular_velocity << 0.01F, -0.02F, 0.1F;
+  // A new height command waits for the reference handoff, then resumes its rate limit.
+  context.desired_state.body_position_world.z() = 0.30F;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    h.commands[leg].position_desired = context.joint_states[leg].position;
+    h.commands[leg].velocity_desired.setConstant(0.1F);
+  }
+  FSM_State_BalanceStand<float> standing(&context.data());
+  standing.onEnter();
+  std::array<Vec3<float>, 52> positions{}, velocities{}, accelerations{};
+  for (int i = 0; i <= 51; ++i) {
+    context.estimate.timestamp = i * 0.002F;
+    ::testing::internal::CaptureStderr();
+    standing.run();
+    const auto log = ::testing::internal::GetCapturedStderr();
+    ASSERT_TRUE(context.leg_controller.legsEnabled()) << log;
+    const auto p = diagnosticVector(log, "body_p");
+    const auto v = diagnosticVector(log, "body_v");
+    const auto a = diagnosticVector(log, "body_a");
+    const auto rpy = diagnosticVector(log, "body_rpy");
+    const auto omega = diagnosticVector(log, "body_omega");
+    ASSERT_EQ(p.size(), 3U);
+    ASSERT_EQ(v.size(), 3U);
+    ASSERT_EQ(a.size(), 3U);
+    ASSERT_EQ(rpy.size(), 3U);
+    ASSERT_EQ(omega.size(), 3U);
+    for (int axis = 0; axis < 3; ++axis) {
+      positions[i][axis] = p[axis];
+      velocities[i][axis] = v[axis];
+      accelerations[i][axis] = a[axis];
+    }
+    if (i == 0 || i >= 50) {
+      for (int axis = 0; axis < 3; ++axis) {
+        EXPECT_NEAR(v[axis], i == 0 ? h.body.body_velocity_world[axis] : 0.F, 1.e-6F);
+        EXPECT_NEAR(a[axis], i == 0 ? h.body.body_acceleration_world[axis] : 0.F, 1.e-5F);
+        EXPECT_NEAR(omega[axis], i == 0 ? h.body.body_angular_velocity[axis] : 0.F, 1.e-6F);
+        if (i == 0) {
+          EXPECT_NEAR(p[axis], h.body.body_position_world[axis], 1.e-7F);
+          EXPECT_NEAR(rpy[axis], h.body.body_rpy[axis], 1.e-7F);
+        }
+      }
+    }
+    if (i >= 50) {
+      EXPECT_NEAR(p[0], 0.014F, 1.e-7F);
+      EXPECT_NEAR(p[1], -0.022F, 1.e-7F);
+      EXPECT_NEAR(p[2], 0.28F + (i == 51 ? context.parameters.balance_height_step : 0.F), 1.e-7F);
+      EXPECT_NEAR(rpy[0], 0.F, 1.e-7F);
+      EXPECT_NEAR(rpy[1], 0.F, 1.e-7F);
+    }
+    const auto raw_tau = diagnosticVector(log, "ff_wbc");
+    const auto raw_q = diagnosticVector(log, "q_wbc");
+    if (!raw_tau.empty()) {
+      ASSERT_EQ(raw_tau.size(), kNumJoints);
+      ASSERT_EQ(raw_q.size(), kNumJoints);
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        for (int joint = 0; joint < 3; ++joint) {
+          EXPECT_NEAR(context.leg_controller.commands[leg].torque_feedforward[joint],
+            raw_tau[leg*3+joint], 1.e-5F);
+          if (i >= 50) {
+            EXPECT_NEAR(context.leg_controller.commands[leg].position_desired[joint],
+              raw_q[leg*3+joint], 1.e-6F);
+          }
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(((positions[26]-positions[24])/0.004F).isApprox(velocities[25], 0.002F));
+  EXPECT_TRUE(((velocities[26]-velocities[24])/0.004F).isApprox(accelerations[25], 0.002F));
+}
+
+TEST(Dm1Contract, StandWithoutHandoffRetainsMeasuredHeightRamp)
+{
+  DiagnosticEnvironment full("1", "DM1_CONTROL_DIAGNOSTICS_FULL");
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.estimate.position_world.z() = 0.12F;
+  context.desired_state.body_position_world.z() = 0.28F;
+  context.parameters.start_in_prone_home = true;
+  FSM_State_BalanceStand<float> standing(&context.data());
+  standing.onEnter();
+  ::testing::internal::CaptureStderr();
+  standing.run();
+  const auto p = diagnosticVector(::testing::internal::GetCapturedStderr(), "body_p");
+  ASSERT_EQ(p.size(), 3U);
+  EXPECT_NEAR(p[2], 0.12F + context.parameters.balance_height_step, 1.e-7F);
+}
+
+TEST(Dm1Contract, StandHandoffCannotMaskWbcFailure)
+{
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.data().stand_handoff.pending = true;
+  context.data().stand_handoff.body.body_position_world.z() = 0.28F;
+  context.desired_state.body_position_world.z() = 0.28F;
+  context.joint_states[0].valid = false;
+  FSM_State_BalanceStand<float> standing(&context.data());
+  standing.onEnter();
+  standing.run();
+  EXPECT_FALSE(context.leg_controller.legsEnabled());
+  for (const auto & command : context.leg_controller.commands) {
+    EXPECT_TRUE(command.kp_joint.isZero());
+    EXPECT_TRUE(command.kd_joint.isZero());
+  }
 }
 
 TEST(Dm1Contract, BalanceStandUsesMitWbcOnlyAndEqualGravitySupport)
