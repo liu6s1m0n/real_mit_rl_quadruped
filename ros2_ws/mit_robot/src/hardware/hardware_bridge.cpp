@@ -364,7 +364,11 @@ int HardwareBridge::runKeyboardControl(
       }
     }
     if (arbiter.motionActive()) {
-      if (!control_active || !runner_.standingReady()) {
+      const auto motion = arbiter.motion();
+      const bool two_leg_stand_experiment =
+        motion == teleop::Motion::TwoLegStand ||
+        motion == teleop::Motion::TwoLegStandReverse;
+      if (!control_active || (!runner_.standingReady() && !two_leg_stand_experiment)) {
         imu_log::print(
           imu_log::Level::Warning,
           "运动请求被拒绝：请先按 1 并等待进入 BalanceStand。\n");
@@ -373,12 +377,14 @@ int HardwareBridge::runKeyboardControl(
           runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
         }
       } else {
-        const auto velocity = teleop::velocityForMotion(arbiter.motion());
+        const auto velocity = teleop::velocityForMotion(motion);
         runner_.setLocomotionVelocityCommand(
           velocity.forward, velocity.lateral, velocity.yaw);
         runner_.setLocomotionGait(
-          arbiter.motion() == teleop::Motion::TwoLegStand ?
-          GaitType::TWO_LEG_STAND : GaitType::TROT);
+          two_leg_stand_experiment ?
+          (motion == teleop::Motion::TwoLegStandReverse ?
+          GaitType::TWO_LEG_STAND_REVERSE : GaitType::TWO_LEG_STAND) :
+          GaitType::TROT);
         runner_.setControlMode(ControlMode::Locomotion);
       }
     }

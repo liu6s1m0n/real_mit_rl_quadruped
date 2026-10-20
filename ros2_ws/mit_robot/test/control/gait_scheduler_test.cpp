@@ -66,6 +66,49 @@ TEST(GaitSchedulerTest, PreservesTrotDiagonalPhasePattern)
   EXPECT_FLOAT_EQ(probabilities[2], 0.0F);
 }
 
+TEST(GaitSchedulerTest, TwoLegStandKeepsFrRlAndLiftsFlRr)
+{
+  GaitScheduler<float> scheduler(0.002F);
+  scheduler.requestGait(GaitType::TWO_LEG_STAND);
+  scheduler.step();
+
+  EXPECT_EQ(scheduler.gait_data.current_gait, GaitType::TWO_LEG_STAND);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(0), 1);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(1), 0);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(2), 0);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(3), 1);
+  EXPECT_TRUE(scheduler.gait_data.time_swing(1) > 0.0F);
+  EXPECT_TRUE(scheduler.gait_data.time_swing(2) > 0.0F);
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(0), 0.0F);
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(3), 0.0F);
+
+  constexpr std::size_t horizon = 10;
+  const auto frame = scheduler.gaitFrame(horizon);
+  for (std::size_t step = 0; step < horizon; ++step) {
+    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 0], 1);
+    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 1], 0);
+    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 2], 0);
+    EXPECT_EQ(frame.mpc_table[step * kNumLegs + 3], 1);
+  }
+}
+
+TEST(GaitSchedulerTest, TwoLegStandReverseKeepsFlRrAndLiftsFrRl)
+{
+  GaitScheduler<float> scheduler(0.002F);
+  scheduler.requestGait(GaitType::TWO_LEG_STAND_REVERSE);
+  scheduler.step();
+
+  EXPECT_EQ(scheduler.gait_data.current_gait, GaitType::TWO_LEG_STAND_REVERSE);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(0), 0);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(1), 1);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(2), 1);
+  EXPECT_EQ(scheduler.gait_data.contact_state_scheduled(3), 0);
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(0), scheduler.gait_data.period_time(0));
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(3), scheduler.gait_data.period_time(3));
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(1), 0.0F);
+  EXPECT_FLOAT_EQ(scheduler.gait_data.time_swing(2), 0.0F);
+}
+
 TEST(GaitSchedulerTest, EstimatorContactPhaseMatchesMitProgress)
 {
   GaitScheduler<float> scheduler(0.002F);

@@ -115,7 +115,7 @@ std::string resolveImuDevice(const std::string & requested)
     !error && iterator != end; iterator.increment(error))
   {
     const std::string name = iterator->path().filename().string();
-    if (name.find("DM-IMU") != std::string::npos) {
+    if (name.find("DM-IMU") != std::string::npos) {// 匹配 DM-IMU 串口设备。
       candidates.push_back(iterator->path().string());
     }
   }

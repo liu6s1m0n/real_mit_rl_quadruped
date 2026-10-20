@@ -47,6 +47,8 @@ enum class Motion : std::uint8_t
   MarchInPlace,
   /// 双腿对角支撑重心测试，使用完整 MPC/WBC 链。
   TwoLegStand,
+  /// 反向双腿对角支撑重心测试，仅交换支撑腿组合。
+  TwoLegStandReverse,
 };
 
 struct VelocityCommand

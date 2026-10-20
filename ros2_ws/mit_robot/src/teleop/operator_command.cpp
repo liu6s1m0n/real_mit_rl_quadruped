@@ -22,6 +22,9 @@ std::optional<OperatorCommand> decodeKey(int key)
   } else if (key == '3') {
     command.type = CommandType::Motion;
     command.motion = Motion::TwoLegStand;
+  } else if (key == '4') {
+    command.type = CommandType::Motion;
+    command.motion = Motion::TwoLegStandReverse;
   } else if (key == 'p' || key == 'P') {
     command.type = CommandType::ProneDown;
   } else if (key == 'w' || key == 'W') {
@@ -72,6 +75,7 @@ VelocityCommand velocityForMotion(
     case Motion::RotateClockwise: return {0.0F, 0.0F, -profile.yaw};
     case Motion::MarchInPlace: return {0.0F, 0.0F, 0.0F};
     case Motion::TwoLegStand: return {0.0F, 0.0F, 0.0F};
+    case Motion::TwoLegStandReverse: return {0.0F, 0.0F, 0.0F};
   }
   return {};
 }

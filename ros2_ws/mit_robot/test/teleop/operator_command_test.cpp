@@ -35,7 +35,15 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   EXPECT_FLOAT_EQ(two_leg_velocity.forward, 0.0F);
   EXPECT_FLOAT_EQ(two_leg_velocity.lateral, 0.0F);
   EXPECT_FLOAT_EQ(two_leg_velocity.yaw, 0.0F);
-  EXPECT_FALSE(teleop::decodeKey('4').has_value());
+  const auto two_leg_reverse = teleop::decodeKey('4');
+  ASSERT_TRUE(two_leg_reverse.has_value());
+  EXPECT_EQ(two_leg_reverse->type, CommandType::Motion);
+  EXPECT_EQ(two_leg_reverse->motion, teleop::Motion::TwoLegStandReverse);
+  const auto two_leg_reverse_velocity =
+    teleop::velocityForMotion(two_leg_reverse->motion);
+  EXPECT_FLOAT_EQ(two_leg_reverse_velocity.forward, 0.0F);
+  EXPECT_FLOAT_EQ(two_leg_reverse_velocity.lateral, 0.0F);
+  EXPECT_FLOAT_EQ(two_leg_reverse_velocity.yaw, 0.0F);
   EXPECT_FALSE(teleop::decodeKey('5').has_value());
 
   const auto prone_down = teleop::decodeKey('P');

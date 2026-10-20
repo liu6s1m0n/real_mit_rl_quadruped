@@ -42,9 +42,13 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   swing_height_ = parameters.locomotion_swing_height;
   maximum_lateral_foot_offset_ =
     parameters.locomotion_max_lateral_foot_offset;
+  auto initial_orientation_kp = parameters.locomotion_body_orientation_kp;
+  auto initial_orientation_kd = parameters.locomotion_body_orientation_kd;
+  // yaw 只作为转向/落足规划输入，不作为机身平衡反馈。
+  initial_orientation_kp.z() = T(0);
+  initial_orientation_kd.z() = T(0);
   wbc_ctrl_->setBodyOrientationGains(
-    parameters.locomotion_body_orientation_kp,
-    parameters.locomotion_body_orientation_kd);
+    initial_orientation_kp, initial_orientation_kd);
   wbc_ctrl_->setFootPositionGains(
     parameters.wbc_foot_position_kp, parameters.wbc_foot_position_kd);
   wbc_ctrl_->setJointGains(
@@ -101,9 +105,14 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   gait_applied_ = true;
   this->checkSafeOrientation = true;
   wbc_ctrl_->setFloatingBaseWeight(T(100));
-  wbc_ctrl_->setBodyOrientationGains(
-    this->_data->control_parameters->locomotion_body_orientation_kp,
-    this->_data->control_parameters->locomotion_body_orientation_kd);
+  // yaw 只用于转向命令和落足几何，完全不通过 WBC 姿态误差施加平衡力矩。
+  auto orientation_kp =
+    this->_data->control_parameters->locomotion_body_orientation_kp;
+  auto orientation_kd =
+    this->_data->control_parameters->locomotion_body_orientation_kd;
+  orientation_kp.z() = T(0);
+  orientation_kd.z() = T(0);
+  wbc_ctrl_->setBodyOrientationGains(orientation_kp, orientation_kd);
   wbc_ctrl_->setBodyPositionGains(
     this->_data->control_parameters->balance_body_position_kp,
     this->_data->control_parameters->balance_body_position_kd);
@@ -210,7 +219,7 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
     }
     const T foot_speed = data.v.norm();
     if (data.p.z() > T(0) ||
-      std::abs(data.p.y()) > maximum_lateral_foot_offset_ || foot_speed > T(9))
+      std::abs(data.p.y()) > maximum_lateral_foot_offset_ + T(0.01) || foot_speed > T(9))
     {
       std::fprintf(stderr,
         "[FSM][LOCOMOTION] 安全回站：leg=%zu p=(%.4f,%.4f,%.4f)m "
@@ -430,7 +439,9 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       continue;
     }
 
-    if (applied_gait_ == GaitType::TWO_LEG_STAND) {
+    if (applied_gait_ == GaitType::TWO_LEG_STAND ||
+      applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE)
+    {
       // Lift the non-support diagonal once and hold it in place. The body
       // task, contact constraints, and MPC forces still run through WBC.
       if (!swing_active_[leg]) {

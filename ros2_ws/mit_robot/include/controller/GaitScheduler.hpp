@@ -24,6 +24,7 @@ enum class GaitType : std::uint8_t
   AMBLE,
   TROT,
   TWO_LEG_STAND,
+  TWO_LEG_STAND_REVERSE,
   TROT_RUN,
   PACE,
   BOUND,

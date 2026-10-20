@@ -32,10 +32,10 @@ struct SolverSettings
   T maximum_normal_force = T(120);  ///< 单只支撑脚允许的最大法向力，N（MIT f_max）。
   T alpha = T(4e-5);                ///< 反力二次正则权重（MIT alpha）。
   T x_drag = T(0);                  ///< MIT 机身高度/前向速度阻尼项。
-  /** 状态权重 Q：[yaw, pitch, roll, x, y, z, wx, wy, wz, vx, vy, vz]，与 MIT 相同。 */
+  /** 状态权重 Q：[yaw, pitch, roll, x, y, z, wx, wy, wz, vx, vy, vz]；yaw 和 wz 反馈关闭。 */
   std::array<T, 12> state_weights{
-    T(0.25), T(0.25), T(10), T(2), T(2), T(50),
-    T(0), T(0), T(0.3), T(0.2), T(0.2), T(0.1)};
+    T(0), T(0.25), T(10), T(2), T(2), T(50),
+    T(0), T(0), T(0), T(0.2), T(0.2), T(0.1)};
 
   /** @brief 检查预测时域、力约束和权重是否有效。 */
   bool isValid() const noexcept;

@@ -40,9 +40,12 @@ FSM_State_LieDown<T>::FSM_State_LieDown(ControlFSMData<T> * control_fsm_data)
   // lightly damped for a body being brought within millimetres of the floor.
   wbc_ctrl_->setBodyPositionGains(
     parameters.balance_body_position_kp, parameters.balance_body_position_kd);
-  wbc_ctrl_->setBodyOrientationGains(
-    parameters.locomotion_body_orientation_kp,
-    parameters.locomotion_body_orientation_kd);
+  auto orientation_kp = parameters.locomotion_body_orientation_kp;
+  auto orientation_kd = parameters.locomotion_body_orientation_kd;
+  // 趴下过程同样不使用 yaw 姿态误差产生机身平衡力矩。
+  orientation_kp.z() = T(0);
+  orientation_kd.z() = T(0);
+  wbc_ctrl_->setBodyOrientationGains(orientation_kp, orientation_kd);
   wbc_ctrl_->setJointGains(
     parameters.joint_kp, parameters.joint_kd);
   wbc_ctrl_->setFloatingBaseWeight(parameters.balance_floating_base_weight);

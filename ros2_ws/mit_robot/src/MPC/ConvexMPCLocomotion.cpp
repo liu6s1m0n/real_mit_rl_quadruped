@@ -139,18 +139,9 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
   rpy_integral_roll_ = std::clamp(rpy_integral_roll_, T(-0.25), T(0.25));
   rpy_integral_pitch_ = std::clamp(rpy_integral_pitch_, T(-0.25), T(0.25));
 
-  // 将连续偏航目标重表达到实测偏航附近，跨越 +/-pi 时避免产生 2*pi 跳变。
-  const T relative_yaw = command_yaw_ - estimate.rpy.z();
-  command_yaw_ = estimate.rpy.z() +
-    std::atan2(std::sin(relative_yaw), std::cos(relative_yaw));
-  // MIT 做法：静止时偏航目标跟随当前估计，不锁存绝对航向。DM IMU 航向
-  // 会缓慢漂移，锁存会让 WBC 把真实机身拧回漂移前的角度，支撑脚被扭转。
-  if (commanded_velocity_body_.squaredNorm() <= T(1e-8) &&
-    std::abs(commanded_yaw_rate_) <= T(1e-4))
-  {
-    command_yaw_ = estimate.rpy.z();
-  }
-  command_yaw_ += commanded_yaw_rate_ * control_time_step_;
+  // yaw 只表示当前朝向和本周期转向增量，不锁存绝对航向；这样 IMU yaw
+  // 漂移不会生成持续的姿态追踪误差或 WBC 平衡力矩。
+  command_yaw_ = estimate.rpy.z() + commanded_yaw_rate_ * control_time_step_;
   command.body_rpy.x() = velocity_body.y() * rpy_integral_roll_;
   command.body_rpy.y() = velocity_body.x() * rpy_integral_pitch_;
   command.body_rpy.z() = command_yaw_;

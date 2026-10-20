@@ -104,7 +104,8 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     Vec3<T>(T(80), T(80), T(90)), Vec3<T>(T(1.8), T(1.8), T(1.8)),
     // StandUp 非趴卧路径的足端笛卡尔 PD：[x, y, z] 的 Kp、Kd。
     Vec3<T>(T(190), T(190), T(260)), Vec3<T>(T(10), T(10), T(14)),
-    // Locomotion 机身姿态 WBC 增益：[roll, pitch, yaw] 的 Kp、Kd。
+    // Locomotion 机身姿态 WBC 增益：[roll, pitch, yaw]；运行时 yaw 反馈关闭，
+    // yaw 仅保留给转向命令和落足规划。
     Vec3<T>(T(200), T(200), T(100)), Vec3<T>(T(10), T(10), T(10)),
     // 摆腿高度、足端最大横向偏移（0.28 m 站姿下按 0.32→0.28 比例取 0.05）。
     T(0.05), T(0.30),

@@ -606,20 +606,25 @@ void runPhysics(
         }
       }
       if (arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive()) {
-        if (!control_active || !runner.standingReady()) {
+        const auto motion = arbiter.motion();
+        const bool two_leg_stand_experiment =
+          motion == teleop::Motion::TwoLegStand ||
+          motion == teleop::Motion::TwoLegStandReverse;
+        if (!control_active || (!runner.standingReady() && !two_leg_stand_experiment)) {
           std::printf("Motion ignored: press Stand up and wait for BalanceStand\n");
           arbiter.stopMotion();
           if (control_active) {
             runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
           }
         } else {
-          const auto motion = arbiter.motion();
           const auto velocity = teleop::velocityForMotion(motion, velocity_profile);
           runner.setLocomotionVelocityCommand(
             velocity.forward, velocity.lateral, velocity.yaw);
           runner.setLocomotionGait(
-            motion == teleop::Motion::TwoLegStand ?
-            GaitType::TWO_LEG_STAND : GaitType::TROT);
+            two_leg_stand_experiment ?
+            (motion == teleop::Motion::TwoLegStandReverse ?
+            GaitType::TWO_LEG_STAND_REVERSE : GaitType::TWO_LEG_STAND) :
+            GaitType::TROT);
           runner.setControlMode(ControlMode::Locomotion);
         }
       }

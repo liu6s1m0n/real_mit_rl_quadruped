@@ -17,6 +17,9 @@
 
 #include "RobotRunner.hpp"
 #include "SimulationActuatorWriter.hpp"
+#include "MPC/ConvexMPCLocomotion.h"
+#include "WBC/WBC_Ctrl/BodyOriTask.hpp"
+#include "model/floating_base_model_factory.hpp"
 #include "model/robots/dm1.hpp"
 
 namespace
@@ -45,6 +48,7 @@ struct WalkReport
   double maximum_height = 0.0;
   double minimum_height = 1.0e9;
   double maximum_abs_pitch = 0.0;
+  double accumulated_yaw = 0.0;
   double startup_maximum_planar_speed = 0.0;
   std::size_t startup_maximum_planar_speed_step = 0;
   double startup_maximum_abs_pitch = 0.0;
@@ -140,6 +144,7 @@ WalkReport runDirection(
     }
   }
   WalkReport report;
+  double previous_yaw = std::atan2(data->xmat[9 * trunk + 3], data->xmat[9 * trunk]);
   FSM_StateName previous = runner.currentStateName();
   for (std::size_t index = 0; index < steps; ++index) {
     // 2 s 后施加 0.10 s 的横向外力，检查接触切换之外的扰动恢复能力。
@@ -192,6 +197,10 @@ WalkReport runDirection(
     report.maximum_height = std::max(report.maximum_height, data->xpos[3 * trunk + 2]);
     report.minimum_height = std::min(report.minimum_height, data->xpos[3 * trunk + 2]);
     const mjtNum * rotation = data->xmat + 9 * trunk;
+    const double yaw = std::atan2(rotation[3], rotation[0]);
+    const double yaw_delta = yaw - previous_yaw;
+    report.accumulated_yaw += std::atan2(std::sin(yaw_delta), std::cos(yaw_delta));
+    previous_yaw = yaw;
     const double abs_pitch = std::abs(std::atan2(-rotation[6],
       std::sqrt(rotation[0] * rotation[0] + rotation[3] * rotation[3])));
     report.maximum_abs_pitch = std::max(report.maximum_abs_pitch, abs_pitch);
@@ -308,6 +317,9 @@ TEST(Dm1MpcWalkDiagnostic, AllDirectionsStayInLocomotion)
       EXPECT_GT(report.net_y, 0.10) << item.name;
     } else if (item.command.y() < 0.0F) {
       EXPECT_LT(report.net_y, -0.10) << item.name;
+    } else if (item.command.z() != 0.0F) {
+      EXPECT_GT(report.accumulated_yaw * std::copysign(1.0F, item.command.z()),
+        0.1) << item.name << ": turning command must produce heading motion";
     }
   }
 }
@@ -431,7 +443,10 @@ TEST(Dm1MpcWalkGate, LocomotionWaitsUntilTheBodyHasStoodUp)
     if (motion_started) {runner.run();}
     if (stand_up_pending && runner.requestStandUp()) {stand_up_pending = false;}
     // 只要进入 BalanceStand 就立刻请求行走，不等机身抬升完成。
-    if (runner.currentStateName() == FSM_StateName::BALANCE_STAND) {
+    if (runner.currentStateName() == FSM_StateName::BALANCE_STAND ||
+      runner.currentStateName() == FSM_StateName::LOCOMOTION)
+    {
+      // 与桥接层一致，在行走期间持续续发命令；入场 STAND 保持期会清零速度。
       runner.setLocomotionVelocityCommand(0.18F, 0.0F, 0.0F);
       runner.setControlMode(ControlMode::Locomotion);
     }
@@ -485,5 +500,190 @@ TEST(Dm1MpcWalkGate, FoldedCalfCannotEnterLocomotion)
   runner.setControlMode(ControlMode::Locomotion);
   ASSERT_TRUE(runner.run());
   EXPECT_EQ(runner.currentStateName(), FSM_StateName::BALANCE_STAND);
+}
+
+TEST(Dm1YawControl, DisabledYawLeavesHeadingFreeWhileCorrectingTilt)
+{
+  const auto robot = robots::dm1::makeModel<double>();
+  auto model = model::makeFloatingBaseModel(robot);
+  FBModelState<double> state;
+  state.bodyPosition.setZero();
+  state.bodyVelocity.setZero();
+  state.q = DVec<double>::Zero(kNumJoints);
+  state.qd = DVec<double>::Zero(kNumJoints);
+  const Eigen::Quaterniond current =
+    Eigen::AngleAxisd(0.7, Vec3<double>::UnitZ()) *
+    Eigen::AngleAxisd(-0.12, Vec3<double>::UnitY()) *
+    Eigen::AngleAxisd(0.08, Vec3<double>::UnitX());
+  state.bodyOrientation << current.w(), current.x(), current.y(), current.z();
+  model.setState(state);
+  BodyOriTask<double> task(model);
+  task.setKinematicGain(Vec3<double>(1.0, 1.0, 0.0));
+  task.setProportionalGain(Vec3<double>(200.0, 200.0, 0.0));
+  task.setDerivativeGain(Vec3<double>(20.0, 20.0, 0.0));
+  ASSERT_TRUE(task.update(Eigen::Quaterniond::Identity()));
+  DVec<double> reference;
+  task.getCommand(reference);
+  const DVec<double> reference_error = task.getPosError();
+  EXPECT_GT(reference.head<2>().norm(), 1.0);
+  EXPECT_DOUBLE_EQ(reference[2], 0.0);
+
+  // 目标 yaw 和绕世界竖直轴的实测角速度均不得改变纠偏指令。
+  state.bodyVelocity.head<3>() = Vec3<double>(0.1, -0.2, 0.4);
+  model.setState(state);
+  for (const double yaw : {-3.13, -1.0, 1.0, 3.13}) {
+    const Eigen::Quaterniond desired =
+      Eigen::AngleAxisd(yaw, Vec3<double>::UnitZ()) *
+      Eigen::AngleAxisd(-0.12, Vec3<double>::UnitY()) *
+      Eigen::AngleAxisd(0.08, Vec3<double>::UnitX());
+    ASSERT_TRUE(task.update(desired));
+    DVec<double> command;
+    task.getCommand(command);
+    EXPECT_DOUBLE_EQ(command[2], 0.0) << yaw;
+    EXPECT_DOUBLE_EQ(task.getPosError()[2], 0.0) << yaw;
+  }
+}
+
+TEST(Dm1YawControl, MpcDoesNotAccumulateHeadingErrorWhileMovingOrTurning)
+{
+  const auto robot = robots::dm1::makeModel<double>();
+  mpc::ConvexMPCLocomotion<double> controller(robot, 0.002);
+  EXPECT_DOUBLE_EQ(controller.solverSettings().state_weights[0], 0.0);
+  EXPECT_DOUBLE_EQ(controller.solverSettings().state_weights[8], 0.0);
+  GaitScheduler<double> scheduler(0.002);
+  scheduler.step();
+  StateEstimate<double> estimate;
+  estimate.valid = true;
+  estimate.position_world.z() = 0.28;
+  DesiredState<double> desired;
+  desired.valid = true;
+  desired.body_position_world = estimate.position_world;
+  desired.body_rpy.z() = 1.5;
+  std::array<Vec3<double>, kNumLegs> feet{};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    computeLegJacobianAndPosition(robot,
+      robot.leg(static_cast<LegId>(leg)).joints.home_position,
+      static_cast<Mat3<double> *>(nullptr), &feet[leg], static_cast<LegId>(leg));
+    feet[leg] += estimate.position_world + robot.hipLocation(static_cast<LegId>(leg));
+  }
+  for (const double yaw_rate : {0.0, 0.3, -0.3}) {
+    controller.setVelocityCommand(0.18, 0.0, yaw_rate);
+    for (int step = 0; step < 60; ++step) {
+      // 模拟航向漂移及 +/-pi 交界；不能追赶此前锁存或积分的航向。
+      estimate.rpy.z() = step < 30 ? 3.13 : -3.13;
+      estimate.orientation_world_from_body =
+        Eigen::AngleAxisd(estimate.rpy.z(), Vec3<double>::UnitZ());
+      estimate.rotation_world_from_body =
+        estimate.orientation_world_from_body.toRotationMatrix();
+      const auto result = controller.run(estimate, desired, feet,
+        scheduler.gaitFrame(controller.solverSettings().horizon));
+      ASSERT_TRUE(result.valid);
+      EXPECT_NEAR(result.command.body_rpy.z(),
+        estimate.rpy.z() + 0.002 * yaw_rate, 1e-12);
+      EXPECT_DOUBLE_EQ(result.command.body_angular_velocity.z(), yaw_rate);
+    }
+  }
+}
+
+TEST(Dm1MpcWalkGate, TwoLegStandBypassesEntryGate)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  // 按键 3 的双腿实验入口可以直接接管当前站立控制。
+  runner.setLocomotionGait(GaitType::TWO_LEG_STAND);
+  runner.setControlMode(ControlMode::Locomotion);
+  for (int step = 0; step < 3; ++step) {ASSERT_TRUE(runner.run());}
+  EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
+}
+
+TEST(Dm1MpcWalkDiagnostic, TwoLegStandCommandsBothFeetUp)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  runner.setLocomotionGait(GaitType::TWO_LEG_STAND);
+  std::array<double, kNumLegs> maximum_commanded_lift{};
+  for (int step = 0; step < 250; ++step) {
+    runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+    runner.setControlMode(ControlMode::Locomotion);
+    ASSERT_TRUE(runner.run());
+    if (runner.gaitScheduler().gait_data.current_gait == GaitType::TWO_LEG_STAND) {
+      EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
+      for (const std::size_t leg : {1U, 2U}) {
+        const auto leg_id = static_cast<LegId>(leg);
+        Vec3<float> commanded_foot;
+        Vec3<float> measured_joint;
+        for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+          const int id = mj_name2id(model.get(), mjOBJ_JOINT, kJointNames[leg][joint]);
+          measured_joint[joint] = data->qpos[model->jnt_qposadr[id]];
+        }
+        Vec3<float> measured_foot;
+        computeLegJacobianAndPosition(runner.quadruped(), measured_joint,
+          static_cast<Mat3<float> *>(nullptr), &measured_foot, leg_id);
+        computeLegJacobianAndPosition(runner.quadruped(),
+          runner.jointCommands()[leg].position_desired,
+          static_cast<Mat3<float> *>(nullptr), &commanded_foot, leg_id);
+        const double lift = (runner.stateEstimate().rotation_world_from_body *
+          (commanded_foot - measured_foot)).z();
+        maximum_commanded_lift[leg] = std::max(maximum_commanded_lift[leg], lift);
+      }
+    }
+    writer.write(runner, data.get(), true);
+    mj_step(model.get(), data.get());
+  }
+  EXPECT_EQ(runner.gaitScheduler().gait_data.current_gait, GaitType::TWO_LEG_STAND);
+  EXPECT_GT(maximum_commanded_lift[1], 0.005);
+  EXPECT_GT(maximum_commanded_lift[2], 0.005);
+}
+
+TEST(Dm1MpcWalkDiagnostic, TwoLegStandReverseCommandsTheOtherFeetUp)
+{
+  auto model = loadModel();
+  auto data = makeData(model.get());
+  RobotRunner runner(model.get(), data.get(), RobotType::DM1);
+  SimulationActuatorWriter writer(model.get());
+  ASSERT_TRUE(startStanding(model.get(), data.get(), runner, writer));
+  runner.setLocomotionGait(GaitType::TWO_LEG_STAND_REVERSE);
+  std::array<double, kNumLegs> maximum_commanded_lift{};
+  for (int step = 0; step < 250; ++step) {
+    runner.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+    runner.setControlMode(ControlMode::Locomotion);
+    ASSERT_TRUE(runner.run());
+    if (runner.gaitScheduler().gait_data.current_gait ==
+      GaitType::TWO_LEG_STAND_REVERSE)
+    {
+      EXPECT_EQ(runner.currentStateName(), FSM_StateName::LOCOMOTION);
+      for (const std::size_t leg : {0U, 3U}) {
+        const auto leg_id = static_cast<LegId>(leg);
+        Vec3<float> commanded_foot;
+        Vec3<float> measured_joint;
+        for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
+          const int id = mj_name2id(model.get(), mjOBJ_JOINT, kJointNames[leg][joint]);
+          measured_joint[joint] = data->qpos[model->jnt_qposadr[id]];
+        }
+        Vec3<float> measured_foot;
+        computeLegJacobianAndPosition(runner.quadruped(), measured_joint,
+          static_cast<Mat3<float> *>(nullptr), &measured_foot, leg_id);
+        computeLegJacobianAndPosition(runner.quadruped(),
+          runner.jointCommands()[leg].position_desired,
+          static_cast<Mat3<float> *>(nullptr), &commanded_foot, leg_id);
+        const double lift = (runner.stateEstimate().rotation_world_from_body *
+          (commanded_foot - measured_foot)).z();
+        maximum_commanded_lift[leg] = std::max(maximum_commanded_lift[leg], lift);
+      }
+    }
+    writer.write(runner, data.get(), true);
+    mj_step(model.get(), data.get());
+  }
+  EXPECT_EQ(
+    runner.gaitScheduler().gait_data.current_gait,
+    GaitType::TWO_LEG_STAND_REVERSE);
+  EXPECT_GT(maximum_commanded_lift[0], 0.005);
+  EXPECT_GT(maximum_commanded_lift[3], 0.005);
 }
 }  // namespace

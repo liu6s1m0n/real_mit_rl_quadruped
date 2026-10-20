@@ -166,10 +166,16 @@ float RobotRunner::currentTime() const noexcept
 /*设置目标控制模式*/
 void RobotRunner::setControlMode(ControlMode mode) noexcept
 {
+  // 按键 3 是人工观察用的双腿实验入口；它必须能够在站起过程中的任意
+  // 时刻接管 Locomotion。电机使能仍由外层仲裁器负责，这里只放开状态入口。
+  const bool two_leg_stand_experiment =
+    mode == ControlMode::Locomotion &&
+    (control_fsm_->data.locomotion_gait == GaitType::TWO_LEG_STAND ||
+    control_fsm_->data.locomotion_gait == GaitType::TWO_LEG_STAND_REVERSE);
   // DM1 未执行站起前拒绝从趴卧保持状态直接跳入 WBC/步态控制。
   if (control_parameters_.start_in_prone_home &&
     (mode == ControlMode::BalanceStand || isLocomotionMode(mode)) &&
-    !standingReady())
+    !standingReady() && !two_leg_stand_experiment)
   {
     return;
   }
@@ -181,7 +187,7 @@ void RobotRunner::setControlMode(ControlMode mode) noexcept
   // 从站立切入行走前，必须等机身高度到位且小腿未折叠；否则会把站起过程
   // 当成踏步开始，真机和 hardware-sim 都会出现“第一帧就很低”的下沉。
   if (isLocomotionMode(mode) && !isLocomotionMode(desired_state_.mode) &&
-    !locomotionEntryReady())
+    !locomotionEntryReady() && !two_leg_stand_experiment)
   {
     return;
   }
