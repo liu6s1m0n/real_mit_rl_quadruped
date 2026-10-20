@@ -26,9 +26,14 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
   const auto & parameters = *control_fsm_data->control_parameters;
   wbc_ctrl_->setBodyPositionGains(
     parameters.balance_body_position_kp, parameters.balance_body_position_kd);
+  // DM IMU 的偏航角当前不可稳定观测。保留滚转/俯仰姿态环，
+  // 暂时关闭 BalanceStand 的偏航力矩，避免把航向漂移误当成机身扭转误差。
+  auto balance_orientation_kp = parameters.balance_body_orientation_kp;
+  auto balance_orientation_kd = parameters.balance_body_orientation_kd;
+  balance_orientation_kp.z() = T(0);
+  balance_orientation_kd.z() = T(0);
   wbc_ctrl_->setBodyOrientationGains(
-    parameters.balance_body_orientation_kp,
-    parameters.balance_body_orientation_kd);
+    balance_orientation_kp, balance_orientation_kd);
   wbc_ctrl_->setFootPositionGains(
     parameters.wbc_foot_position_kp, parameters.wbc_foot_position_kd);
   wbc_ctrl_->setJointGains(

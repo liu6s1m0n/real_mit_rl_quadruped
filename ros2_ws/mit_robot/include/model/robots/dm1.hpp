@@ -82,16 +82,16 @@ LegModelParameters<T> makeLeg(LegId leg_id, bool is_left, bool is_rear)
   result.joints = makeJointParameters<T>(is_rear);
 
   result.hip_inertia = makeInertia(
-    T(0.706316),
+    T(0.566780616299),
     Vec3<T>(longitudinal * T(0.04756), -side * T(0.010434), T(-0.000046)),
-    T(0.000403), T(0.000535), T(0.000446));
+    T(0.000323385833), T(0.000429308737), T(0.000357891022));
   result.thigh_inertia = makeInertia(
-    T(0.977146), Vec3<T>(T(-0.023554), side * T(0.050542), T(0.001956)),
-    T(0.000887), T(0.003756), T(0.003918));
+    T(0.784107130653), Vec3<T>(T(-0.023554), side * T(0.050542), T(0.001956)),
+    T(0.000711769812), T(0.003013988066), T(0.003143984356));
   // 足部通过固定关节连接到小腿，动力学参数中将其质量并入小腿。
   result.calf_inertia = makeInertia(
-    T(0.270521), Vec3<T>(T(-0.010235), T(0.000248), T(-0.054204)),
-    T(0.000977), T(0.005321), T(0.004367));
+    T(0.217078558467), Vec3<T>(T(-0.010235), T(0.000248), T(-0.054204)),
+    T(0.000783989974), T(0.004269816427), T(0.003504282717));
   return result;
 }
 
@@ -121,9 +121,9 @@ template<typename T>
 Quadruped<T> makeModel()
 {
   const auto body = makeInertia(
-    T(6.889103), Vec3<T>(T(-0.001955), T(0.002743), T(-0.068608)),
-    T(0.035976), T(0.081109), T(0.103076),
-    T(0.000077), T(-0.000148), T(0.000272));
+    T(5.528134778326), Vec3<T>(T(-0.001955), T(0.002743), T(-0.068608)),
+    T(0.028868805821), T(0.065085611833), T(0.082712948320),
+    T(0.000061788360), T(-0.000118762043), T(0.000218265376));
 
   typename Quadruped<T>::LegArray legs;
   legs[static_cast<std::size_t>(LegId::FR)] = makeLeg<T>(LegId::FR, false, false);

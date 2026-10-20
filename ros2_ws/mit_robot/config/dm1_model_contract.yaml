@@ -12,7 +12,8 @@ joint_upper_limit_rad: [1.57, 2.603, 2.72, 1.57, 2.603, 2.72, 1.57, 2.603, 2.72,
 stand_joint_position_front_rad: [0, -0.282961, 0.739729]
 stand_joint_position_rear_rad: [0, -0.282961, 0.739729]
 nominal_body_height_m: 0.28
-body_mass_kg: 6.889103
+# 临时整机等比例校准：14.705035 kg 模型缩放到实测 11.8 kg，比例 0.802446236952。
+body_mass_kg: 5.528134778326
 motor:
   name: DM-J6248P-2EC
   continuous_torque_nm: 30
@@ -34,5 +35,5 @@ control:
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, prone_down]
 mjcf:
   file: src/dm1_description/dm1/dm1.xml
-  sha256: c6ea83e830b2df14fe2ffa976b054652533486b66c1ac386c8481b74b756cecd
+  sha256: 8df17748d050890f7734e82e113906b70a565d5f926bbc0f8965edbd2c3d0775
   fixed_installation_rotations_baked_in: true
