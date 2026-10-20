@@ -659,7 +659,22 @@ bool RobotRunner::run()
     desired_state_initialized_ = true;
   }
 
-  // 5. 更新高度目标，最后由 FSM 选择站立或行走控制器并生成命令。
+  // 5. 回站请求必须在高度限速器之前接管参考。否则限速器会先把起点
+  // 重置为当前估计高度（约0.254 m），再慢慢爬回0.28 m，造成每次踏步
+  // 后机身先下沉。这里只修正上层参考，不改变 MIT MPC/WBC 控制链。
+  const bool single_step_finished =
+    (gait_scheduler_.gait_data.current_gait == GaitType::TWO_LEG_STAND ||
+    gait_scheduler_.gait_data.current_gait == GaitType::TWO_LEG_STAND_REVERSE) &&
+    gait_scheduler_.gait_data.initial_phase >= 1.0F;
+  const bool locomotion_returning_to_stand =
+    control_fsm_->currentStateName() == FSM_StateName::LOCOMOTION &&
+    (desired_state_.mode == ControlMode::BalanceStand || single_step_finished);
+  if (locomotion_returning_to_stand) {
+    standing_height_command_ = standing_height_target_;
+    standing_height_command_initialized_ = true;
+  }
+
+  // 更新高度目标，最后由 FSM 选择站立或行走控制器并生成命令。
   if (prone_down_active_) {
     const float maximum_step = prone_down_height_rate_ * control_time_step_;
     prone_down_height_command_ = std::max(
