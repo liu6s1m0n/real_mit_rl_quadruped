@@ -251,7 +251,8 @@ TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTarge
   struct LogDirectory
   {
     std::filesystem::path path = std::filesystem::temp_directory_path() /
-      ("dm1_csv_contract_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+      ("dm1_csv_contract_" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::optional<std::string> old;
     LogDirectory()
     {
@@ -267,7 +268,9 @@ TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTarge
   const auto split = [](const std::string & line) {
       std::istringstream input(line);
       std::vector<std::string> fields;
-      for (std::string field; std::getline(input, field, ',');) {fields.push_back(field);}
+      for (std::string field; std::getline(input, field, ','); ) {
+        fields.push_back(field);
+      }
       return fields;
     };
   for (bool rejected : {false, true}) {
@@ -303,14 +306,18 @@ TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTarge
     ASSERT_TRUE(static_cast<bool>(std::getline(input, line)));
     const auto header = split(line);
     std::map<std::string, std::size_t> columns;
-    for (std::size_t i = 0; i < header.size(); ++i) {columns[header[i]] = i;}
+    for (std::size_t i = 0; i < header.size(); ++i) {
+      columns[header[i]] = i;
+    }
     std::size_t rows = 0, accepted = 0, held = 0;
     std::vector<std::string> last_published;
-    for (; std::getline(input, line);) {
+    for (; std::getline(input, line); ) {
       const auto fields = split(line);
       ASSERT_EQ(fields.size(), header.size());
       ++rows;
-      const auto number = [&](const std::string & name) {return std::stod(fields.at(columns.at(name)));};
+      const auto number = [&](const std::string & name) {
+          return std::stod(fields.at(columns.at(name)));
+        };
       const bool published = number("publish_ok") != 0;
       const bool valid = number("published_valid") != 0;
       if (rejected) {
@@ -325,19 +332,25 @@ TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTarge
         for (const auto * leg : legs) {
           for (const auto * joint : joints) {
             const std::string name = std::string(leg) + "_" + joint;
-            const double pos = number(name + "_kp") * (number(name + "_q_des") - number(name + "_q"));
-            const double vel = number(name + "_kd") * (number(name + "_dq_des") - number(name + "_dq"));
+            const double pos = number(name + "_kp") *
+              (number(name + "_q_des") - number(name + "_q"));
+            const double vel = number(name + "_kd") *
+              (number(name + "_dq_des") - number(name + "_dq"));
             EXPECT_NEAR(number(name + "_tau_pos"), pos, 1.0e-5);
             EXPECT_NEAR(number(name + "_tau_vel"), vel, 1.0e-5);
             EXPECT_NEAR(number(name + "_tau_total"), pos + vel + number(name + "_ff"), 1.0e-5);
-            if (published) {EXPECT_NEAR(number(name + "_q_published"), number(name + "_q_des"), 1.0e-6);}
-            else if (!last_published.empty()) {
-              EXPECT_EQ(fields.at(columns.at(name + "_q_published")), last_published.at(columns.at(name + "_q_published")));
+            if (published) {
+              EXPECT_NEAR(number(name + "_q_published"), number(name + "_q_des"), 1.0e-6);
+            } else if (!last_published.empty()) {
+              EXPECT_EQ(
+                fields.at(columns.at(name + "_q_published")),
+                last_published.at(columns.at(name + "_q_published")));
             }
           }
         }
-        if (published) {++accepted; last_published = fields;}
-        else {++held; EXPECT_GT(number("published_age_s"), 0.0);}
+        if (published) {++accepted; last_published = fields;} else {
+          ++held; EXPECT_GT(number("published_age_s"), 0.0);
+        }
       }
     }
     EXPECT_GT(rows, 5U);
@@ -556,8 +569,9 @@ TEST(HardwareBridgeTest, MotorFaultsOnlyReportAndKeepSendingUntilExplicitStop)
   for (bool keyboard : {false, true}) {
     for (bool read_succeeds : {false, true}) {
       for (int fault = 0; fault < 6; ++fault) {
-        SCOPED_TRACE(::testing::Message() << "keyboard=" << keyboard <<
-          " read_succeeds=" << read_succeeds << " fault=" << fault);
+        SCOPED_TRACE(
+          ::testing::Message() << "keyboard=" << keyboard <<
+            " read_succeeds=" << read_succeeds << " fault=" << fault);
         std::atomic_bool stop_requested{false};
         StartupZeroHardware hardware(stop_requested);
         hardware.startup_offset = 0.0F;
@@ -651,12 +665,13 @@ TEST(DmMotorDriverReportOnlyTest, EnableFailuresNeverSendAutomaticDisableFrames)
 {
   class FailingCan final : public DmMotorDriver::CanTransport
   {
-  public:
+public:
     bool open(std::uint8_t, Receiver) override {return true;}
     void close(std::uint8_t) noexcept override {}
     bool write(std::uint8_t bus, const can_frame & frame) override
     {
-      const bool special = std::all_of(frame.data, frame.data + 7,
+      const bool special = std::all_of(
+        frame.data, frame.data + 7,
         [](std::uint8_t byte) {return byte == 0xff;});
       if (special && frame.data[7] == 0xfd) {++disable_frames;}
       if (failure == 0 && special && frame.data[7] == 0xfc &&
@@ -861,7 +876,9 @@ TEST(PeriodicMitSenderTest, BothBusesRunNearFiveHundredHz)
   ASSERT_TRUE(sender.publish(senderFrames()));
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   std::array<int, kNumJoints> before{};
-  for (std::size_t i = 0; i < before.size(); ++i) {before[i] = transport.attempts[i].load();}
+  for (std::size_t i = 0; i < before.size(); ++i) {
+    before[i] = transport.attempts[i].load();
+  }
   const auto start = Clock::now();
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   sender.pause();

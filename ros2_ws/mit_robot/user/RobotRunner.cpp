@@ -589,7 +589,16 @@ bool RobotRunner::run()
     mpc::kDefaultMpcHorizon);
   const auto & gait_frame = control_fsm_->data.gait_frame;
   // MIT 使用连续支撑相位作为估计器信任度，摆动腿不参与零速度约束。
-  contact_estimator_->run();
+  const bool contact_estimate_valid = contact_estimator_->run();
+  const auto & measured_contacts = contact_estimator_->footContacts();
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    const auto & contact = measured_contacts[leg];
+    control_fsm_->data.measured_contact_probability[leg] =
+      contact.contact_probability;
+    control_fsm_->data.measured_normal_force[leg] = contact.normal_force;
+    control_fsm_->data.measured_contact_valid[leg] =
+      contact_estimate_valid && contact.valid;
+  }
   state_estimator_->setContactProbabilities(gait_frame.contact_probability);
   /*运行状态估计器。如果失败：*/
   if (!state_estimator_->run()) {

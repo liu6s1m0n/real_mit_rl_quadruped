@@ -117,12 +117,14 @@ void FSM_State_BalanceStand<T>::onExit()
 {
   iteration_ = 0;
   this->_data->stand_handoff.pending = false;
+  this->_data->stand_handoff.blend_pending = false;
 }
 /*BalanceStandStep：真正的站立控制
             这是整个文件最重要的函数。*/
 template<typename T>
 void FSM_State_BalanceStand<T>::BalanceStandStep()
 {
+  auto & handoff = this->_data->stand_handoff;
   // 完成交接后锁定水平位置与航向，保持水平；高度继续跟随限速目标。
   wbc_data_.pBody_des = initial_body_position_;
   wbc_data_.vBody_des.setZero();
@@ -174,6 +176,36 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
       "[FSM][BALANCE_STAND] 失能前判断：WBC runAndApply 失败，iteration=%zu target_height=%.4f。\n",
       iteration_, static_cast<double>(wbc_data_.pBody_des.z()));
     return;
+  }
+
+  // 只在状态交接的两个上层周期内连续化最终关节命令；WBC 输出和任务不变。
+  if (handoff.blend_pending && handoff.blend_frames > 0) {
+    const T alpha = T(1) / static_cast<T>(handoff.blend_frames);
+    T maximum_torque_delta = T(0);
+    T maximum_position_delta = T(0);
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      auto & command = this->_data->leg_controller->commands[leg];
+      const auto & previous = handoff.locomotion_commands[leg];
+      maximum_torque_delta = std::max(
+        maximum_torque_delta,
+        (command.torque_feedforward - previous.torque_feedforward).cwiseAbs().maxCoeff());
+      maximum_position_delta = std::max(
+        maximum_position_delta,
+        (command.position_desired - previous.position_desired).cwiseAbs().maxCoeff());
+      command.torque_feedforward = previous.torque_feedforward +
+        alpha * (command.torque_feedforward - previous.torque_feedforward);
+      command.position_desired = previous.position_desired +
+        alpha * (command.position_desired - previous.position_desired);
+      command.velocity_desired = previous.velocity_desired +
+        alpha * (command.velocity_desired - previous.velocity_desired);
+    }
+    std::fprintf(stderr,
+      "[FSM][BALANCE_STAND][HANDOFF] blend_frames=%zu alpha=%.2f "
+      "raw_ff_delta=%.3fNm raw_q_delta=%.4frad\n", handoff.blend_frames,
+      static_cast<double>(alpha), static_cast<double>(maximum_torque_delta),
+      static_cast<double>(maximum_position_delta));
+    --handoff.blend_frames;
+    if (handoff.blend_frames == 0) {handoff.blend_pending = false;}
   }
 
   // 站立与行走统一直接使用 WBC 前馈，保持求解器给出的动力学比例。

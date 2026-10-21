@@ -177,7 +177,7 @@ bool DmMotorDriver::openBus(std::uint8_t bus)
 {
   auto receiver = [this, bus](const canfd_frame & frame) {receive(bus, frame);};
   return transport_ ? transport_->open(bus, std::move(receiver)) :
-    buses_[bus].open(can_names_[bus], std::move(receiver), 0);
+         buses_[bus].open(can_names_[bus], std::move(receiver), 0);
 }
 
 bool DmMotorDriver::writeBus(std::uint8_t bus, const can_frame & frame)
@@ -228,8 +228,7 @@ bool DmMotorDriver::openSingle(const dm1_hardware::MotorAddress & address)
   if (index >= kNumJoints || address.bus > 1 || can_names_[address.bus].empty()) {
     return false;
   }
-  if (!openBus(address.bus))
-  {
+  if (!openBus(address.bus)) {
     return false;
   }
   active_buses_ = {{false, false}};
@@ -310,7 +309,8 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
       oldest = std::min(oldest, snapshot.received_at);
       newest = std::max(newest, snapshot.received_at);
     }
-    imu_log::print(imu_log::Level::Info,
+    imu_log::print(
+      imu_log::Level::Info,
       "[DM1][RX-TIMING] received_spread_ms=%.3f monitor_only=true\n",
       newest.time_since_epoch().count() == 0 ? -1.0 :
       std::chrono::duration<double, std::milli>(newest - oldest).count());
@@ -367,9 +367,10 @@ bool DmMotorDriver::latest(FeedbackArray & feedback, double now_s) const
       const auto & tx = tx_monitor[i];
       const auto age_ms = [now](auto time) {
           return time.time_since_epoch().count() == 0 ? -1.0 :
-            std::chrono::duration<double, std::milli>(now - time).count();
+                 std::chrono::duration<double, std::milli>(now - time).count();
         };
-      imu_log::print(imu_log::Level::Info,
+      imu_log::print(
+        imu_log::Level::Info,
         "[DM1][IO-MONITOR] joint=%zu bus=%u can_id=0x%02x seq=%llu rx_hz=%.1f age_ms=%.3f "
         "rx_gap_max_ms=%.3f q_hold_ms=%.3f q_dq_residual_max_rad=%.5f status=0x%02x "
         "tx_try_hz=%.1f tx_write_ok_hz=%.1f tx_try_age_ms=%.3f tx_ok_age_ms=%.3f "
@@ -455,9 +456,11 @@ void DmMotorDriver::receive(std::uint8_t bus, const canfd_frame & frame) noexcep
     const double dt = std::chrono::duration<double>(received_at - snapshot.received_at).count();
     snapshot.max_rx_gap_ms = std::max(snapshot.max_rx_gap_ms, dt * 1000.0);
     // 仅以两次真实回包的间隔计算残差，不能用500Hz缓存读取间隔推算速度。
-    snapshot.max_q_velocity_residual_rad = std::max(snapshot.max_q_velocity_residual_rad,
-      std::abs(decoded.position - snapshot.position -
-      0.5 * (decoded.velocity + snapshot.velocity) * dt));
+    snapshot.max_q_velocity_residual_rad = std::max(
+      snapshot.max_q_velocity_residual_rad,
+      std::abs(
+        decoded.position - snapshot.position -
+        0.5 * (decoded.velocity + snapshot.velocity) * dt));
   }
   if (!snapshot.online || decoded.position != snapshot.position) {
     snapshot.position_changed_at = received_at;
@@ -505,7 +508,8 @@ bool DmMotorDriver::sendMit(const dm1_hardware::MitFrame & frame)
   std::lock_guard<std::mutex> lock(mutex_);
   auto & tx = tx_monitor_[index];
   if (tx.attempts != 0) {
-    tx.max_gap_ms = std::max(tx.max_gap_ms,
+    tx.max_gap_ms = std::max(
+      tx.max_gap_ms,
       std::chrono::duration<double, std::milli>(attempted_at - tx.attempted_at).count());
   }
   ++tx.attempts;

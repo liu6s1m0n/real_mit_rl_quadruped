@@ -48,8 +48,8 @@ public:
   // Replace only raw CAN I/O in simulation; all driver logic stays shared.
   class CanTransport
   {
-  public:
-    using Receiver = std::function<void(const canfd_frame &)>;
+public:
+    using Receiver = std::function<void (const canfd_frame &)>;
     virtual ~CanTransport() = default;
     virtual bool open(std::uint8_t bus, Receiver receiver) = 0;
     virtual bool write(std::uint8_t bus, const can_frame & frame) = 0;
@@ -70,7 +70,8 @@ public:
   };
 
   // 绑定两条 CAN 总线和 12 个电机的标定信息。
-  DmMotorDriver(std::string can0, std::string can1, const CalibrationArray & calibration,
+  DmMotorDriver(
+    std::string can0, std::string can1, const CalibrationArray & calibration,
     CanTransport * transport = nullptr);
   // 关闭 CAN 总线并确保电机输出被禁用。
   ~DmMotorDriver();

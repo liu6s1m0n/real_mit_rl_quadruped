@@ -82,8 +82,14 @@ private:
   std::array < Vec3 < T >, kNumLegs > two_leg_hold_targets_ {};
   /*记录每条腿是否已经开始当前摆动周期。*/
   std::array < bool, kNumLegs > swing_active_ {};
+  // 计划落脚后等待足端竖直速度收敛，避免尚在下降时立即切入接触约束。
+  std::array < bool, kNumLegs > touchdown_waiting_ {};
+  std::array < unsigned int, kNumLegs > touchdown_confirm_frames_ {};
+  std::array < unsigned int, kNumLegs > touchdown_wait_frames_ {};
+  std::array < bool, kNumLegs > touchdown_reported_ {};
+  std::array < bool, kNumLegs > touchdown_confirmed_reported_ {};
   /*摆动腿抬脚高度，0.28 m 站姿下的 DM1 默认值；构造时由控制参数覆盖。*/
-  T swing_height_ = T(0.05);
+  T swing_height_ = T(0.03);
   /*足端相对髋的横向安全边界，必须容纳该机型名义足宽和横移步长。*/
   T maximum_lateral_foot_offset_ = T(0.18);
   /*单个步周期内最大水平步长为 15 cm。*/

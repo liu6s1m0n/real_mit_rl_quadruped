@@ -108,7 +108,8 @@ RobotControlParameters<T> makeRobotControlParameters(RobotType robot_type)
     // yaw 仅保留给转向命令和落足规划。
     Vec3<T>(T(200), T(200), T(100)), Vec3<T>(T(10), T(10), T(10)),
     // 摆腿高度、足端最大横向偏移（0.28 m 站姿下按 0.32→0.28 比例取 0.05）。
-    T(0.05), T(0.30),
+    // 150 ms 摆腿保持 MIT 轨迹形式，但降低抬腿高度以匹配 DM1 的实际跟踪能力。
+    T(0.04), T(0.30),
     // MPC 预测段长 dtMPC（500 Hz 下 15 帧，扫参选定 0.030 s）。
     T(0.030),
     // 经典 MPC/WBC 控制链参数到此结束。

@@ -136,7 +136,8 @@ private:
       if (next < finished) {next = finished; ++overruns;}
       const double window_s = std::chrono::duration<double>(finished - report_at).count();
       if (window_s >= 1.0) {
-        imu_log::print(imu_log::Level::Info,
+        imu_log::print(
+          imu_log::Level::Info,
           "[DM1][TX-SCHEDULE] bus=%u batch_hz=%.1f overruns=%llu command_age_ms=%.3f monitor_only=true\n",
           static_cast<unsigned int>(bus), batches / window_s,
           static_cast<unsigned long long>(overruns),

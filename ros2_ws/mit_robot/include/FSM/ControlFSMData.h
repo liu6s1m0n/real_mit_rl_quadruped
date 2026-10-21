@@ -35,12 +35,19 @@ struct ControlFSMData
   T control_time_step = T(0.001);
   bool use_wbc = true;
   GaitType locomotion_gait = GaitType::TROT;
+  // 上层触地确认使用的实测接触信息；不参与 MPC/WBC 内部求解。
+  std::array<T, kNumLegs> measured_contact_probability{};
+  std::array<T, kNumLegs> measured_normal_force{};
+  std::array<bool, kNumLegs> measured_contact_valid{};
 
   // One-shot height reference published by a successful, normal locomotion exit.
   struct StandHandoff
   {
     bool pending = false;
     T height = T(0);
+    std::array<LegControllerCommand<T>, kNumLegs> locomotion_commands{};
+    std::size_t blend_frames = 0;
+    bool blend_pending = false;
   } stand_handoff;
 
   bool valid() const noexcept

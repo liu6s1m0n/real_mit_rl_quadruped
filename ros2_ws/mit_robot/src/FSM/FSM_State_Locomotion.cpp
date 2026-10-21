@@ -161,12 +161,28 @@ FSM_StateName FSM_State_Locomotion<T>::checkTransition()
     return this->nextStateName;
   }
 
+  constexpr unsigned int kTouchdownWaitTimeoutFrames = 50;
+  if (std::any_of(touchdown_wait_frames_.begin(), touchdown_wait_frames_.end(),
+      [](unsigned int frames) {return frames >= kTouchdownWaitTimeoutFrames;}))
+  {
+    std::fprintf(stderr,
+      "[FSM][LOCOMOTION][TOUCHDOWN] confirmation timeout; safe return\n");
+    this->_data->desired_state->mode = ControlMode::BalanceStand;
+    safety_fallback_transition_ = true;
+    this->nextStateName = FSM_StateName::BALANCE_STAND;
+    this->transitionData.done = false;
+    this->transitionDuration = T(0);
+    return this->nextStateName;
+  }
+
   // 一次对角踏步落地后回站；外层桥接会清除锁存运动，等待下一次按键。
   if (!entry_transition_active_ &&
     (applied_gait_ == GaitType::TWO_LEG_STAND ||
     applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE) &&
     this->_data->locomotion_gait == applied_gait_ &&
     this->_data->gait_scheduler->gait_data.initial_phase >= T(1) &&
+    std::none_of(touchdown_waiting_.begin(), touchdown_waiting_.end(),
+      [](bool waiting) {return waiting;}) &&
     this->_data->desired_state->mode == ControlMode::Locomotion)
   {
     this->_data->desired_state->mode = ControlMode::BalanceStand;
@@ -189,6 +205,9 @@ TransitionData<T> FSM_State_Locomotion<T>::transition()
     run();
     if (this->_data->use_wbc && this->_data->leg_controller->legsEnabled()) {
       handoff.height = wbc_data_.pBody_des.z();
+      handoff.locomotion_commands = this->_data->leg_controller->commands;
+      handoff.blend_frames = 2;
+      handoff.blend_pending = true;
       handoff.pending = true;
     }
   }
@@ -281,6 +300,11 @@ template<typename T>
 void FSM_State_Locomotion<T>::resetSwingTrajectories() noexcept
 {
   swing_active_.fill(false);
+  touchdown_waiting_.fill(false);
+  touchdown_confirm_frames_.fill(0);
+  touchdown_wait_frames_.fill(0);
+  touchdown_reported_.fill(false);
+  touchdown_confirmed_reported_.fill(false);
   for (auto & target : two_leg_hold_targets_) {target.setZero();}
   for (auto & trajectory : swing_trajectories_) {
     trajectory.reset();
@@ -458,7 +482,70 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
     //将布尔接触状态转成浮点数：
     wbc_data_.contact_state[leg] = contact_state[leg] ? T(1) : T(0);
 
-    if (contact_state[leg]) {
+    const bool single_step_gait =
+      applied_gait_ == GaitType::TWO_LEG_STAND ||
+      applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE;
+    const bool landing_candidate =
+      single_step_gait && contact_state[leg] && swing_active_[leg];
+    const bool touchdown_ready =
+      !landing_candidate ||
+      std::abs(this->_data->leg_controller->datas[leg].v.z()) <= T(0.20);
+    const T nominal_support = this->_data->quadruped->totalMass() * T(9.81) /
+      static_cast<T>(kNumLegs);
+    const bool force_confirmed =
+      !this->_data->measured_contact_valid[leg] ||
+      (this->_data->measured_contact_probability[leg] >= T(0.5) &&
+      this->_data->measured_normal_force[leg] >= T(0.15) * nominal_support);
+    if (landing_candidate && touchdown_ready && force_confirmed) {
+      ++touchdown_confirm_frames_[leg];
+    } else if (landing_candidate) {
+      touchdown_confirm_frames_[leg] = 0;
+    } else {
+      touchdown_confirm_frames_[leg] = 0;
+    }
+    const bool touchdown_confirmed =
+      touchdown_confirm_frames_[leg] >= 3;
+    if (landing_candidate && !touchdown_confirmed) {
+      ++touchdown_wait_frames_[leg];
+    } else {
+      touchdown_wait_frames_[leg] = 0;
+    }
+    if (landing_candidate && !touchdown_reported_[leg]) {
+      std::fprintf(stderr,
+        "[FSM][LOCOMOTION][TOUCHDOWN] leg=%zu planned=1 waiting=%d "
+        "p_world=[%.3f %.3f %.3f] v_body_norm=%.3f vz=%.3f "
+        "prob=%.3f normal_force=%.2fN\n", leg, !touchdown_confirmed,
+        static_cast<double>(feet_world[leg].x()),
+        static_cast<double>(feet_world[leg].y()),
+        static_cast<double>(feet_world[leg].z()),
+        static_cast<double>(this->_data->leg_controller->datas[leg].v.norm()),
+        static_cast<double>(this->_data->leg_controller->datas[leg].v.z()),
+        static_cast<double>(this->_data->measured_contact_probability[leg]),
+        static_cast<double>(this->_data->measured_normal_force[leg]));
+      touchdown_reported_[leg] = true;
+    }
+    if (landing_candidate && touchdown_confirmed &&
+      !touchdown_confirmed_reported_[leg]) {
+      std::fprintf(stderr,
+        "[FSM][LOCOMOTION][TOUCHDOWN_CONFIRMED] leg=%zu frames=%u "
+        "p_world=[%.3f %.3f %.3f] prob=%.3f normal_force=%.2fN\n", leg,
+        touchdown_confirm_frames_[leg], static_cast<double>(feet_world[leg].x()),
+        static_cast<double>(feet_world[leg].y()),
+        static_cast<double>(feet_world[leg].z()),
+        static_cast<double>(this->_data->measured_contact_probability[leg]),
+        static_cast<double>(this->_data->measured_normal_force[leg]));
+      touchdown_confirmed_reported_[leg] = true;
+    }
+    if (!landing_candidate) {
+      touchdown_reported_[leg] = false;
+      touchdown_confirmed_reported_[leg] = false;
+    }
+    touchdown_waiting_[leg] = landing_candidate &&
+      (!touchdown_ready || !touchdown_confirmed);
+    if (!touchdown_ready) {
+      wbc_data_.contact_state[leg] = T(0);
+    }
+    if (contact_state[leg] && (!landing_candidate || touchdown_confirmed)) {
       // 支撑时足端位置任务不会加入 WBC；同步当前值仅用于诊断，并清除上一摆动态。
       swing_active_[leg] = false;
       wbc_data_.pFoot_des[leg] = feet_world[leg];

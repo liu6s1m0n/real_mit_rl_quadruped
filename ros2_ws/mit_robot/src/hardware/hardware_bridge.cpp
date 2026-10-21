@@ -159,7 +159,8 @@ int HardwareBridge::runKeyboardControl(
   char log_name[128];
   std::strftime(log_name, sizeof(log_name), "dm1_march_%Y%m%d_%H%M%S", std::localtime(&log_ts));
   const char * configured_log_dir = std::getenv("DM1_LOG_DIR");
-  const std::filesystem::path log_dir(configured_log_dir ? configured_log_dir : "dm1_diagnostics/real_tests");
+  const std::filesystem::path log_dir(configured_log_dir ? configured_log_dir :
+    "dm1_diagnostics/real_tests");
   std::error_code log_error;
   std::filesystem::create_directories(log_dir, log_error);
   const auto log_path = log_dir / (std::string(log_name) + "_" +
@@ -191,7 +192,9 @@ int HardwareBridge::runKeyboardControl(
             << "est_vel_world_z,est_vel_body_x,est_vel_body_y,est_vel_body_z,"
             << "est_omega_body_x,est_omega_body_y,est_omega_body_z,"
             << "est_acc_world_x,est_acc_world_y,est_acc_world_z,model_body_z_contact\n";
-    imu_log::print(imu_log::Level::Info, "关节数据记录到 %s（published 表示已入发送队列，不代表电机执行确认）\n", log_path.c_str());
+    imu_log::print(
+      imu_log::Level::Info, "关节数据记录到 %s（published 表示已入发送队列，不代表电机执行确认）\n",
+      log_path.c_str());
   }
   // 打开 CAN 并不代表物理电机已经失能；接受键盘输入前先建立失效安全状态。
   hardware_.disableAll();
@@ -239,12 +242,15 @@ int HardwareBridge::runKeyboardControl(
     const auto cycle_start = std::chrono::steady_clock::now();
     const double now_s = std::chrono::duration<double>(cycle_start - start).count();
     auto commands = options_.command_source ? options_.command_source() : keyboard.consume();
-    const bool input_failed = std::any_of(commands.begin(), commands.end(), [](const auto & command) {
+    const bool input_failed = std::any_of(
+      commands.begin(), commands.end(), [](const auto & command) {
         return command.type == teleop::CommandType::KeyboardFailure;
       }) || (keyboard.available() && !keyboard.healthy());
-    commands.erase(std::remove_if(commands.begin(), commands.end(), [](const auto & command) {
-        return command.type == teleop::CommandType::KeyboardFailure;
-      }), commands.end());
+    commands.erase(
+      std::remove_if(
+        commands.begin(), commands.end(), [](const auto & command) {
+          return command.type == teleop::CommandType::KeyboardFailure;
+        }), commands.end());
     arbiter.applyBatch(commands);
     if (input_failed && !keyboard_fault_reported) {
       keyboard_fault_reported = true;
@@ -443,7 +449,8 @@ int HardwareBridge::runKeyboardControl(
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         const auto leg_id = static_cast<LegId>(leg);
         Vec3<float> foot_from_hip;
-        computeLegJacobianAndPosition(runner_.quadruped(), log_js[leg].position,
+        computeLegJacobianAndPosition(
+          runner_.quadruped(), log_js[leg].position,
           static_cast<Mat3<float> *>(nullptr), &foot_from_hip, leg_id);
         const Vec3<float> foot_body =
           runner_.quadruped().hipLocation(leg_id) + foot_from_hip;
@@ -470,15 +477,18 @@ int HardwareBridge::runKeyboardControl(
                   << ',' << cmds[leg].torque_feedforward[ji]
                   << ',' << cmds[leg].kp[ji] << ',' << cmds[leg].kd[ji];
           const float tau_pos = cmds[leg].kp[ji] * (q_des - q);
-          const float tau_vel = cmds[leg].kd[ji] * (cmds[leg].velocity_desired[ji] - log_js[leg].velocity[ji]);
-          csv_log << ',' << tau_pos << ',' << tau_vel << ',' << (tau_pos + tau_vel + cmds[leg].torque_feedforward[ji]);
+          const float tau_vel = cmds[leg].kd[ji] *
+            (cmds[leg].velocity_desired[ji] - log_js[leg].velocity[ji]);
+          csv_log << ',' << tau_pos << ',' << tau_vel << ',' <<
+            (tau_pos + tau_vel + cmds[leg].torque_feedforward[ji]);
           // prepareFrames 按关节交错 FR/RR/FL/RL；此排列也是其逆排列。
           constexpr std::array<std::size_t, kNumLegs> frame_leg_order{0, 2, 1, 3};
           const auto & frame = published_frames[joint * kNumLegs + frame_leg_order[leg]];
           const auto & calibration = calibration_[idx];
-          const float published_q = calibration.direction * (frame.position - calibration.zero_position);
+          const float published_q = calibration.direction *
+            (frame.position - calibration.zero_position);
           for (const float value : {published_q, calibration.direction * frame.velocity,
-            calibration.direction * frame.torque, frame.kp, frame.kd})
+              calibration.direction * frame.torque, frame.kp, frame.kd})
           {
             csv_log << ',' << (last_published_s >= 0 ? value : std::nanf(""));
           }
@@ -489,8 +499,13 @@ int HardwareBridge::runKeyboardControl(
               << ',' << (last_published_s >= 0 ? now_s - last_published_s : std::nan(""))
               << ',' << sender.failedFrames() << ',' << imu.sequence << ',' << imu.timestamp
               << ',' << imu.orientation_world_from_body.w()
-              << ',' << imu.orientation_world_from_body.x() << ',' << imu.orientation_world_from_body.y()
-              << ',' << imu.orientation_world_from_body.z() << ',' << imu.acceleration_body.transpose().format(Eigen::IOFormat(Eigen::StreamPrecision, 0, ",", ","))
+              << ',' << imu.orientation_world_from_body.x() << ',' <<
+        imu.orientation_world_from_body.y()
+              << ',' << imu.orientation_world_from_body.z() << ',' <<
+        imu.acceleration_body.transpose().format(
+        Eigen::IOFormat(
+          Eigen::StreamPrecision, 0, ",",
+          ","))
               << ',' << imu.angular_velocity_body.x() << ',' << imu.angular_velocity_body.y()
               << ',' << imu.angular_velocity_body.z() << ',' << imu.gravity_magnitude
               << ',' << estimate.position_world.x() << ',' << estimate.position_world.y()
@@ -498,7 +513,8 @@ int HardwareBridge::runKeyboardControl(
               << ',' << estimate.velocity_world.y() << ',' << estimate.velocity_world.z()
               << ',' << estimate.velocity_body.x() << ',' << estimate.velocity_body.y()
               << ',' << estimate.velocity_body.z() << ',' << estimate.angular_velocity_body.x()
-              << ',' << estimate.angular_velocity_body.y() << ',' << estimate.angular_velocity_body.z()
+              << ',' << estimate.angular_velocity_body.y() << ',' <<
+        estimate.angular_velocity_body.z()
               << ',' << estimate.acceleration_world.x() << ',' << estimate.acceleration_world.y()
               << ',' << estimate.acceleration_world.z()
               << ',' << model_body_z << '\n';
@@ -944,7 +960,8 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       // 首个控制器帧必须完整且通过协议安全检查后，才能使能物理输出。
       if (!mit_.validateCommands(runner_.jointCommands(), now_s)) {
         if (enable_error_log.ready()) {
-          imu_log::print(imu_log::Level::Error,
+          imu_log::print(
+            imu_log::Level::Error,
             "DM1 初始控制指令校验失败；仅报错，等待有效命令，不发送失能帧。\n");
         }
         std::this_thread::sleep_until(next_cycle);
@@ -952,7 +969,8 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       }
       if (!hardware_.enableAll()) {
         if (enable_error_log.ready()) {
-          imu_log::print(imu_log::Level::Error,
+          imu_log::print(
+            imu_log::Level::Error,
             "DM1 硬件使能未确认；仅报错，下轮重试，不发送失能帧。\n");
         }
         next_cycle = std::chrono::steady_clock::now();
