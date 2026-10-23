@@ -9,6 +9,7 @@
 #ifndef MYMIT_ROBOT_CONTROLLER_POSITION_VELOCITY_ESTIMATOR_HPP_
 #define MYMIT_ROBOT_CONTROLLER_POSITION_VELOCITY_ESTIMATOR_HPP_
 
+#include "config/control_config.h"
 #include <array>
 
 #include "controller/OrientationEstimator.hpp"
@@ -18,17 +19,17 @@
 template<typename T>
 struct PositionVelocityEstimatorParameters
 {
-  T nominal_time_step = T(0.002);              ///< 首次配置使用的控制周期，s。
-  T maximum_time_step = T(0.1);                ///< 允许连续积分的最大周期，s。
-  T process_noise_position = T(0.02);          ///< IMU 位置过程噪声缩放。
-  T process_noise_velocity = T(0.02);          ///< IMU 速度过程噪声缩放。
-  T process_noise_foot_position = T(0.002);    ///< 足端世界位置过程噪声缩放。
-  T sensor_noise_relative_position = T(0.001); ///< 机身到足端相对位置观测噪声。
-  T sensor_noise_relative_velocity = T(0.1);   ///< 支撑足速度约束观测噪声。
-  T sensor_noise_foot_height = T(0.001);       ///< 支撑足地面高度观测噪声。
-  T initial_covariance = T(100);               ///< 初始状态协方差。
-  T gravity = T(9.81);                         ///< 重力加速度绝对值，m/s^2。
-  T suspect_noise_multiplier = T(100);         ///< 摆动腿噪声最大放大倍数。
+  T nominal_time_step = T(control_config::control_time_step);              ///< 首次配置使用的控制周期，s。
+  T maximum_time_step = T(control_config::estimation::maximum_time_step);                ///< 允许连续积分的最大周期，s。
+  T process_noise_position = T(control_config::estimation::process_noise_position);          ///< IMU 位置过程噪声缩放。
+  T process_noise_velocity = T(control_config::estimation::process_noise_velocity);          ///< IMU 速度过程噪声缩放。
+  T process_noise_foot_position = T(control_config::estimation::process_noise_foot_position);    ///< 足端世界位置过程噪声缩放。
+  T sensor_noise_relative_position = T(control_config::estimation::sensor_noise_relative_position); ///< 机身到足端相对位置观测噪声。
+  T sensor_noise_relative_velocity = T(control_config::estimation::sensor_noise_relative_velocity);   ///< 支撑足速度约束观测噪声。
+  T sensor_noise_foot_height = T(control_config::estimation::sensor_noise_foot_height);       ///< 支撑足地面高度观测噪声。
+  T initial_covariance = T(control_config::estimation::initial_covariance);               ///< 初始状态协方差。
+  T gravity = T(control_config::gravity);                         ///< 重力加速度绝对值，m/s^2。
+  T suspect_noise_multiplier = T(control_config::estimation::suspect_noise_multiplier);         ///< 摆动腿噪声最大放大倍数。
 
   /** @brief 检查所有参数是否为有限正数。 */
   bool isValid() const;
@@ -70,7 +71,7 @@ public:
     OrientationEstimatorMode orientation_mode =
     OrientationEstimatorMode::IMU_FUSION,
     const PositionVelocityEstimatorParameters<T> & parameters = {},
-    T maximum_sensor_skew = T(0.02));
+    T maximum_sensor_skew = T(control_config::estimation::maximum_sensor_skew));
 
   /**
    * @brief 读取传感器并完成一次预测和观测更新。

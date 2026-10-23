@@ -72,7 +72,7 @@ private:
   std::size_t fold_iterations_ = 1;
   std::size_t calf_fold_iterations_ = 1;
   std::size_t thigh_fold_iterations_ = 1;
-  T prone_body_height_ = T(0.12);
+  T prone_body_height_{};
 };
 
 extern template class FSM_State_LieDown<float>;

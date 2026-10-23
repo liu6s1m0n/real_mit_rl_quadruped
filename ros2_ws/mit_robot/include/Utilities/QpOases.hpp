@@ -10,6 +10,7 @@
 #ifndef MYMIT_ROBOT_UTILITIES_QP_OASES_HPP_
 #define MYMIT_ROBOT_UTILITIES_QP_OASES_HPP_
 
+#include "config/control_config.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -22,7 +23,7 @@
 namespace qp_adapter
 {
 
-inline constexpr double kInfinity = 1.0e20;
+inline constexpr double kInfinity = control_config::solver::infinity;
 
 inline std::vector<qpOASES::real_t> rowMajor(
   const Eigen::MatrixXd & matrix)
@@ -65,7 +66,7 @@ inline bool solve(
   const Eigen::VectorXd & constraint_upper,
   Eigen::VectorXd & solution,
   double * objective = nullptr,
-  int max_working_set_recalculations = 100)
+  int max_working_set_recalculations = control_config::solver::maximum_working_set_recalculations)
 {
   const Eigen::Index variables = hessian.rows();
   const Eigen::Index rows = constraints.rows();
@@ -95,7 +96,8 @@ inline bool solve(
   qpOASES::Options options;
   options.setToMPC();
   options.printLevel = qpOASES::PL_NONE;
-  options.enableRegularisation = qpOASES::BT_TRUE;
+  options.enableRegularisation = control_config::solver::regularisation ?
+    qpOASES::BT_TRUE : qpOASES::BT_FALSE;
   problem.setOptions(options);
 
   qpOASES::int_t nwsr = static_cast<qpOASES::int_t>(

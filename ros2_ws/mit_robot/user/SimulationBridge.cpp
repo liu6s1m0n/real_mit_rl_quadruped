@@ -208,12 +208,13 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
     return;
   }
 
+  // 高度范围从配置生成，界面不维护第二份限值。
   // mjuiDef 数组必须以 mjITEM_END 结束；控件数据直接绑定到共享状态。
-  const mjuiDef height_controls[] = {
+  mjuiDef height_controls[] = {
     {mjITEM_SEPARATOR, "Robot controller", 1, nullptr, "", 0},
     {
       mjITEM_SLIDERNUM, "Height (m)", 2,
-      g_standing_height_slider, "0.28 0.42", 0
+      g_standing_height_slider, "", 0
     },
     {mjITEM_BUTTON, "Forward slow", 2, nullptr, "", 0},
     {mjITEM_BUTTON, "Forward fast", 2, nullptr, "", 0},
@@ -230,6 +231,8 @@ extern "C" void mjui_add(mjUI * ui, const mjuiDef * definition)
     {mjITEM_BUTTON, "March in place TROT", 2, nullptr, "", 0},
     {mjITEM_END, "", 0, nullptr, "", 0}
   };
+  std::snprintf(height_controls[1].other, sizeof(height_controls[1].other), "%.9g %.9g",
+    control_config::minimum_standing_height, control_config::maximum_standing_height);
   if (g_hardware_simulation) {
     std::vector<mjuiDef> controls;
     for (const auto & control : height_controls) {
@@ -878,9 +881,8 @@ SimulationBridge::SimulationBridge(std::string scene_path, RobotType robot_type)
  */
 void SimulationBridge::setStandingHeight(float height)
 {
-  const auto parameters = makeRobotControlParameters<float>(robot_type_);
-  if (!std::isfinite(height) || height < parameters.minimum_standing_height ||
-    height > parameters.maximum_standing_height)
+  if (!std::isfinite(height) || height < float(control_config::minimum_standing_height) ||
+    height > float(control_config::maximum_standing_height))
   {
     throw std::invalid_argument("standing height is outside the selected robot profile");
   }
@@ -892,8 +894,8 @@ void SimulationBridge::setStandingHeight(float height)
 /** @brief 设置低速前进档，并限制在允许的安全范围内。 */
 void SimulationBridge::setSlowWalkingForwardSpeed(float speed)
 {
-  if (!std::isfinite(speed) || speed <= 0.0F || speed > 0.6F) {
-    throw std::invalid_argument("slow walking speed must be within (0, 0.6] m/s");
+  if (!std::isfinite(speed) || speed <= 0.0F || speed > control_config::motion::maximum_preset_speed) {
+    throw std::invalid_argument("slow walking speed exceeds configured bounds");
   }
   slow_walking_forward_speed_ = speed;
 }
@@ -901,8 +903,8 @@ void SimulationBridge::setSlowWalkingForwardSpeed(float speed)
 /** @brief 设置快速前进档，并限制在允许的安全范围内。 */
 void SimulationBridge::setFastWalkingForwardSpeed(float speed)
 {
-  if (!std::isfinite(speed) || speed <= 0.0F || speed > 0.6F) {
-    throw std::invalid_argument("fast walking speed must be within (0, 0.6] m/s");
+  if (!std::isfinite(speed) || speed <= 0.0F || speed > control_config::motion::maximum_preset_speed) {
+    throw std::invalid_argument("fast walking speed exceeds configured bounds");
   }
   fast_walking_forward_speed_ = speed;
 }
@@ -910,8 +912,8 @@ void SimulationBridge::setFastWalkingForwardSpeed(float speed)
 /** @brief 设置横向移动档，并限制横向速度的绝对值。 */
 void SimulationBridge::setWalkingLateralSpeed(float speed)
 {
-  if (!std::isfinite(speed) || speed < 0.0F || speed > 0.6F) {
-    throw std::invalid_argument("lateral speed must be within [0, 0.6] m/s");
+  if (!std::isfinite(speed) || speed < 0.0F || speed > control_config::motion::maximum_preset_speed) {
+    throw std::invalid_argument("lateral speed exceeds configured bounds");
   }
   walking_lateral_speed_ = speed;
 }
@@ -919,8 +921,8 @@ void SimulationBridge::setWalkingLateralSpeed(float speed)
 /** @brief 设置原地旋转档，并限制偏航角速度的绝对值。 */
 void SimulationBridge::setTurningYawRate(float yaw_rate)
 {
-  if (!std::isfinite(yaw_rate) || yaw_rate < 0.0F || yaw_rate > 1.5F) {
-    throw std::invalid_argument("turning yaw rate must be within [0, 1.5] rad/s");
+  if (!std::isfinite(yaw_rate) || yaw_rate < 0.0F || yaw_rate > control_config::motion::maximum_preset_yaw_rate) {
+    throw std::invalid_argument("turning yaw rate exceeds configured bounds");
   }
   turning_yaw_rate_ = yaw_rate;
 }

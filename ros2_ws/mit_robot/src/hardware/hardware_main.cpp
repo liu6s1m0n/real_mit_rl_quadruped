@@ -59,11 +59,11 @@ struct Arguments
   // IMU 串口路径；默认使用自动检测。
   std::string imu_device = "auto";
   // 控制周期和启动零位允许误差，单位分别为 s 和 rad。
-  float control_time_step = 0.002F;
-  float zero_tolerance_rad = 0.05F;
+  float control_time_step = float(control_config::control_time_step);
+  float zero_tolerance_rad = control_config::hardware::startup_zero_tolerance;
   // 关节力矩饱和上限；默认 88 Nm（电机峰值 97 Nm）。超限关节按比例缩小后
   // 照常发送，不丢弃整帧。
-  float torque_limit_nm = 88.0F;
+  float torque_limit_nm = control_config::hardware::torque_limit;
   // 运行模式开关。
   bool enable_output = false;
   bool keyboard_control = false;

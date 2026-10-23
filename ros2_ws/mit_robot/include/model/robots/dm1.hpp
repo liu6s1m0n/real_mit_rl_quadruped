@@ -9,6 +9,7 @@
 #ifndef MYMIT_ROBOT_MODEL_ROBOTS_DM1_HPP_
 #define MYMIT_ROBOT_MODEL_ROBOTS_DM1_HPP_
 
+#include "config/control_config.h"
 #include <algorithm>
 #include <cmath>
 #include <eigen3/Eigen/Geometry>
@@ -102,10 +103,10 @@ constexpr double kKneeEnvelopeRadius = 0.080;
 // 在 hardware-sim 中得到相同的踏步最低高度 0.167 m，说明它不是下沉原因；
 // 保留数值待后续接入真实的膝间隙检查，避免把它误当成已生效的保护。
 constexpr double kMinimumKneeClearance = -0.020;
-constexpr double kStanceThighLower = -0.34;
-constexpr double kStanceThighUpper = -0.10;
-constexpr double kStanceCalfLower = -0.03;
-constexpr double kStanceCalfUpper = 1.20;
+constexpr double kStanceThighLower = control_config::safety::stance_thigh_lower;
+constexpr double kStanceThighUpper = control_config::safety::stance_thigh_upper;
+constexpr double kStanceCalfLower = control_config::safety::stance_calf_lower;
+constexpr double kStanceCalfUpper = control_config::safety::stance_calf_upper;
 
 template<typename T>
 bool clampStanceJointTarget(Vec3<T> & q)

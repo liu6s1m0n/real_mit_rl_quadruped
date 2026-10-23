@@ -1,3 +1,4 @@
+#include "config/control_config.h"
 #include "WBC/WBC_Ctrl/BodyPosTask.hpp"
 
 #include <stdexcept>
@@ -15,9 +16,9 @@ BodyPosTask<T>::BodyPosTask(const FloatingBaseModel<T> * robot)
   this->Jt_ = DMat<T>::Zero(this->dim_task_, _robot_sys->getNumDof());
   this->Jt_.template block<3, 3>(0, 3).setIdentity();
   this->JtDotQdot_ = DVec<T>::Zero(this->dim_task_);
-  _Kp_kin = DVec<T>::Constant(this->dim_task_, T(1));
-  _Kp = DVec<T>::Constant(this->dim_task_, T(50));
-  _Kd = DVec<T>::Constant(this->dim_task_, T(1));
+  _Kp_kin = control_config::vector3<T>(control_config::wbc::body_position_kinematic_gain);
+  _Kp = DVec<T>::Constant(this->dim_task_, T(control_config::wbc::task_position_kp));
+  _Kd = DVec<T>::Constant(this->dim_task_, T(control_config::wbc::task_position_kd));
 }
 
 template<typename T>

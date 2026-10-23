@@ -74,20 +74,20 @@ template<typename T>
 void ConvexMPCLocomotion<T>::setVelocityCommand(
   T forward_velocity, T lateral_velocity, T yaw_rate)
 {
-  constexpr T maximum_linear_velocity = T(1);
-  constexpr T maximum_yaw_rate = T(2);
+  constexpr T maximum_linear_velocity = T(control_config::mpc::maximum_linear_velocity);
+  constexpr T maximum_yaw_rate = T(control_config::mpc::maximum_yaw_rate);
   const Vec2<T> linear_velocity(forward_velocity, lateral_velocity);
   if (!linear_velocity.allFinite() ||
     linear_velocity.norm() > maximum_linear_velocity)
   {
     throw std::invalid_argument(
-            "locomotion planar velocity magnitude must not exceed 1 m/s");
+            "locomotion planar velocity magnitude exceeds configured limit");
   }
   if (!std::isfinite(static_cast<double>(yaw_rate)) ||
     std::abs(yaw_rate) > maximum_yaw_rate)
   {
     throw std::invalid_argument(
-            "locomotion yaw rate must be within [-2, 2] rad/s");
+            "locomotion yaw rate exceeds configured limit");
   }
   velocity_body_ = linear_velocity;
   yaw_rate_ = yaw_rate;
@@ -96,8 +96,8 @@ void ConvexMPCLocomotion<T>::setVelocityCommand(
 template<typename T>
 void ConvexMPCLocomotion<T>::setPositionOffsetWorld(const Vec2<T> & offset)
 {
-  if (!offset.allFinite() || offset.norm() > T(0.05)) {
-    throw std::invalid_argument("position offset must be finite and within 5 cm");
+  if (!offset.allFinite() || offset.norm() > T(control_config::mpc::maximum_position_offset)) {
+    throw std::invalid_argument("position offset must be finite and within configured limit");
   }
   position_offset_world_ = offset;
 }
@@ -128,16 +128,16 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
   // the robot accelerates.  The integral is bounded to the same range as MIT.
   const Vec3<T> velocity_body =
     estimate.rotation_world_from_body.transpose() * estimate.velocity_world;
-  if (std::abs(velocity_body.x()) > T(0.2)) {
+  if (std::abs(velocity_body.x()) > T(control_config::mpc::pitch_integral_min_speed)) {
     rpy_integral_pitch_ += control_time_step_ *
       (T(0) - estimate.rpy.y()) / velocity_body.x();
   }
-  if (std::abs(velocity_body.y()) > T(0.1)) {
+  if (std::abs(velocity_body.y()) > T(control_config::mpc::roll_integral_min_speed)) {
     rpy_integral_roll_ += control_time_step_ *
       (T(0) - estimate.rpy.x()) / velocity_body.y();
   }
-  rpy_integral_roll_ = std::clamp(rpy_integral_roll_, T(-0.25), T(0.25));
-  rpy_integral_pitch_ = std::clamp(rpy_integral_pitch_, T(-0.25), T(0.25));
+  rpy_integral_roll_ = std::clamp(rpy_integral_roll_, -T(control_config::mpc::attitude_integral_limit), T(control_config::mpc::attitude_integral_limit));
+  rpy_integral_pitch_ = std::clamp(rpy_integral_pitch_, -T(control_config::mpc::attitude_integral_limit), T(control_config::mpc::attitude_integral_limit));
 
   // yaw 只表示当前朝向和本周期转向增量，不锁存绝对航向；这样 IMU yaw
   // 漂移不会生成持续的姿态追踪误差或 WBC 平衡力矩。
@@ -159,8 +159,8 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
   command.body_angular_velocity << T(0), T(0), commanded_yaw_rate_;
   // MIT 对期望速度积分得到世界系水平位置目标，并把目标限制在当前
   // 估计位置附近，避免遥控目标无限漂移。
-  if (commanded_velocity_body_.squaredNorm() > T(1e-8) ||
-    std::abs(commanded_yaw_rate_) > T(1e-4))
+  if (commanded_velocity_body_.squaredNorm() > T(control_config::mpc::moving_velocity_squared) ||
+    std::abs(commanded_yaw_rate_) > T(control_config::mpc::moving_yaw_rate))
   {
     command_position_world_.template head<2>() +=
       control_time_step_ * command.body_velocity_world.template head<2>();
@@ -168,9 +168,9 @@ DesiredState<T> ConvexMPCLocomotion<T>::setupCommand(
       command_position_world_.template head<2>() -
       estimate.position_world.template head<2>();
     command_position_world_.x() = estimate.position_world.x() +
-      std::clamp(position_error.x(), T(-0.1), T(0.1));
+      std::clamp(position_error.x(), -T(control_config::mpc::position_error_limit), T(control_config::mpc::position_error_limit));
     command_position_world_.y() = estimate.position_world.y() +
-      std::clamp(position_error.y(), T(-0.1), T(0.1));
+      std::clamp(position_error.y(), -T(control_config::mpc::position_error_limit), T(control_config::mpc::position_error_limit));
   }
   command_position_world_.z() = desired.body_position_world.z();
   command.body_position_world = command_position_world_;

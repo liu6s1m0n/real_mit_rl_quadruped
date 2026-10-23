@@ -9,6 +9,7 @@
 #ifndef MYMIT_ROBOT_MPC_SOLVER_MPC_H_
 #define MYMIT_ROBOT_MPC_SOLVER_MPC_H_
 
+#include "config/control_config.h"
 #include <array>
 #include <cstddef>
 #include <vector>
@@ -19,26 +20,24 @@ namespace mpc
 {
 
 /** MIT convex-MPC uses a ten-segment prediction window for the trot gait. */
-inline constexpr std::size_t kDefaultMpcHorizon = 10;
+inline constexpr std::size_t kDefaultMpcHorizon = control_config::mpc::horizon;
 
 template<typename T>
 struct SolverSettings
 {
   std::size_t horizon = kDefaultMpcHorizon;   ///< 预测窗包含的离散时刻数（MIT 为 10）。
-  T time_step = T(0.030);     ///< 预测步长 dtMPC，s（500 Hz 下 15 个控制周期）。
+  T time_step = T(control_config::mpc::time_step);     ///< 预测步长 dtMPC，s（500 Hz 下 15 个控制周期）。
 
-  T friction_coefficient = T(0.4);  ///< 四棱锥摩擦约束的摩擦系数 mu。
-  T minimum_normal_force = T(0);    ///< 支撑脚允许的最小法向力，N。
-  T maximum_normal_force = T(120);  ///< 单只支撑脚允许的最大法向力，N（MIT f_max）。
-  T alpha = T(4e-5);                ///< 反力二次正则权重（MIT alpha）。
-  T x_drag = T(0);                  ///< MIT 机身高度/前向速度阻尼项。
+  T friction_coefficient = T(control_config::friction);  ///< 四棱锥摩擦约束的摩擦系数 mu。
+  T minimum_normal_force = T(control_config::minimum_normal_force);    ///< 支撑脚允许的最小法向力，N。
+  T maximum_normal_force = T(control_config::maximum_normal_force);  ///< 单只支撑脚允许的最大法向力，N（MIT f_max）。
+  T alpha = T(control_config::mpc::alpha);                ///< 反力二次正则权重（MIT alpha）。
+  T x_drag = T(control_config::mpc::x_drag);                  ///< MIT 机身高度/前向速度阻尼项。
   /** 状态权重 Q：[yaw, pitch, roll, x, y, z, wx, wy, wz, vx, vy, vz]；yaw 和 wz 反馈关闭。 */
-  std::array<T, 12> state_weights{
-    T(0), T(0.25), T(10), T(2), T(2), T(50),
-    T(0), T(0), T(0), T(0.2), T(0.2), T(0.1)};
+  std::array<T, 12> state_weights = control_config::array<T>(control_config::mpc::state_weights);
 
   // MPC 计算重心相对机身原点的机身系偏移，m；仅修正求解，不改机械模型。
-  Vec3<T> com_offset_body = Vec3<T>::Zero();
+  Vec3<T> com_offset_body = control_config::vector3<T>(control_config::mpc::com_offset_body);
 
   /** @brief 检查预测时域、力约束和权重是否有效。 */
   bool isValid() const noexcept;

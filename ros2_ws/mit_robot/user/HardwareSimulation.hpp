@@ -2,6 +2,7 @@
 #ifndef MYMIT_ROBOT_USER_HARDWARE_SIMULATION_HPP_
 #define MYMIT_ROBOT_USER_HARDWARE_SIMULATION_HPP_
 
+#include "config/control_config.h"
 #include <array>
 #include <chrono>
 #include <deque>
@@ -17,7 +18,7 @@ struct HardwareSimulationOptions
 {
   bool enabled = false;
   std::string calibration_path;
-  float torque_limit_nm = 88.0F;  // Same default as hardware_main.
+  float torque_limit_nm = control_config::hardware::torque_limit;  // Same default as hardware_main.
   // Unmeasured stress assumptions, not identified DM1 device parameters.
   double command_delay_ms = 1.0;
   double feedback_delay_ms = 1.0;

@@ -3,6 +3,7 @@
 // 负责反馈数据整理、腿部运动学计算和统一 JointCommand 生成。
 // ============================================================
 
+#include "config/control_config.h"
 #include "controller/leg_controller.hpp"
 
 #include <cmath>
@@ -271,7 +272,7 @@ JointCommand<T> LegController<T>::command(LegId leg_id, T timestamp)
   // 比例缩减全部增益，导致机体无法支撑自重。60 Nm 仍可阻止行走接触融合
   // 退出时的 ~180 Nm 冲量，同时给 WBC 前馈留出足够裕度。
   // 硬件接口保留独立的 30 Nm 连续值保护作为最终安全网。
-  constexpr T kContinuousTorqueLimit = T(60);
+  constexpr T kContinuousTorqueLimit = T(control_config::safety::joint_command_torque_limit);
   for (Eigen::Index joint = 0;
     joint < static_cast<Eigen::Index>(kJointsPerLeg); ++joint)
   {
@@ -283,8 +284,9 @@ JointCommand<T> LegController<T>::command(LegId leg_id, T timestamp)
       std::fprintf(
         stderr,
         "[LegController] 总力矩约束：leg=%zu joint=%td raw=%.3f Nm "
-        "limit=60.0 q_des=%.4f q=%.4f dq_des=%.4f dq=%.4f。\n",
+        "limit=%.1f q_des=%.4f q=%.4f dq_des=%.4f dq=%.4f。\n",
         index, joint, static_cast<double>(total_torque),
+        static_cast<double>(kContinuousTorqueLimit),
         static_cast<double>(result.position_desired[joint]),
         static_cast<double>(data.q[joint]),
         static_cast<double>(result.velocity_desired[joint]),

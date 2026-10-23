@@ -1,3 +1,4 @@
+#include "config/control_config.h"
 #include "SimulationActuatorWriter.hpp"
 
 #include <algorithm>
@@ -22,7 +23,7 @@ kActuatorNames{{
   {{"RR_hip", "RR_thigh", "RR_calf"}},
   {{"RL_hip", "RL_thigh", "RL_calf"}}
 }};
-constexpr double kCommandTorqueLimitNm = 88.0;
+constexpr double kCommandTorqueLimitNm = control_config::hardware::torque_limit;
 constexpr double kContinuousTorqueNm = 30.0;
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kRatedSpeedRadS = 40.0 * 2.0 * kPi / 60.0;

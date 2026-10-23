@@ -237,11 +237,11 @@ bool OrientationEstimator<T>::computeImuFusionOrientation(
       const T kGravity = imu.gravity_valid &&
         std::isfinite(static_cast<double>(imu.gravity_magnitude)) &&
         imu.gravity_magnitude > T(0) ?
-        static_cast<T>(imu.gravity_magnitude) : T(9.81);
+        static_cast<T>(imu.gravity_magnitude) : T(control_config::gravity);
       const T acceleration_norm = acceleration_body.norm();
       const bool acceleration_is_gravity =
-        acceleration_norm >= T(0.5) * kGravity &&
-        acceleration_norm <= T(1.5) * kGravity;
+        acceleration_norm >= T(control_config::estimation::gravity_acceleration_min_ratio) * kGravity &&
+        acceleration_norm <= T(control_config::estimation::gravity_acceleration_max_ratio) * kGravity;
       if (!acceleration_is_gravity || !orientationFromAccelerometer(
           acceleration_body, T(0), integrated_orientation_))
       {
@@ -259,7 +259,7 @@ bool OrientationEstimator<T>::computeImuFusionOrientation(
     fusion_initialized_ = false;
     return computeImuFusionOrientation(imu, timestamp, orientation);
   }
-  constexpr T kMaximumIntegrationStep = T(0.1);
+  constexpr T kMaximumIntegrationStep = T(control_config::estimation::maximum_time_step);
   if (time_step > kMaximumIntegrationStep) {
     // 丢帧后重新建立局部姿态参考，避免后续每帧都因 dt 过大而永久失败。
     fusion_initialized_ = false;
@@ -280,11 +280,11 @@ bool OrientationEstimator<T>::computeImuFusionOrientation(
   const T kGravity = imu.gravity_valid &&
     std::isfinite(static_cast<double>(imu.gravity_magnitude)) &&
     imu.gravity_magnitude > T(0) ?
-    static_cast<T>(imu.gravity_magnitude) : T(9.81);
+    static_cast<T>(imu.gravity_magnitude) : T(control_config::gravity);
   const T acceleration_norm = acceleration_body.norm();
   const bool acceleration_is_gravity =
-    acceleration_norm >= T(0.5) * kGravity &&
-    acceleration_norm <= T(1.5) * kGravity;
+    acceleration_norm >= T(control_config::estimation::gravity_acceleration_min_ratio) * kGravity &&
+    acceleration_norm <= T(control_config::estimation::gravity_acceleration_max_ratio) * kGravity;
   /*加速度可以计算 roll/pitch，但不能计算 yaw。
     所以先取当前积分姿态的 yaw，再使用加速度计算新的姿态：*/
   if (acceleration_is_gravity && time_step > T(0)) {

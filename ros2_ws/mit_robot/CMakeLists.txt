@@ -282,6 +282,7 @@ add_executable(mymit_robot_height_service
 )
 target_compile_features(mymit_robot_height_service PRIVATE cxx_std_17)
 target_include_directories(mymit_robot_height_service PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/user
 )
 ament_target_dependencies(mymit_robot_height_service rclcpp)

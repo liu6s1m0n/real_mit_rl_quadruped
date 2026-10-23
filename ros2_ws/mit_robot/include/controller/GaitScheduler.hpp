@@ -8,6 +8,7 @@
 #ifndef MYMIT_ROBOT_CONTROLLER_GAIT_SCHEDULER_HPP_
 #define MYMIT_ROBOT_CONTROLLER_GAIT_SCHEDULER_HPP_
 
+#include "config/control_config.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -53,12 +54,12 @@ enum class GaitOverrideMode : std::uint8_t
 template<typename T>
 struct GaitSchedulerParameters
 {
-  GaitOverrideMode override_mode = GaitOverrideMode::USE_REQUESTED_GAIT;
-  GaitType gait_type = GaitType::STAND;
-  T gait_period_time = T(0.5);       ///< 覆盖步态周期，s。
-  T gait_switching_phase = T(0.5);   ///< 覆盖支撑相占整周期的比例。
+  GaitOverrideMode override_mode = static_cast<GaitOverrideMode>(control_config::gait::override_mode);
+  GaitType gait_type = static_cast<GaitType>(control_config::gait::initial_gait);
+  T gait_period_time = T(control_config::gait::override_period);       ///< 覆盖步态周期，s。
+  T gait_switching_phase = T(control_config::gait::override_stance_ratio);   ///< 覆盖支撑相占整周期的比例。
   /** TROT 周期，s；必须等于 MPC 预测窗 10 段 x dtMPC。 */
-  T trot_period_time = T(0.30);
+  T trot_period_time = T(control_config::mpc::horizon) * T(control_config::mpc::time_step);
 
   /** @brief 检查枚举、周期和切换相是否可用。 */
   bool isValid() const noexcept;
@@ -225,9 +226,9 @@ public:
   GaitData<T> gait_data;
 
   // 保留原有自然步态调节量，供上层 FSM/MPC 实时修改。
-  T period_time_natural = T(0.5);
-  T switching_phase_natural = T(0.5);
-  T swing_time_natural = T(0.25);
+  T period_time_natural{};
+  T switching_phase_natural{};
+  T swing_time_natural{};
 
 private:
   void configureGait(

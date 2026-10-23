@@ -3,6 +3,7 @@
  * @brief 运动学全身控制器的分层任务和零空间投影实现。
  */
 
+#include "config/control_config.h"
 #include "WBC/KinWBC.hpp"
 #include "Utilities/pseudoInverse.h"
 
@@ -14,7 +15,7 @@
  */
 template<typename T>
 KinWBC<T>::KinWBC(std::size_t num_qdot)
-: threshold_(0.001), num_qdot_(num_qdot),
+: threshold_(control_config::wbc::kinematic_pseudoinverse_threshold), num_qdot_(num_qdot),
   num_act_joint_(num_qdot >= 6 ? num_qdot - 6 : 0)
 {
   if (num_qdot < 6) {

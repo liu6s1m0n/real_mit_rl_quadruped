@@ -28,12 +28,8 @@ FSM_State_BalanceStand<T>::FSM_State_BalanceStand(
     parameters.balance_body_position_kp, parameters.balance_body_position_kd);
   // DM IMU 的偏航角当前不可稳定观测。保留滚转/俯仰姿态环，
   // 暂时关闭 BalanceStand 的偏航力矩，避免把航向漂移误当成机身扭转误差。
-  auto balance_orientation_kp = parameters.balance_body_orientation_kp;
-  auto balance_orientation_kd = parameters.balance_body_orientation_kd;
-  balance_orientation_kp.z() = T(0);
-  balance_orientation_kd.z() = T(0);
   wbc_ctrl_->setBodyOrientationGains(
-    balance_orientation_kp, balance_orientation_kd);
+    parameters.balance_body_orientation_kp, parameters.balance_body_orientation_kd);
   wbc_ctrl_->setFootPositionGains(
     parameters.wbc_foot_position_kp, parameters.wbc_foot_position_kd);
   wbc_ctrl_->setJointGains(
@@ -151,7 +147,7 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
 
   // 四腿接触；期望反力 mg/4，由 WBIC 在摩擦锥内修正。
   const T support_force =
-    this->_data->quadruped->totalMass() * T(9.81) / static_cast<T>(kNumLegs);
+    this->_data->quadruped->totalMass() * T(control_config::gravity) / static_cast<T>(kNumLegs);
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     // MIT BalanceStand uses contact constraints for all four feet; the
     // support-foot position task is therefore unused in this state.

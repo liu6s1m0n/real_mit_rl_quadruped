@@ -309,11 +309,11 @@ bool PositionVelocityEstimator<T>::run()
   // 预测协方差 = A*P*A' + Q，Q 为过程噪声。
   StateMatrix process_noise = StateMatrix::Zero();
   process_noise.template block<3, 3>(0, 0) =
-    parameters_.process_noise_position * (time_step / T(20)) *
+    parameters_.process_noise_position * (time_step / T(control_config::estimation::process_noise_scale)) *
     Mat3<T>::Identity();
   process_noise.template block<3, 3>(3, 3) =
     parameters_.process_noise_velocity *
-    (time_step * parameters_.gravity / T(20)) * Mat3<T>::Identity();
+    (time_step * parameters_.gravity / T(control_config::estimation::process_noise_scale)) * Mat3<T>::Identity();
   process_noise.template block<12, 12>(6, 6) =
     parameters_.process_noise_foot_position * time_step *
     Eigen::Matrix<T, 12, 12>::Identity();
@@ -399,10 +399,10 @@ bool PositionVelocityEstimator<T>::run()
   covariance_ = (covariance_ + covariance_.transpose()) / T(2);
 
   // 沿用 MIT Cheetah 的水平协方差条件化，防止 x/y 漂移与其他状态强耦合。
-  if (covariance_.template block<2, 2>(0, 0).determinant() > T(1e-6)) {
+  if (covariance_.template block<2, 2>(0, 0).determinant() > T(control_config::estimation::horizontal_covariance_threshold)) {
     covariance_.template block<2, 16>(0, 2).setZero();
     covariance_.template block<16, 2>(2, 0).setZero();
-    covariance_.template block<2, 2>(0, 0) /= T(10);
+    covariance_.template block<2, 2>(0, 0) /= T(control_config::estimation::horizontal_covariance_divisor);
   }
 
   last_timestamp_ = orientation.timestamp;

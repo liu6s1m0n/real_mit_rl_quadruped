@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "controller/leg_controller.hpp"
+#include "FSM/ControlFSM.h"
 #include "FSM/FSM_State_BalanceStand.h"
 #include "FSM/FSM_State_Locomotion.h"
 #include "hardware/dm1_mit_interface.hpp"
@@ -596,12 +597,6 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
 {
   const auto parameters = makeRobotControlParameters<float>(RobotType::DM1);
   EXPECT_TRUE(
-    parameters.initialization_kp.isApprox(
-      Vec3<float>(99.9F, 99.9F, 99.9F)));
-  EXPECT_TRUE(
-    parameters.initialization_kd.isApprox(
-      Vec3<float>(1.999F, 1.999F, 1.999F)));
-  EXPECT_TRUE(
     parameters.prone_home_joint_kp.isApprox(
       Vec3<float>(70.0F, 70.0F, 70.0F)));
   EXPECT_TRUE(
@@ -610,10 +605,10 @@ TEST(Dm1Contract, MotorFacingPdProfilesMatchTheDeployedContract)
   // 机身姿态环属于 BalanceStand 的 WBC 任务增益，与直接关节 PD 量纲不同。
   EXPECT_TRUE(
     parameters.balance_body_orientation_kp.isApprox(
-      Vec3<float>(200.0F, 200.0F, 100.0F)));
+      Vec3<float>(200.0F, 200.0F, 0.0F)));
   EXPECT_TRUE(
     parameters.balance_body_orientation_kd.isApprox(
-      Vec3<float>(10.0F, 10.0F, 10.0F)));
+      Vec3<float>(10.0F, 10.0F, 0.0F)));
   // BalanceStand 下发给电机的关节 PD 使用当前 DM1 站立参数。
   EXPECT_TRUE(
     parameters.balance_joint_kp.isApprox(
@@ -651,15 +646,13 @@ TEST(Dm1Contract, MotorFacingJointGainsStayInsideMitProtocolRange)
   constexpr float kOperationalKdLimit = 4.95F;
   // 直接下发给电机的关节 PD：初始化/趴卧保持、BalanceStand、StandUp 收腿、
   // MPC/WBC 行走（LieDown 折叠复用）。
-  const std::array<Vec3<float>, 6> kp_sets{
-    parameters.initialization_kp,
+  const std::array<Vec3<float>, 5> kp_sets{
     parameters.prone_home_joint_kp,
     parameters.joint_kp,
     parameters.balance_joint_kp,
     parameters.stand_up_joint_kp,
     parameters.joint_kp};
-  const std::array<Vec3<float>, 6> kd_sets{
-    parameters.initialization_kd,
+  const std::array<Vec3<float>, 5> kd_sets{
     parameters.prone_home_joint_kd,
     parameters.joint_kd,
     parameters.balance_joint_kd,
@@ -1023,4 +1016,56 @@ TEST(Dm1Contract, HardwareRequiresCalibratedFeedbackAndClampsMitOutput)
   EXPECT_TRUE(hardware.send(commands, 1.0));
   EXPECT_EQ(transport.frames.size(), kNumJoints);
   EXPECT_FALSE(transport.disabled);
+}
+
+TEST(ControlConfiguration, FsmBorrowsTheRunnerSnapshotAndDerivesTiming)
+{
+  test_support::FsmContext context(0.002F);
+  context.parameters.mpc_time_step = 0.042F;
+  context.parameters.joint_kp << 12.0F, 13.0F, 14.0F;
+  ControlFSM<float> fsm(context.quadruped, context.estimate, context.joint_states,
+    context.leg_controller, context.gait_scheduler, context.desired_state, 0.002F,
+    context.parameters);
+  EXPECT_EQ(fsm.data.control_parameters, &context.parameters);
+  EXPECT_TRUE(fsm.data.control_parameters->joint_kp.isApprox(context.parameters.joint_kp));
+  EXPECT_NEAR(context.gait_scheduler.parameters().trot_period_time,
+    float(control_config::mpc::horizon) * 0.042F, 1e-6F);
+}
+
+TEST(ControlConfiguration, GaitEntryAndSwitchPreservePassedWbcWeightAndJointGains)
+{
+  DiagnosticEnvironment diagnostics("1");
+  DiagnosticEnvironment full_diagnostics("1", "DM1_CONTROL_DIAGNOSTICS_FULL");
+  test_support::FsmContext context(0.002F);
+  for (auto & joint : context.joint_states) {
+    joint.valid = true;
+    ASSERT_TRUE(context.leg_controller.updateData(joint));
+  }
+  context.estimate.position_world.z() = 0.28F;
+  context.desired_state.body_position_world.z() = 0.28F;
+  context.desired_state.mode = ControlMode::Locomotion;
+  context.parameters.locomotion_floating_base_weight = 321.0F;
+  context.parameters.joint_kp << 12.0F, 13.0F, 14.0F;
+  context.parameters.joint_kd << 1.1F, 1.2F, 1.3F;
+  context.data().locomotion_gait = GaitType::TROT;
+  FSM_State_Locomotion<float> locomotion(&context.data());
+  locomotion.onEnter();
+  bool saw_requested_gait = false;
+  for (int frame = 0; frame < 120; ++frame) {
+    context.estimate.timestamp = float(frame + 1) * 0.002F;
+    context.gait_scheduler.step();
+    context.data().gait_frame = context.gait_scheduler.gaitFrame(control_config::mpc::horizon);
+    ::testing::internal::CaptureStderr();
+    locomotion.run();
+    const auto log = ::testing::internal::GetCapturedStderr();
+    ASSERT_TRUE(context.leg_controller.legsEnabled()) << log;
+    ASSERT_NE(log.find("floating_weight=321 "), std::string::npos) << log;
+    for (const auto & command : context.leg_controller.commands) {
+      EXPECT_TRUE(command.kp_joint.isApprox(context.parameters.joint_kp));
+      EXPECT_TRUE(command.kd_joint.isApprox(context.parameters.joint_kd));
+    }
+    saw_requested_gait = saw_requested_gait ||
+      context.gait_scheduler.gait_data.current_gait == GaitType::TROT;
+  }
+  EXPECT_TRUE(saw_requested_gait);
 }

@@ -85,6 +85,8 @@ LocomotionCtrl<T>::LocomotionCtrl(FloatingBaseModel<T> model)
 
   body_position_task_ = std::make_unique<BodyPosTask<T>>(&this->model());
   body_orientation_task_ = std::make_unique<BodyOriTask<T>>(this->model());
+  body_orientation_task_->setKinematicGain(
+    control_config::vector3<T>(control_config::wbc::body_orientation_kinematic_gain));
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     foot_contact_indices_[leg] = static_cast<std::size_t>(foot_indices[leg]);
     foot_contacts_[leg] =
@@ -121,17 +123,8 @@ template<typename T>
 void LocomotionCtrl<T>::setBodyOrientationGains(
   const Vec3<T> & kp, const Vec3<T> & kd)
 {
-  auto effective_kp = kp;
-  auto effective_kd = kd;
-  Vec3<T> kinematic_gain = Vec3<T>::Ones();
-  // yaw 只用于上层转向/落足规划。WBC 不用 yaw 误差改变关节参考、姿态
-  // 加速度或平衡力矩，避免 IMU 航向漂移把机身持续拧转。
-  effective_kp.z() = T(0);
-  effective_kd.z() = T(0);
-  kinematic_gain.z() = T(0);
-  body_orientation_task_->setKinematicGain(kinematic_gain);
-  body_orientation_task_->setProportionalGain(effective_kp);
-  body_orientation_task_->setDerivativeGain(effective_kd);
+  body_orientation_task_->setProportionalGain(kp);
+  body_orientation_task_->setDerivativeGain(kd);
 }
 
 /**

@@ -85,7 +85,7 @@ public:
   {return control_parameters_.minimum_standing_height;}
   float maximumStandingHeight() const noexcept
   {return control_parameters_.maximum_standing_height;}
-  static constexpr float defaultWalkingForwardSpeed() noexcept {return 0.32F;}
+  static constexpr float defaultWalkingForwardSpeed() noexcept {return control_config::motion::forward;}
   float standingHeightTarget() const noexcept {return standing_height_target_;}
   /*返回四条腿当前生成的最终关节命令。外部执行层可以读取它并写入：
     MuJoCo 的控制数组；真实电机总线。*/
@@ -145,10 +145,10 @@ private:
     它们都是非拥有型指针，RobotRunner 不负责释放。*/
   mjModel * model_ = nullptr;
   const mjData * data_ = nullptr;
-  float control_time_step_ = 0.002F;
+  float control_time_step_ = float(control_config::control_time_step);
   float hardware_time_ = 0.0F;
   bool hardware_mode_ = false;
-  RobotControlParameters<float> control_parameters_;  ///< DM1 唯一控制参数。
+  const RobotControlParameters<float> control_parameters_;  ///< DM1 唯一控制参数。
   /*四足机器人模型。*/
   Quadruped<float> quadruped_;
   /*四腿控制器。保存腿部反馈；计算足端运动学；生成 JointCommand。*/
@@ -184,19 +184,19 @@ private:
   std::array<Vec3<float>, kNumLegs> initial_joint_positions_{};
   /** 显式站立启动瞬间捕获的关节角；单纯解锁不会走到此处。 */
   std::array<Vec3<float>, kNumLegs> motion_start_hold_positions_{};
-  /*关节初始化持续 0.4 秒；启动阶段优先保证平稳，不参与行走电机提速。*/
+  /*关节初始化持续时间由统一配置指定；启动阶段优先保证平稳，不参与行走电机提速。*/
   float joint_initialization_start_time_ = 0.0F;
-  float joint_initialization_duration_ = 0.4F;
+  float joint_initialization_duration_{};
   /*当前实际发送给控制器的高度。
     它会逐渐逼近目标值。*/
-  float standing_height_target_ = 0.28F;
-  float standing_height_command_ = 0.28F;
+  float standing_height_target_ = float(control_config::standing_height);
+  float standing_height_command_ = standing_height_target_;
   /*高度变化速率限制为：*/
-  // 换站立速度要修改的地方：初始化默认值，构造时会由控制参数覆盖。
-  float standing_height_rate_limit_ = 0.04F;
-  float prone_body_height_ = 0.12F;
-  float prone_down_height_rate_ = 0.08F;
-  float prone_down_height_command_ = 0.39F;
+  // 构造时从共享配置传入。
+  float standing_height_rate_limit_{};
+  float prone_body_height_{};
+  float prone_down_height_rate_{};
+  float prone_down_height_command_{};
   /*标记是否已经开始关节初始化*/
   bool joint_initialization_started_ = false;
   bool motion_start_hold_active_ = false;

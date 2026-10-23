@@ -40,7 +40,7 @@ template<typename T>
 bool SafetyChecker<T>::checkSafeOrientation() const
 {
   const auto & estimate = *data_->state_estimate;
-  constexpr T maximum_roll_pitch = T(1.4);  // 约 80 度。
+  constexpr T maximum_roll_pitch = T(control_config::safety::maximum_roll_pitch);  // 约 80 度。
   return estimate.valid && estimate.rpy.allFinite() &&
          std::abs(estimate.rpy.x()) <= maximum_roll_pitch &&
          std::abs(estimate.rpy.y()) <= maximum_roll_pitch;
@@ -50,7 +50,7 @@ template<typename T>
 bool SafetyChecker<T>::checkPDesFoot()
 {
   bool safe = true;
-  constexpr T sine_sixty_degrees = T(0.8660254037844386);
+  constexpr T sine_sixty_degrees = T(control_config::safety::foot_xy_limit_sine);
 
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const LegId leg_id = static_cast<LegId>(leg);
@@ -65,7 +65,7 @@ bool SafetyChecker<T>::checkPDesFoot()
       position.y(), -maximum_lateral_position, maximum_lateral_position,
       leg, "desired foot position", 1) && safe;
     safe = clampCommand(
-      position.z(), -maximum_length, -maximum_length / T(4),
+      position.z(), -maximum_length, -maximum_length / T(control_config::safety::foot_z_minimum_length_divisor),
       leg, "desired foot position", 2) && safe;
   }
   return safe;

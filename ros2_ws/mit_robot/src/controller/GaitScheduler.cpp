@@ -48,7 +48,7 @@ bool GaitSchedulerParameters<T>::isValid() const noexcept
 {
   return overrideModeIsValid(override_mode) && gaitTypeValueIsValid(gait_type) &&
          timingIsValid(gait_period_time, gait_switching_phase) &&
-         timingIsValid(trot_period_time, T(0.5));
+         timingIsValid(trot_period_time, T(control_config::gait::trot_stance_ratio));
 }
 
 template<typename T>
@@ -257,10 +257,10 @@ void GaitScheduler<T>::modifyGait()
       select_parameter_gait();
       if (gait_data.overrideable &&
         (std::abs(gait_data.period_time_nominal - parameters_.gait_period_time) >
-        T(0.0001) ||
+        T(control_config::gait::timing_change_tolerance) ||
         std::abs(
           gait_data.switching_phase_nominal -
-          parameters_.gait_switching_phase) > T(0.0001)))
+          parameters_.gait_switching_phase) > T(control_config::gait::timing_change_tolerance)))
       {
         gait_data.period_time_nominal = parameters_.gait_period_time;
         gait_data.switching_phase_nominal = parameters_.gait_switching_phase;
@@ -309,77 +309,51 @@ void GaitScheduler<T>::createGait()
   //四条腿全部启用   四条腿相位缩放均为 1
   const Eigen::Vector4i all_legs = Eigen::Vector4i::Ones();
   const Vec4<T> unit_scale = Vec4<T>::Ones();
-  /*周期 = 10 s 支撑比例 = 1 所有腿支撑  不允许覆盖*/
+  const auto configure_profile = [&](const char * name,
+      const control_config::gait::Profile & profile, bool overrideable) {
+      configureGait(name, T(profile.period), T(profile.stance_ratio), all_legs,
+        control_config::vector4<T>(profile.phase_offset), unit_scale, overrideable);
+      gait_data.initial_phase = T(profile.initial_phase);
+    };
   switch (gait_data.next_gait) {
     case GaitType::STAND:
-      configureGait(
-        "STAND", T(10), T(1), all_legs,
-        Vec4<T>(T(0.5), T(0.5), T(0.5), T(0.5)), unit_scale, false);
+      configure_profile("STAND", control_config::gait::stand, false);
       break;
-  /*周期 = 0.5 s  支撑比例 = 0.625  摆动比例 = 0.375 每条腿相位错开，用于平稳行走。*/
     case GaitType::AMBLE:
-      configureGait(
-        "AMBLE", T(0.5), T(0.625), all_legs,
-        Vec4<T>(T(0), T(0.5), T(0.25), T(0.75)), unit_scale, true);
+      configure_profile("AMBLE", control_config::gait::amble, true);
       break;
-    
-    // 与 MPC 接触表一致：10 段 x dtMPC，50% 支撑；周期由调用方按 MPC 段长设置。
     case GaitType::TROT:
       configureGait(
-        "TROT", parameters_.trot_period_time, T(0.5), all_legs,
-        Vec4<T>(T(0), T(0.5), T(0.5), T(0)), unit_scale, true);
+        "TROT", parameters_.trot_period_time, T(control_config::gait::trot_stance_ratio),
+        all_legs, control_config::vector4<T>(control_config::gait::trot_phase_offset),
+        unit_scale, true);
       break;
-
     case GaitType::TWO_LEG_STAND:
-      // FR+RL 支撑；FL+RR 只执行一次与 TROT 同时长的摆动，随后四脚支撑。
-      configureGait(
-        "TWO_LEG_STAND", parameters_.trot_period_time, T(0.5), all_legs,
-        Vec4<T>::Zero(), unit_scale, false);
-      gait_data.initial_phase = T(0.5);
-      break;
-
     case GaitType::TWO_LEG_STAND_REVERSE:
-      // 同样的一次踏步，仅交换支撑腿和摆动腿。
       configureGait(
-        "TWO_LEG_STAND_REVERSE", parameters_.trot_period_time, T(0.5), all_legs,
-        Vec4<T>::Zero(), unit_scale, false);
-      gait_data.initial_phase = T(0.5);
+        gait_data.next_gait == GaitType::TWO_LEG_STAND ?
+        "TWO_LEG_STAND" : "TWO_LEG_STAND_REVERSE",
+        parameters_.trot_period_time, T(control_config::gait::trot_stance_ratio),
+        all_legs, Vec4<T>::Zero(), unit_scale, false);
+      gait_data.initial_phase = T(control_config::gait::single_step_initial_phase);
       break;
-
     case GaitType::TROT_RUN:
-      configureGait(
-        "TROT_RUN", T(0.4), T(0.4), all_legs,
-        Vec4<T>(T(0), T(0.5), T(0.5), T(0)), unit_scale, true);
+      configure_profile("TROT_RUN", control_config::gait::trot_run, true);
       break;
-
     case GaitType::PACE:
-      configureGait(
-        "PACE", T(0.35), T(0.5), all_legs,
-        Vec4<T>(T(0), T(0.5), T(0), T(0.5)), unit_scale, true);
-      gait_data.initial_phase = T(0.25);
+      configure_profile("PACE", control_config::gait::pace, true);
       break;
-    /*周期 = 0.4 s  支撑比例 = 0.4  前腿一组、后腿一组*/
     case GaitType::BOUND:
-      configureGait(
-        "BOUND", T(0.4), T(0.4), all_legs,
-        Vec4<T>(T(0), T(0), T(0.5), T(0.5)), unit_scale, true);
+      configure_profile("BOUND", control_config::gait::bound, true);
       break;
-    /*各腿使用不同相位偏移*/
     case GaitType::ROTARY_GALLOP:
-      configureGait(
-        "ROTARY_GALLOP", T(0.4), T(0.2), all_legs,
-        Vec4<T>(T(0), T(0.8571), T(0.3571), T(0.5)), unit_scale, true);
+      configure_profile("ROTARY_GALLOP", control_config::gait::rotary_gallop, true);
       break;
-    /*和旋转疾驰类似，但完整周期更长*/
     case GaitType::TRAVERSE_GALLOP:
-      configureGait(
-        "TRAVERSE_GALLOP", T(0.5), T(0.2), all_legs,
-        Vec4<T>(T(0), T(0.8571), T(0.3571), T(0.5)), unit_scale, true);
+      configure_profile("TRAVERSE_GALLOP", control_config::gait::traverse_gallop, true);
       break;
-    /*第一条腿的相位缩放也是 0。*/
     case GaitType::PRONK:
-      configureGait(
-        "PRONK", T(0.5), T(0.5), all_legs, Vec4<T>::Zero(), unit_scale, true);
+      configure_profile("PRONK", control_config::gait::pronk, true);
       break;
     case GaitType::CUSTOM:
       // 保留当前时序数据，供上层在 requestGait(CUSTOM) 前填充自定义参数。
@@ -391,7 +365,7 @@ void GaitScheduler<T>::createGait()
         const T old_period = gait_data.period_time_nominal;
         gait_data.gait_name = "TRANSITION_TO_STAND";
         gait_data.gait_enabled = all_legs;
-        gait_data.period_time_nominal = T(3) * old_period;
+        gait_data.period_time_nominal = T(control_config::gait::transition_period_scale) * old_period;
         gait_data.initial_phase = T(0);
         gait_data.switching_phase_nominal =
           (gait_data.period_time_nominal +
@@ -441,7 +415,7 @@ void GaitScheduler<T>::calculateAuxiliaryGaitData()
       gait_data.switching_phase(foot) =
         (gait_data.current_gait == GaitType::TWO_LEG_STAND ||
         gait_data.current_gait == GaitType::TWO_LEG_STAND_REVERSE) ?
-        (support_leg ? T(1) : T(0.5)) : gait_data.switching_phase_nominal;
+        (support_leg ? T(1) : T(control_config::gait::trot_stance_ratio)) : gait_data.switching_phase_nominal;
       gait_data.phase_variable(foot) = wrapPhase(
         gait_data.initial_phase + gait_data.phase_offset(foot));
       gait_data.time_stance(foot) =

@@ -18,9 +18,9 @@ constexpr std::array<LegId, kNumLegs> kLegOrder{
 // 进入 Locomotion 的机身高度门槛：0.28 m 名义站高允许 5 mm 下沉余量。
 // 旧 0.32 m 站姿使用的是另一套阈值；这里按当前名义高度计算，避免把
 // 站起过程中的 0.16~0.20 m 误判为“已经站好、可以踏步”。
-constexpr float kLocomotionEntryHeightMargin = 0.005F;
+constexpr float kLocomotionEntryHeightMargin = control_config::locomotion::entry_height_margin;
 // 小腿折叠保护：站立 home 约 0.74 rad，0.30 rad 以下视为收腿/折叠姿态。
-constexpr float kLocomotionEntryMinimumCalfAngle = 0.30F;
+constexpr float kLocomotionEntryMinimumCalfAngle = control_config::locomotion::entry_minimum_calf_angle;
 
 bool isLocomotionMode(ControlMode mode) noexcept
 {
@@ -86,7 +86,7 @@ RobotRunner::RobotRunner(
   if (model_ == nullptr || data_ == nullptr) {
     throw std::invalid_argument("RobotRunner requires a MuJoCo model and data");
   }
-  initializeController(OrientationEstimatorMode::SIMULATION_TRUTH);
+  initializeController(static_cast<OrientationEstimatorMode>(control_config::estimation::simulation_orientation_mode));
 }
 
 RobotRunner::RobotRunner(float control_time_step, RobotType robot_type)
@@ -99,11 +99,11 @@ RobotRunner::RobotRunner(float control_time_step, RobotType robot_type)
   gait_scheduler_(control_time_step_)
 {
   if (!std::isfinite(control_time_step_) || control_time_step_ <= 0.0F ||
-    control_time_step_ > 0.02F)
+    control_time_step_ > float(control_config::safety::maximum_hardware_control_time_step))
   {
-    throw std::invalid_argument("hardware control time step must be in (0, 0.02]");
+    throw std::invalid_argument("hardware control time step exceeds configured bounds");
   }
-  initializeController(OrientationEstimatorMode::IMU_FUSION);
+  initializeController(static_cast<OrientationEstimatorMode>(control_config::estimation::hardware_orientation_mode));
 }
 
 void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode)
@@ -121,7 +121,8 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
     estimator_parameters.maximum_time_step, estimator_parameters.nominal_time_step);
   state_estimator_ = std::make_unique<PositionVelocityEstimator<float>>(
     quadruped_, *imu_, leg_sensor_pointers_, orientation_mode,
-    estimator_parameters, std::max(0.02F, 2.0F * control_time_step_));
+    estimator_parameters, std::max(float(control_config::estimation::maximum_sensor_skew),
+      float(control_config::estimation::sensor_skew_periods) * control_time_step_));
   contact_estimator_ = std::make_unique<ContactEstimator<float>>(
     quadruped_, *imu_, leg_sensor_pointers_);
 
@@ -129,12 +130,9 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
     ControlMode::JointPd : ControlMode::BalanceStand;
   desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
   desired_state_.valid = true;
-  standing_height_target_ = 0.28F;
-  standing_height_command_ = standing_height_target_;
   control_fsm_ = std::make_unique<ControlFSM<float>>(
     quadruped_, state_estimate_, joint_states_, leg_controller_, gait_scheduler_,
-    desired_state_, control_time_step_);
-  control_fsm_->setUseWbc(true);
+    desired_state_, control_time_step_, control_parameters_);
   setWalkingForwardSpeed(defaultWalkingForwardSpeed());
   disableCommands();
 }
@@ -232,8 +230,8 @@ bool RobotRunner::requestStandUp() noexcept
   {
     return false;
   }
-  if (std::abs(state_estimate_.rpy.x()) > 0.20F ||
-    std::abs(state_estimate_.rpy.y()) > 0.20F)
+  if (std::abs(state_estimate_.rpy.x()) > float(control_config::safety::standup_maximum_roll_pitch) ||
+    std::abs(state_estimate_.rpy.y()) > float(control_config::safety::standup_maximum_roll_pitch))
   {
     return false;
   }
@@ -440,7 +438,7 @@ void RobotRunner::updateStandingHeightCommand()
 }
 
 /*关节初始化完成必须满足：
-  初始化已经开始；当前仿真时间减去开始时间大于等于 0.4 秒。
+  初始化已经开始；当前时间减去开始时间达到配置的初始化时长。
   如果还没有开始，即使时间足够长，也返回 false。*/
 bool RobotRunner::jointInitializationComplete() const noexcept
 {
@@ -517,12 +515,12 @@ void RobotRunner::holdMotionStartPosture()
 bool RobotRunner::collectJointCommands()
 {
   const auto state = control_fsm_->currentStateName();
-  if (standing_height_target_ <= 0.33F && state == FSM_StateName::BALANCE_STAND &&
-    state_estimate_.position_world.z() >= 0.28F)
+  if (standing_height_target_ <= float(control_config::safety::stance_limit_maximum_target_height) && state == FSM_StateName::BALANCE_STAND &&
+    state_estimate_.position_world.z() >= float(control_config::safety::stance_limit_activation_height))
   {stance_joint_limits_armed_ = true;}
   // 固定站姿角度限位只用于站立；3 是 4 的四脚站稳阶段，两者都使用
   // 模型关节范围，保证 3 的控制与 4 换载前完全相同。
-  if (stance_joint_limits_armed_ && standing_height_target_ <= 0.33F &&
+  if (stance_joint_limits_armed_ && standing_height_target_ <= float(control_config::safety::stance_limit_maximum_target_height) &&
     !prone_down_active_ && leg_controller_.legsEnabled() &&
     state == FSM_StateName::BALANCE_STAND)
   {

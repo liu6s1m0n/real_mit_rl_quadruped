@@ -32,7 +32,7 @@ using VecD = Eigen::VectorXd;
 
 constexpr Eigen::Index kStates = 13;
 constexpr Eigen::Index kInputs = 12;
-constexpr double kGravity = 9.81;
+constexpr double kGravity = control_config::gravity;
 
 Eigen::Matrix3d skew(const Eigen::Vector3d & r)
 {
@@ -65,7 +65,7 @@ bool SolverSettings<T>::isValid() const noexcept
     maximum_normal_force >= minimum_normal_force &&
     std::isfinite(static_cast<double>(alpha)) && alpha > T(0) &&
     std::isfinite(static_cast<double>(x_drag)) && x_drag >= T(0) && weights_valid &&
-    com_offset_body.allFinite() && com_offset_body.norm() <= T(0.05);
+    com_offset_body.allFinite() && com_offset_body.norm() <= T(control_config::mpc::maximum_com_offset);
 }
 
 template<typename T>

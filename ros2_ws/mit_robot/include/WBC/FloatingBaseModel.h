@@ -15,6 +15,7 @@
 #ifndef LIBBIOMIMETICS_FLOATINGBASEMODEL_H
 #define LIBBIOMIMETICS_FLOATINGBASEMODEL_H
 
+#include "config/control_config.h"
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -87,8 +88,8 @@ struct FBModelStateDerivative
 template < typename T >
 class FloatingBaseModel {
 public:
-  /** @brief 使用默认重力加速度 (0, 0, -9.81) 初始化模型。 */
-  FloatingBaseModel() : _gravity(0, 0, -9.81) {
+  /** @brief 使用配置的名义重力加速度初始化模型。 */
+  FloatingBaseModel() : _gravity(0, 0, -T(control_config::gravity)) {
   }
   /** @brief 析构函数。 */
   ~FloatingBaseModel() = default;

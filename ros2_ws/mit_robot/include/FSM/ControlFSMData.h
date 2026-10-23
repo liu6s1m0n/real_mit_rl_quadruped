@@ -32,9 +32,9 @@ struct ControlFSMData
   GaitFrame<T> gait_frame{};
   DesiredState < T > *desired_state = nullptr;
   //参数 控制周期
-  T control_time_step = T(0.001);
-  bool use_wbc = true;
-  GaitType locomotion_gait = GaitType::TROT;
+  T control_time_step = T(control_config::control_time_step);
+  bool use_wbc = control_config::use_wbc;
+  GaitType locomotion_gait = static_cast<GaitType>(control_config::gait::locomotion_gait);
   // 上层触地确认使用的实测接触信息；不参与 MPC/WBC 内部求解。
   std::array<T, kNumLegs> measured_contact_probability{};
   std::array<T, kNumLegs> measured_normal_force{};

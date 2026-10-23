@@ -5,6 +5,7 @@
 #ifndef MYMIT_ROBOT_WBC_CTRL_LINK_POS_TASK_HPP_
 #define MYMIT_ROBOT_WBC_CTRL_LINK_POS_TASK_HPP_
 
+#include "config/control_config.h"
 #include <cstddef>
 
 #include "WBC/FloatingBaseModel.h"
@@ -26,7 +27,7 @@ public:
    */
   LinkPosTask(
     const FloatingBaseModel<T> & model, std::size_t contact_point_index,
-    bool include_floating_base = true);
+    bool include_floating_base = control_config::wbc::foot_include_floating_base);
   ~LinkPosTask() override = default;
 
   /**
@@ -60,9 +61,9 @@ private:
   const FloatingBaseModel<T> * model_;  ///< 非拥有型浮动基模型指针。
   std::size_t contact_point_index_;     ///< 本任务跟踪的接触点索引。
   bool include_floating_base_;          ///< 是否让浮动基自由度参与足端运动。
-  Vec3<T> kp_ = Vec3<T>::Constant(T(100));  ///< 足端位置比例增益。
-  Vec3<T> kd_ = Vec3<T>::Constant(T(5));    ///< 足端速度微分增益。
-  Vec3<T> kp_kinematic_ = Vec3<T>::Ones();   ///< 运动学误差缩放增益。
+  Vec3<T> kp_ = Vec3<T>::Constant(T(control_config::wbc::task_foot_kp));  ///< 足端位置比例增益。
+  Vec3<T> kd_ = Vec3<T>::Constant(T(control_config::wbc::task_foot_kd));    ///< 足端速度微分增益。
+  Vec3<T> kp_kinematic_ = control_config::vector3<T>(control_config::wbc::foot_kinematic_gain);   ///< 运动学误差缩放增益。
 };
 
 extern template class LinkPosTask<float>;

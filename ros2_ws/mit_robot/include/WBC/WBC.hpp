@@ -5,6 +5,7 @@
 #ifndef WHOLE_BODY_CONTROLLER
 #define WHOLE_BODY_CONTROLLER
 
+#include "config/control_config.h"
 #include "Utilities/Utilities_print.h"
 #include "Utilities/pseudoInverse.h"
 #include "Utilities/cppTypes.h"
@@ -50,7 +51,7 @@ protected:
   // full rank fat matrix only
   void _WeightedInverse(
     const DMat<T> & J, const DMat<T> & Winv, DMat<T> & Jinv,
-    double threshold = 0.0001)
+    double threshold = control_config::wbc::dynamic_pseudoinverse_threshold)
   {
     // lambda 是任务空间等效惯量的逆：J * A^{-1} * J^T。
     DMat<T> lambda(J * Winv * J.transpose());

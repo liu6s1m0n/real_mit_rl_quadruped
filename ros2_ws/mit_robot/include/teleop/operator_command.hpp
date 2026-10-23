@@ -5,6 +5,7 @@
 #ifndef MYMIT_ROBOT_TELEOP_OPERATOR_COMMAND_HPP_
 #define MYMIT_ROBOT_TELEOP_OPERATOR_COMMAND_HPP_
 
+#include "config/control_config.h"
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -58,20 +59,20 @@ struct VelocityCommand
   float yaw = 0.0F;
 };
 
-constexpr float kForwardVelocity = 0.18F;
-constexpr float kFastForwardVelocity = 0.36F;
-constexpr float kBackwardVelocity = -0.30F;
-constexpr float kLateralVelocity = 0.20F;
-constexpr float kYawRate = 0.30F;
+constexpr float kForwardVelocity = control_config::motion::forward;
+constexpr float kFastForwardVelocity = control_config::motion::forward_fast;
+constexpr float kBackwardVelocity = -control_config::motion::backward;
+constexpr float kLateralVelocity = control_config::motion::lateral;
+constexpr float kYawRate = control_config::motion::yaw_rate;
 // 终端按键是锁存式选择。空格是显式停止命令；
 // 终端自动重复并不是安全心跳信号。
-constexpr std::chrono::milliseconds kMotionWatchdog{500};
+constexpr std::chrono::milliseconds kMotionWatchdog{control_config::motion::watchdog_ms};
 
 struct VelocityProfile
 {
   float forward = kForwardVelocity;
   float forward_fast = kFastForwardVelocity;
-  float backward = 0.30F;
+  float backward = control_config::motion::backward;
   float lateral = kLateralVelocity;
   float yaw = kYawRate;
 };

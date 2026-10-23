@@ -53,7 +53,15 @@ public:
     const Quadruped < T > &quadruped, StateEstimate < T > &state_estimate,
     const std::array < JointState < T >, kNumLegs > &joint_states,
     LegController < T > &leg_controller, GaitScheduler < T > &gait_scheduler,
-    DesiredState < T > &desired_state, T control_time_step = T(0.001));
+    DesiredState < T > &desired_state,
+    T control_time_step = T(control_config::control_time_step));
+  /** parameters 由调用方持有，生命周期必须覆盖本 FSM。 */
+  ControlFSM(
+    const Quadruped<T> & quadruped, StateEstimate<T> & state_estimate,
+    const std::array<JointState<T>, kNumLegs> & joint_states,
+    LegController<T> & leg_controller, GaitScheduler<T> & gait_scheduler,
+    DesiredState<T> & desired_state, T control_time_step,
+    const RobotControlParameters<T> & parameters);
   ~ControlFSM() = default;
 
   /*禁止拷贝。原因是其中包含:多个 unique_ptr；
@@ -98,7 +106,7 @@ public:
   TransitionData < T > transitionData;
 
 private:
-  std::unique_ptr<RobotControlParameters<T>> control_parameters_;  ///< 当前机型独立控制参数。
+  // 独立创建 FSM 时使用默认配置；RobotRunner 路径直接借用它持有的只读参数。
   std::unique_ptr < SafetyChecker < T >> safety_checker_;  ///< 状态切换前后共用的安全检查器。
   FSM_OperatingMode operating_mode_ = FSM_OperatingMode::NORMAL;  ///< 当前正常、过渡、急停或阻尼模式。
   std::size_t print_num_ = 10000;       ///< 两次周期性状态日志之间的控制周期数。

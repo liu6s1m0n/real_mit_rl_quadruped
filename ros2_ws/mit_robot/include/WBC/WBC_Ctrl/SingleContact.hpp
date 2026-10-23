@@ -9,6 +9,7 @@
 #ifndef Cheetah_SINGLE_CONTACT
 #define Cheetah_SINGLE_CONTACT
 
+#include "config/control_config.h"
 #include <cstddef>
 
 #include <WBC/FloatingBaseModel.h>
@@ -57,7 +58,7 @@ class SingleContact : public ContactSpec<T> {
  protected:
   /** @brief 足端允许的最大法向力 @f$F_{z,max}@f$。 */
   T _max_Fz;
-  T _min_Fz = T(0);
+  T _min_Fz = T(control_config::minimum_normal_force);
 
   /** @brief 当前接触点在 FloatingBaseModel 接触点列表中的索引。 */
   std::size_t _contact_pt;

@@ -29,9 +29,9 @@ constexpr std::array<const char *, kNumJoints> kJointNames{
   "FL_hip", "FL_thigh", "FL_calf",
   "RR_hip", "RR_thigh", "RR_calf",
   "RL_hip", "RL_thigh", "RL_calf"};
-constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(100);
+constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(control_config::hardware::startup_sequence_timeout_ms);
 // 状态估计/控制与独立 MIT 发送保持 500 Hz；未使能反馈轮询为 125 Hz。
-constexpr std::uint32_t kMotorFrameDivider = 4;
+constexpr std::uint32_t kMotorFrameDivider = control_config::hardware::motor_frame_divider;
 
 const char * fsmStateLabel(FSM_StateName state) noexcept
 {
@@ -642,7 +642,7 @@ bool HardwareBridge::stationaryLevelSample(
     !sample.imu.orientation_world_from_body.coeffs().allFinite() ||
     !sample.imu.acceleration_body.allFinite() ||
     !sample.imu.angular_velocity_body.allFinite() ||
-    sample.imu.angular_velocity_body.norm() > 0.15F)
+    sample.imu.angular_velocity_body.norm() > control_config::hardware::startup_maximum_angular_speed)
   {
     return false;
   }
@@ -654,9 +654,10 @@ bool HardwareBridge::stationaryLevelSample(
   const float gravity = sample.imu.acceleration_body.norm();
   const float horizontal_gravity = std::hypot(
     sample.imu.acceleration_body.x(), sample.imu.acceleration_body.y());
-  if (!std::isfinite(gravity) || gravity < 7.0F || gravity > 12.0F ||
+  if (!std::isfinite(gravity) || gravity < control_config::hardware::startup_gravity_minimum ||
+    gravity > control_config::hardware::startup_gravity_maximum ||
     sample.imu.acceleration_body.z() <= 0.0F ||
-    horizontal_gravity > gravity * std::sin(0.25F))
+    horizontal_gravity > gravity * std::sin(control_config::hardware::startup_maximum_tilt))
   {
     return false;
   }

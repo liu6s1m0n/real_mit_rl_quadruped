@@ -89,11 +89,11 @@ private:
   std::array < bool, kNumLegs > touchdown_reported_ {};
   std::array < bool, kNumLegs > touchdown_confirmed_reported_ {};
   /*摆动腿抬脚高度，0.28 m 站姿下的 DM1 默认值；构造时由控制参数覆盖。*/
-  T swing_height_ = T(0.03);
+  T swing_height_{};
   /*足端相对髋的横向安全边界，必须容纳该机型名义足宽和横移步长。*/
-  T maximum_lateral_foot_offset_ = T(0.18);
-  /*单个步周期内最大水平步长为 15 cm。*/
-  T maximum_step_length_ = T(0.30);
+  T maximum_lateral_foot_offset_{};
+  /*Raibert 水平修正量上限，完整落点还包括名义足点和速度预测。*/
+  T maximum_step_length_ = T(control_config::locomotion::maximum_step_correction);
   /*安全条件触发的回站不再重复执行已经不安全的 Locomotion 控制帧。*/
   bool safety_fallback_transition_ = false;
   std::size_t iteration_ = 0;

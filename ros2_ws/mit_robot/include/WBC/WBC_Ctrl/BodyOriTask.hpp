@@ -5,6 +5,7 @@
 #ifndef MYMIT_ROBOT_WBC_CTRL_BODY_ORI_TASK_HPP_
 #define MYMIT_ROBOT_WBC_CTRL_BODY_ORI_TASK_HPP_
 
+#include "config/control_config.h"
 #include <eigen3/Eigen/Geometry>
 
 #include "WBC/FloatingBaseModel.h"
@@ -59,9 +60,9 @@ private:
 
   const FloatingBaseModel<T> * model_;  ///< 非拥有型浮动基模型指针。
   // 与 MIT 一致，KinWBC 姿态误差增益为 1；动力学 Kp/Kd 独立设置。
-  Vec3<T> kp_kinematic_ = Vec3<T>::Constant(T(1)); ///< MIT 姿态任务运动学误差增益。
-  Vec3<T> kp_ = Vec3<T>::Constant(T(50));        ///< 姿态比例增益。
-  Vec3<T> kd_ = Vec3<T>::Ones();                 ///< 角速度微分增益。
+  Vec3<T> kp_kinematic_ = control_config::vector3<T>(control_config::wbc::generic_orientation_kinematic_gain); ///< MIT 姿态任务运动学误差增益。
+  Vec3<T> kp_ = Vec3<T>::Constant(T(control_config::wbc::task_orientation_kp));        ///< 姿态比例增益。
+  Vec3<T> kd_ = Vec3<T>::Constant(T(control_config::wbc::task_orientation_kd));                 ///< 角速度微分增益。
 };
 
 extern template class BodyOriTask<float>;

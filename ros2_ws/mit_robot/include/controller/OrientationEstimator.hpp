@@ -10,6 +10,7 @@
 #ifndef MYMIT_ROBOT_CONTROLLER_ORIENTATION_ESTIMATOR_HPP_
 #define MYMIT_ROBOT_CONTROLLER_ORIENTATION_ESTIMATOR_HPP_
 
+#include "config/control_config.h"
 #include <array>
 #include <cstdint>
 
@@ -65,9 +66,9 @@ public:
   OrientationEstimator(
     ImuSensor & imu, const LegSensors & legs,
     OrientationEstimatorMode mode = OrientationEstimatorMode::IMU_FUSION,
-    T maximum_sensor_skew = T(0.02),
-    T accelerometer_correction_gain = T(2),
-    T imu_orientation_correction_gain = T(10));
+    T maximum_sensor_skew = T(control_config::estimation::maximum_sensor_skew),
+    T accelerometer_correction_gain = T(control_config::estimation::accelerometer_correction_gain),
+    T imu_orientation_correction_gain = T(control_config::estimation::imu_orientation_correction_gain));
 
   /**
    * @brief 读取 IMU 和四腿数据并完成一次姿态估计。
@@ -137,9 +138,9 @@ private:
   OrientationEstimatorMode mode_ = OrientationEstimatorMode::IMU_FUSION;
   bool fusion_initialized_ = false;
   bool legs_valid_ = false;
-  T maximum_sensor_skew_ = T(0.02);
-  T accelerometer_correction_gain_ = T(2);
-  T imu_orientation_correction_gain_ = T(10);
+  T maximum_sensor_skew_ = T(control_config::estimation::maximum_sensor_skew);
+  T accelerometer_correction_gain_ = T(control_config::estimation::accelerometer_correction_gain);
+  T imu_orientation_correction_gain_ = T(control_config::estimation::imu_orientation_correction_gain);
   T last_imu_timestamp_ = T(0);
 };
 

@@ -254,7 +254,7 @@ bool WBC_Ctrl<T>::runAndApply(
   const std::array<JointState<T>, kNumLegs> & joint_states,
   LegController<T> & leg_controller)
 {
-  constexpr double kControlCycleBudgetMs = 2.0;
+  constexpr double kControlCycleBudgetMs = control_config::control_time_step * 1000;
   const char * diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS");
   const bool trace = diagnostics && diagnostics[0] == '1';
   const char * full_diagnostics = std::getenv("DM1_CONTROL_DIAGNOSTICS_FULL");

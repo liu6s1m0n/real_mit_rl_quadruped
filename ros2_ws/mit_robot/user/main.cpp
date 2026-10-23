@@ -14,17 +14,11 @@
 
 namespace
 {
-// 慢档用于崎岖地形稳定性测试；快档只在原 0.30 m/s 基础上适度提速。
-constexpr float kSlowWalkingForwardSpeed = 0.18F;
-constexpr float kFastWalkingForwardSpeed = 0.36F;
-constexpr float kDm1WalkingLateralSpeed = 0.20F;
-constexpr float kTurningYawRate = 0.30F;
+// 软件控制默认值统一由 config/control_config.h 提供。
 
 struct RobotSelection
 {
   const char * scene_path;    ///< DM1 MuJoCo 场景。
-  float standing_height;      ///< 启动后的默认站立高度，m。
-  float lateral_speed;        ///< 该机型经过接触回归验证的默认横移速度，m/s。
   const char * render_gpu;    ///< OpenGL 渲染设备策略：auto 或 nvidia。
   HardwareSimulationOptions hardware_simulation;
 };
@@ -90,7 +84,7 @@ RobotSelection selectRobot(int argc, char ** argv)
     throw std::invalid_argument("hardware simulation options require --hardware-sim");
   }
   return {
-    MYMIT_ROBOT_DM1_SCENE_PATH, 0.28F, kDm1WalkingLateralSpeed, render_gpu,
+    MYMIT_ROBOT_DM1_SCENE_PATH, render_gpu,
     hardware_simulation};
 }
 
@@ -181,11 +175,6 @@ int main(int argc, char ** argv)
     configureGpuRendering(robot.render_gpu);
     SimulationBridge bridge(robot.scene_path, RobotType::DM1);
     bridge.setHardwareSimulation(robot.hardware_simulation);
-    bridge.setStandingHeight(robot.standing_height);
-    bridge.setSlowWalkingForwardSpeed(kSlowWalkingForwardSpeed);
-    bridge.setFastWalkingForwardSpeed(kFastWalkingForwardSpeed);
-    bridge.setWalkingLateralSpeed(robot.lateral_speed);
-    bridge.setTurningYawRate(kTurningYawRate);
     return bridge.run();
   } catch (const std::exception & error) {
     std::fprintf(stderr, "simulation failed: %s\n", error.what());

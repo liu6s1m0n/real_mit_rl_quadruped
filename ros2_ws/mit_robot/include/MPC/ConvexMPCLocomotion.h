@@ -53,7 +53,8 @@ public:
    */
   ConvexMPCLocomotion(
     const Quadruped<T> & quadruped, T control_time_step,
-    std::size_t iterations_between_mpc = 15,
+    std::size_t iterations_between_mpc =
+      control_config::segmentIterations(T(control_config::control_time_step)),
     const SolverSettings<T> & settings = SolverSettings<T>{});
 
   /** @brief 清零周期、命令斜坡和缓存的 MPC 输出。 */
@@ -128,7 +129,7 @@ private:
   T command_yaw_ = T(0);
 
   /** @brief MIT 速度一阶滤波系数。 */
-  T velocity_filter_ = T(0.1);
+  T velocity_filter_ = T(control_config::mpc::velocity_filter);
   /** @brief MIT 速度相关 roll/pitch 补偿积分量。 */
   T rpy_integral_roll_ = T(0);
   T rpy_integral_pitch_ = T(0);

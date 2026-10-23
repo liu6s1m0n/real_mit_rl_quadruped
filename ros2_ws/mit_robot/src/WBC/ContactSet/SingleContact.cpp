@@ -6,6 +6,7 @@
  * FloatingBaseModel 读取接触雅可比及其偏置项。
  */
 
+#include "config/control_config.h"
 #include "WBC/ContactSet/SingleContact.hpp"
 
 #include <limits>
@@ -27,7 +28,7 @@
  */
 template<typename T>
 SingleContact<T>::SingleContact(const FloatingBaseModel<T> * robot, int point)
-: ContactSpec<T>(3), _max_Fz(T(1500)),
+: ContactSpec<T>(3), _max_Fz(T(control_config::maximum_normal_force)),
   _contact_pt(point < 0 ? 0 : static_cast<std::size_t>(point)), _dim_U(6),
   robot_sys_(robot)
 {
@@ -39,7 +40,7 @@ SingleContact<T>::SingleContact(const FloatingBaseModel<T> * robot, int point)
   this->Jc_ = DMat<T>::Zero(this->dim_contact_, robot->getNumDof());
   this->JcDotQdot_ = DVec<T>::Zero(this->dim_contact_);
   this->Uf_ = DMat<T>::Zero(_dim_U, this->dim_contact_);
-  const T friction = T(0.4);
+  const T friction = T(control_config::friction);
   // 约束依次表示 Fz >= 0、|Fx| <= mu*Fz、|Fy| <= mu*Fz、Fz <= max_Fz。
 
   /*  0  0  1              >=    0

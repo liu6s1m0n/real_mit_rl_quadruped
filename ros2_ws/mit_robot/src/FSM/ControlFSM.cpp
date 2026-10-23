@@ -77,11 +77,20 @@ ControlFSM<T>::ControlFSM(
   const std::array<JointState<T>, kNumLegs> & joint_states,
   LegController<T> & leg_controller, GaitScheduler<T> & gait_scheduler,
   DesiredState<T> & desired_state, T control_time_step)
+: ControlFSM(quadruped, state_estimate, joint_states, leg_controller,
+    gait_scheduler, desired_state, control_time_step,
+    defaultControlParameters<T>()) {}
+
+template<typename T>
+ControlFSM<T>::ControlFSM(
+  const Quadruped<T> & quadruped, StateEstimate<T> & state_estimate,
+  const std::array<JointState<T>, kNumLegs> & joint_states,
+  LegController<T> & leg_controller, GaitScheduler<T> & gait_scheduler,
+  DesiredState<T> & desired_state, T control_time_step,
+  const RobotControlParameters<T> & parameters)
 {
-  control_parameters_ = std::make_unique<RobotControlParameters<T>>(
-    makeRobotControlParameters<T>(quadruped.robotType()));
   data.quadruped = &quadruped;
-  data.control_parameters = control_parameters_.get();
+  data.control_parameters = &parameters;
   data.state_estimate = &state_estimate;
   data.joint_states = &joint_states;
   data.leg_controller = &leg_controller;
@@ -93,9 +102,9 @@ ControlFSM<T>::ControlFSM(
   auto gait_parameters = gait_scheduler.parameters();
   gait_parameters.trot_period_time =
     static_cast<T>(mpc::kDefaultMpcHorizon) * control_time_step *
-    static_cast<T>(mpcSegmentIterations(*control_parameters_, control_time_step));
+    static_cast<T>(mpcSegmentIterations(parameters, control_time_step));
   gait_scheduler.setParameters(gait_parameters);
-  data.gait_frame = gait_scheduler.gaitFrame(mpc::SolverSettings<T>{}.horizon);
+  data.gait_frame = gait_scheduler.gaitFrame(mpc::kDefaultMpcHorizon);
 
   statesList.passive = std::make_unique<FSM_State_Passive<T>>(&data);
   statesList.joint_pd = std::make_unique<JointPdState<T>>(&data);

@@ -1,3 +1,4 @@
+#include "config/control_config.h"
 #include "hardware/dm1_hardware_driver.hpp"
 
 #include <cmath>
@@ -110,8 +111,8 @@ bool Dm1HardwareDriver::readImu(ImuData<float> & sample, double now_s)
   }
   // IMU 串口掉线（实测是 USB Hub/设备重新枚举）后自动重连：连续失败超过
   // 0.5 s 才尝试，且每 2 s 最多一次，避免和正常抖动抢串口。
-  constexpr double kImuLossBeforeRecoveryS = 0.5;
-  constexpr double kImuRecoveryIntervalS = 2.0;
+  constexpr double kImuLossBeforeRecoveryS = control_config::hardware::imu_loss_before_recovery;
+  constexpr double kImuRecoveryIntervalS = control_config::hardware::imu_recovery_interval;
   if (now_s - last_imu_ok_time_s_ > kImuLossBeforeRecoveryS &&
     now_s - last_imu_recovery_time_s_ > kImuRecoveryIntervalS)
   {

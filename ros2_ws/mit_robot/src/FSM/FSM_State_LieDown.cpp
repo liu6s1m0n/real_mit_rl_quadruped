@@ -28,6 +28,7 @@ FSM_State_LieDown<T>::FSM_State_LieDown(ControlFSMData<T> * control_fsm_data)
   const std::size_t mpc_interval = mpcSegmentIterations(
     parameters, control_fsm_data->control_time_step);
   mpc::SolverSettings<T> solver_settings;
+  solver_settings.maximum_normal_force = control_fsm_data->control_parameters->maximum_normal_force;
   solver_settings.time_step =
     control_fsm_data->control_time_step * static_cast<T>(mpc_interval);
   mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
@@ -40,12 +41,8 @@ FSM_State_LieDown<T>::FSM_State_LieDown(ControlFSMData<T> * control_fsm_data)
   // lightly damped for a body being brought within millimetres of the floor.
   wbc_ctrl_->setBodyPositionGains(
     parameters.balance_body_position_kp, parameters.balance_body_position_kd);
-  auto orientation_kp = parameters.locomotion_body_orientation_kp;
-  auto orientation_kd = parameters.locomotion_body_orientation_kd;
-  // 趴下过程同样不使用 yaw 姿态误差产生机身平衡力矩。
-  orientation_kp.z() = T(0);
-  orientation_kd.z() = T(0);
-  wbc_ctrl_->setBodyOrientationGains(orientation_kp, orientation_kd);
+  wbc_ctrl_->setBodyOrientationGains(
+    parameters.locomotion_body_orientation_kp, parameters.locomotion_body_orientation_kd);
   wbc_ctrl_->setJointGains(
     parameters.joint_kp, parameters.joint_kd);
   wbc_ctrl_->setFloatingBaseWeight(parameters.balance_floating_base_weight);
@@ -57,7 +54,7 @@ FSM_State_LieDown<T>::FSM_State_LieDown(ControlFSMData<T> * control_fsm_data)
   // point. The thigh and calf then move together for the final fold. Keep the
   // original full duration for the combined stage so the load-bearing thigh
   // does not move faster because of the sequencing change.
-  calf_fold_iterations_ = std::max<std::size_t>(1, fold_iterations_ / 4);
+  calf_fold_iterations_ = std::max<std::size_t>(1, fold_iterations_ / control_config::prone::calf_duration_divisor);
   thigh_fold_iterations_ = fold_iterations_;
   this->turnOnAllSafetyChecks();
   this->checkPDesFoot = false;
@@ -129,7 +126,7 @@ void FSM_State_LieDown<T>::runMpcLowering()
     wbc_data_.aBody_des.y() = T(0);
     // Let the trunk settle onto the floor instead of allowing the four foot
     // contacts to hold it a few centimetres above the initialization pose.
-    wbc_data_.pBody_des.z() = prone_body_height_ - T(0.015);
+    wbc_data_.pBody_des.z() = prone_body_height_ - T(control_config::prone::ground_press_depth);
   }
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     wbc_data_.pFoot_des[leg] = feet_world[leg];
@@ -155,16 +152,16 @@ template<typename T>
 bool FSM_State_LieDown<T>::loweringPostureStable() const noexcept
 {
   const auto & estimate = *this->_data->state_estimate;
-  if (!estimate.valid || std::abs(estimate.position_world.z() - prone_body_height_) > T(0.015) ||
-    std::abs(estimate.velocity_world.z()) > T(0.05) ||
-    std::abs(estimate.rpy.x()) > T(0.08) || std::abs(estimate.rpy.y()) > T(0.08) ||
+  if (!estimate.valid || std::abs(estimate.position_world.z() - prone_body_height_) > T(control_config::prone::stable_height_error) ||
+    std::abs(estimate.velocity_world.z()) > T(control_config::prone::stable_vertical_speed) ||
+    std::abs(estimate.rpy.x()) > T(control_config::prone::stable_roll_pitch) || std::abs(estimate.rpy.y()) > T(control_config::prone::stable_roll_pitch) ||
     !estimate.angular_velocity_body.allFinite() ||
-    estimate.angular_velocity_body.norm() > T(0.15))
+    estimate.angular_velocity_body.norm() > T(control_config::prone::stable_angular_speed))
   {
     return false;
   }
   for (const auto & joint : *this->_data->joint_states) {
-    if (!joint.valid || joint.velocity.norm() > T(0.20)) {return false;}
+    if (!joint.valid || joint.velocity.norm() > T(control_config::prone::stable_joint_speed)) {return false;}
   }
   return true;
 }
@@ -195,12 +192,12 @@ void FSM_State_LieDown<T>::runJointFolding()
     if (folding_calf) {
       // Do not take the calf all the way to zero here. Leaving the remaining
       // travel for the second stage makes the thigh and calf move together.
-      constexpr T kCalfPreparationProgress = T(0.5);
+      constexpr T kCalfPreparationProgress = T(control_config::prone::calf_preparation_progress);
       command.position_desired[2] += progress * kCalfPreparationProgress * travel[2];
       command.velocity_desired[2] =
         progress_rate * kCalfPreparationProgress * travel[2];
     } else {
-      constexpr T kCalfPreparationProgress = T(0.5);
+      constexpr T kCalfPreparationProgress = T(control_config::prone::calf_preparation_progress);
       const T calf_preparation_position =
         fold_start_joint_positions_[leg][2] + kCalfPreparationProgress * travel[2];
       const T calf_remaining_travel = target[2] - calf_preparation_position;
@@ -262,7 +259,7 @@ void FSM_State_LieDown<T>::run()
     // Begin folding before the trunk reaches the floor.  This prevents the
     // standing leg posture from becoming a high-knee snapshot at the exact
     // moment the body reaches prone height.
-    const T fold_start_height = prone_body_height_ + T(0.14);
+    const T fold_start_height = prone_body_height_ + T(control_config::prone::fold_start_height_offset);
     if (this->_data->state_estimate->position_world.z() <= fold_start_height ||
       loweringPostureStable())
     {

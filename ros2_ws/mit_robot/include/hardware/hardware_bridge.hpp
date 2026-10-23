@@ -5,6 +5,7 @@
 #ifndef MYMIT_ROBOT_HARDWARE_HARDWARE_BRIDGE_HPP_
 #define MYMIT_ROBOT_HARDWARE_HARDWARE_BRIDGE_HPP_
 
+#include "config/control_config.h"
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -19,18 +20,18 @@ public:
   // 真机控制循环的时间参数、启动策略和输出安全开关。
   struct Options
   {
-    float control_time_step = 0.002F;
-    double feedback_timeout_s = 0.10;
+    float control_time_step = float(control_config::control_time_step);
+    double feedback_timeout_s = control_config::hardware::feedback_timeout;
     // 普通启动只检查当前位置是否落在该窗口内；写入电机零位必须显式使用
     // --set-zero 维护操作。
-    float startup_zero_tolerance_rad = 0.05F;
+    float startup_zero_tolerance_rad = control_config::hardware::startup_zero_tolerance;
     // 关节力矩饱和上限；电机连续额定 30 Nm、峰值 97 Nm，默认 88 Nm。
     // 超过该值的关节会把 kp/kd/前馈按同一比例缩小到上限，其余关节不受影响，
     // 整批 12 帧照常发送（丢帧会让电机收不到命令而超时失能）。
-    float torque_limit_nm = 88.0F;
-    float startup_stationary_velocity_rad_s = 0.05F;
+    float torque_limit_nm = control_config::hardware::torque_limit;
+    float startup_stationary_velocity_rad_s = control_config::hardware::startup_stationary_velocity;
     // 普通控制启动前要求连续多个采样周期保持稳定；--set-zero 不读取反馈。
-    int startup_stable_samples = 3;
+    int startup_stable_samples = control_config::hardware::startup_stable_samples;
     bool enable_output = false;
     bool keyboard_control = false;
     bool request_stand_up = false;
@@ -39,9 +40,9 @@ public:
     std::function<std::vector<teleop::OperatorCommand>()> command_source;
     // Optional read-only telemetry; never changes control or send decisions.
     std::function<void(const RobotRunner &)> control_observer;
-    int max_consecutive_cycle_overruns = 3;
-    int max_cycle_overruns_in_window = 5;
-    double cycle_overrun_window_s = 1.0;
+    int max_consecutive_cycle_overruns = control_config::hardware::maximum_consecutive_overruns;
+    int max_cycle_overruns_in_window = control_config::hardware::maximum_overruns_in_window;
+    double cycle_overrun_window_s = control_config::hardware::overrun_window;
   };
 
   // 构造硬件桥，并绑定电机标定参数、控制周期和反馈超时配置。

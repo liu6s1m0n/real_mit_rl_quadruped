@@ -13,6 +13,7 @@
 #ifndef MYMIT_ROBOT_CONTROLLER_CONTACT_ESTIMATOR_HPP_
 #define MYMIT_ROBOT_CONTROLLER_CONTACT_ESTIMATOR_HPP_
 
+#include "config/control_config.h"
 #include <array>
 
 #include "controller/leg_controller.hpp"
@@ -25,13 +26,13 @@
 template<typename T>
 struct ContactEstimatorParameters
 {
-  T maximum_sensor_skew = T(0.02);          ///< IMU 与腿反馈允许的最大时间差，s。
-  T gravity = T(9.81);                      ///< 重力加速度绝对值，m/s^2。
-  T force_ratio_gain = T(8);                ///< 接触概率 sigmoid 的斜率，必须大于零。
-  T force_ratio_threshold = T(0.3);         ///< 接触概率 sigmoid 的参考比例。
-  T contact_probability_threshold = T(0.5); ///< 二值接触判定阈值。
-  T minimum_support_ratio = T(0.2);         ///< 期望支撑力下限占名义支撑力的比例。
-  T force_estimation_damping = T(1e-3);     ///< 足端力阻尼最小二乘系数，防止奇异放大。
+  T maximum_sensor_skew = T(control_config::estimation::maximum_sensor_skew);          ///< IMU 与腿反馈允许的最大时间差，s。
+  T gravity = T(control_config::gravity);                      ///< 重力加速度绝对值，m/s^2。
+  T force_ratio_gain = T(control_config::estimation::force_ratio_gain);                ///< 接触概率 sigmoid 的斜率，必须大于零。
+  T force_ratio_threshold = T(control_config::estimation::force_ratio_threshold);         ///< 接触概率 sigmoid 的参考比例。
+  T contact_probability_threshold = T(control_config::estimation::contact_probability_threshold); ///< 二值接触判定阈值。
+  T minimum_support_ratio = T(control_config::estimation::minimum_support_ratio);         ///< 期望支撑力下限占名义支撑力的比例。
+  T force_estimation_damping = T(control_config::estimation::force_estimation_damping);     ///< 足端力阻尼最小二乘系数，防止奇异放大。
 
   /** @brief 检查所有参数是否为有限且物理上合理的值。 */
   bool isValid() const;

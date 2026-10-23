@@ -25,10 +25,9 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   const std::size_t mpc_interval = mpcSegmentIterations(
     *control_fsm_data->control_parameters, control_fsm_data->control_time_step);
   mpc::SolverSettings<T> solver_settings;
+  solver_settings.maximum_normal_force = control_fsm_data->control_parameters->maximum_normal_force;
   solver_settings.time_step =
     control_fsm_data->control_time_step * static_cast<T>(mpc_interval);
-  // 重心校准恢复为零偏移，MPC 使用原机身参考位置。
-  solver_settings.com_offset_body.setZero();
   //创建 MPC 控制器。传入:机器人模型；控制周期；MPC 步态时间间隔。  
   mpc_ = std::make_unique<mpc::ConvexMPCLocomotion<T>>(
     *control_fsm_data->quadruped, control_fsm_data->control_time_step,
@@ -44,13 +43,10 @@ FSM_State_Locomotion<T>::FSM_State_Locomotion(
   swing_height_ = parameters.locomotion_swing_height;
   maximum_lateral_foot_offset_ =
     parameters.locomotion_max_lateral_foot_offset;
-  auto initial_orientation_kp = parameters.locomotion_body_orientation_kp;
-  auto initial_orientation_kd = parameters.locomotion_body_orientation_kd;
-  // yaw 只作为转向/落足规划输入，不作为机身平衡反馈。
-  initial_orientation_kp.z() = T(0);
-  initial_orientation_kd.z() = T(0);
   wbc_ctrl_->setBodyOrientationGains(
-    initial_orientation_kp, initial_orientation_kd);
+    parameters.locomotion_body_orientation_kp, parameters.locomotion_body_orientation_kd);
+  wbc_ctrl_->setBodyPositionGains(
+    parameters.balance_body_position_kp, parameters.balance_body_position_kd);
   wbc_ctrl_->setFootPositionGains(
     parameters.wbc_foot_position_kp, parameters.wbc_foot_position_kd);
   wbc_ctrl_->setJointGains(
@@ -94,31 +90,9 @@ void FSM_State_Locomotion<T>::applyRequestedGait(bool force)
   if (!force && gait_applied_ && requested == applied_gait_) {return;}
   const bool switching = gait_applied_ && requested != applied_gait_;
   if (switching) {mpc_->initialize();}
-  if (force || switching) {
-    mpc::NormalForceBounds<T> normal;
-    normal.minimum.fill(mpc_->solverSettings().minimum_normal_force);
-    normal.maximum.fill(mpc_->solverSettings().maximum_normal_force);
-    mpc_->setNormalForceBounds(normal);
-    std::array<T, kNumLegs> wbc_min{};
-        std::array<T, kNumLegs> wbc_max{};
-    wbc_max.fill(this->_data->control_parameters->maximum_normal_force);
-    wbc_ctrl_->setNormalForceBounds(wbc_min, wbc_max);
-  }
   applied_gait_ = requested;
   gait_applied_ = true;
   this->checkSafeOrientation = true;
-  wbc_ctrl_->setFloatingBaseWeight(T(100));
-  // yaw 只用于转向命令和落足几何，完全不通过 WBC 姿态误差施加平衡力矩。
-  auto orientation_kp =
-    this->_data->control_parameters->locomotion_body_orientation_kp;
-  auto orientation_kd =
-    this->_data->control_parameters->locomotion_body_orientation_kd;
-  orientation_kp.z() = T(0);
-  orientation_kd.z() = T(0);
-  wbc_ctrl_->setBodyOrientationGains(orientation_kp, orientation_kd);
-  wbc_ctrl_->setBodyPositionGains(
-    this->_data->control_parameters->balance_body_position_kp,
-    this->_data->control_parameters->balance_body_position_kd);
   this->_data->gait_scheduler->requestGait(requested);
   this->_data->gait_scheduler->modifyGait();
 }
@@ -161,7 +135,7 @@ FSM_StateName FSM_State_Locomotion<T>::checkTransition()
     return this->nextStateName;
   }
 
-  constexpr unsigned int kTouchdownWaitTimeoutFrames = 50;
+  constexpr unsigned int kTouchdownWaitTimeoutFrames = control_config::locomotion::touchdown_timeout_frames;
   if (std::any_of(touchdown_wait_frames_.begin(), touchdown_wait_frames_.end(),
       [](unsigned int frames) {return frames >= kTouchdownWaitTimeoutFrames;}))
   {
@@ -206,7 +180,7 @@ TransitionData<T> FSM_State_Locomotion<T>::transition()
     if (this->_data->use_wbc && this->_data->leg_controller->legsEnabled()) {
       handoff.height = wbc_data_.pBody_des.z();
       handoff.locomotion_commands = this->_data->leg_controller->commands;
-      handoff.blend_frames = 2;
+      handoff.blend_frames = control_config::locomotion::stand_handoff_frames;
       handoff.blend_pending = true;
       handoff.pending = true;
     }
@@ -226,8 +200,8 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
   // 行走安全条件比普通 FSM 姿态检查更严格，并同时限制足端位置与速度。
   const StateEstimate<T> & estimate = *this->_data->state_estimate;
   /* 参数四： 俯仰角 翻滚的安全上限了*/
-  constexpr T max_roll_degrees = T(40);
-  constexpr T max_pitch_degrees = T(40);
+  constexpr T max_roll_degrees = T(control_config::locomotion::maximum_roll_degrees);
+  constexpr T max_pitch_degrees = T(control_config::locomotion::maximum_pitch_degrees);
   if (!estimate.valid) {
     std::fprintf(stderr,
       "[FSM][LOCOMOTION] 安全回站：状态估计无效。\n");
@@ -257,17 +231,19 @@ bool FSM_State_Locomotion<T>::locomotionSafe() const
     }
     const T foot_speed = data.v.norm();
     if (data.p.z() > T(0) ||
-      std::abs(data.p.y()) > maximum_lateral_foot_offset_ + T(0.01) || foot_speed > T(9))
+      std::abs(data.p.y()) > maximum_lateral_foot_offset_ + T(control_config::locomotion::lateral_boundary_tolerance) || foot_speed > T(control_config::locomotion::maximum_foot_speed))
     {
       std::fprintf(stderr,
         "[FSM][LOCOMOTION] 安全回站：leg=%zu p=(%.4f,%.4f,%.4f)m "
         "v_norm=%.3fm/s q=(%.4f,%.4f,%.4f)rad；边界 p_z<=0, "
-        "|p_y|<=%.3f, v<=9。\n",
+        "|p_y|<=%.3f, v<=%.3f。\n",
         leg, static_cast<double>(data.p.x()),
         static_cast<double>(data.p.y()), static_cast<double>(data.p.z()),
         static_cast<double>(foot_speed), static_cast<double>(data.q.x()),
         static_cast<double>(data.q.y()), static_cast<double>(data.q.z()),
-        static_cast<double>(maximum_lateral_foot_offset_));
+        static_cast<double>(maximum_lateral_foot_offset_ +
+          T(control_config::locomotion::lateral_boundary_tolerance)),
+        control_config::locomotion::maximum_foot_speed);
       return false;
     }
   }
@@ -380,13 +356,12 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   const Vec2<T> desired_velocity_body = yaw_rotation.transpose() * desired_velocity;
   // MIT interleave correction reduces leg interference during forward trot.
   // DM1 nominal foot geometry remains the source of the absolute foot spacing.
-  constexpr std::array<T, kNumLegs> interleave_y{
-    T(-0.08), T(0.08), T(0.02), T(-0.02)};
-  constexpr T interleave_gain = T(-0.2);
+  const auto interleave_y = control_config::array<T>(control_config::locomotion::interleave_y);
+  constexpr T interleave_gain = T(control_config::locomotion::interleave_gain);
   Vec2<T> interleaved_foot_body = centered_nominal_foot_body;
   interleaved_foot_body.y() +=
     interleave_y[leg] * std::abs(desired_velocity_body.x()) * interleave_gain;
-  const T yaw_step = -yaw_rate * stance_time * T(0.5);
+  const T yaw_step = -yaw_rate * stance_time * T(control_config::locomotion::yaw_step_gain);
   const T yaw_step_cos = std::cos(yaw_step);
   const T yaw_step_sin = std::sin(yaw_step);
   const Vec2<T> yaw_corrected_nominal_body(
@@ -402,13 +377,13 @@ void FSM_State_Locomotion<T>::startSwingTrajectory(
   // MIT Raibert 落足：半个支撑期速度前馈、0.03 捕获项和偏航离心项。
   // 目标按世界坐标计算，每次摆动开始时锁存一次，避免足点随反馈累加漂移。
   Vec2<T> step = Vec2<T>::Zero();
-  step.x() = measured_velocity.x() * T(0.5) * stance_time +
-    T(0.03) * (measured_velocity.x() - desired_velocity.x()) +
-    T(0.5) * estimate.position_world.z() / T(9.81) *
+  step.x() = measured_velocity.x() * T(control_config::locomotion::stance_velocity_gain) * stance_time +
+    T(control_config::locomotion::velocity_error_gain) * (measured_velocity.x() - desired_velocity.x()) +
+    T(control_config::locomotion::centrifugal_gain) * estimate.position_world.z() / T(control_config::gravity) *
     (measured_velocity.y() * yaw_rate);
-  step.y() = measured_velocity.y() * T(0.5) * stance_time +
-    T(0.03) * (measured_velocity.y() - desired_velocity.y()) -
-    T(0.5) * estimate.position_world.z() / T(9.81) *
+  step.y() = measured_velocity.y() * T(control_config::locomotion::stance_velocity_gain) * stance_time +
+    T(control_config::locomotion::velocity_error_gain) * (measured_velocity.y() - desired_velocity.y()) -
+    T(control_config::locomotion::centrifugal_gain) * estimate.position_world.z() / T(control_config::gravity) *
     (measured_velocity.x() * yaw_rate);
   step.x() = std::clamp(step.x(), -maximum_step_length_, maximum_step_length_);
   step.y() = std::clamp(step.y(), -maximum_step_length_, maximum_step_length_);
@@ -446,7 +421,6 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   }
   // MPC 输入必须使用统一的世界坐标系，否则反作用力方向会与 WBC 不一致。
   const auto feet_world = footPositionsWorld();
-  mpc_->setPositionOffsetWorld(Vec2<T>::Zero());
   /*MPC 输入：当前状态估计；用户期望状态；当前四个足端的世界坐标。
     MPC 输出 LocomotionResult，包括：command:机身期望状态；
     reaction_forces_world：各腿期望地面反作用力；
@@ -489,13 +463,13 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       single_step_gait && contact_state[leg] && swing_active_[leg];
     const bool touchdown_ready =
       !landing_candidate ||
-      std::abs(this->_data->leg_controller->datas[leg].v.z()) <= T(0.20);
-    const T nominal_support = this->_data->quadruped->totalMass() * T(9.81) /
+      std::abs(this->_data->leg_controller->datas[leg].v.z()) <= T(control_config::locomotion::touchdown_maximum_vertical_speed);
+    const T nominal_support = this->_data->quadruped->totalMass() * T(control_config::gravity) /
       static_cast<T>(kNumLegs);
     const bool force_confirmed =
       !this->_data->measured_contact_valid[leg] ||
-      (this->_data->measured_contact_probability[leg] >= T(0.5) &&
-      this->_data->measured_normal_force[leg] >= T(0.15) * nominal_support);
+      (this->_data->measured_contact_probability[leg] >= T(control_config::locomotion::touchdown_probability) &&
+      this->_data->measured_normal_force[leg] >= T(control_config::locomotion::touchdown_support_ratio) * nominal_support);
     if (landing_candidate && touchdown_ready && force_confirmed) {
       ++touchdown_confirm_frames_[leg];
     } else if (landing_candidate) {
@@ -504,7 +478,7 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
       touchdown_confirm_frames_[leg] = 0;
     }
     const bool touchdown_confirmed =
-      touchdown_confirm_frames_[leg] >= 3;
+      touchdown_confirm_frames_[leg] >= control_config::locomotion::touchdown_confirm_frames;
     if (landing_candidate && !touchdown_confirmed) {
       ++touchdown_wait_frames_[leg];
     } else {
@@ -611,7 +585,7 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
   }
   if (entry_transition_active_) {
     entry_transition_time_ += this->_data->control_time_step;
-    if (entry_transition_time_ >= T(0.2)) {entry_transition_active_ = false;}
+    if (entry_transition_time_ >= T(control_config::locomotion::entry_hold_duration)) {entry_transition_active_ = false;}
   }
 }
 

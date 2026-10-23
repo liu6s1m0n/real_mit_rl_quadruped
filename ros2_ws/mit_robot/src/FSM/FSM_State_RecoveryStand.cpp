@@ -29,11 +29,11 @@ FSM_State_RecoveryStand<T>::FSM_State_RecoveryStand(
   // 倒地本身就意味着姿态超出正常站立范围，因此恢复期间关闭姿态前置检查。
   this->turnOffAllSafetyChecks();
 
-  rollover_ramp_iterations_ = iterationsFor(T(0.30));
-  rollover_settle_iterations_ = iterationsFor(T(0.30));
-  fold_ramp_iterations_ = iterationsFor(T(0.80));
-  fold_settle_iterations_ = iterationsFor(T(1.40));
-  standup_ramp_iterations_ = iterationsFor(T(0.50));
+  rollover_ramp_iterations_ = iterationsFor(T(control_config::recovery::rollover_ramp));
+  rollover_settle_iterations_ = iterationsFor(T(control_config::recovery::rollover_settle));
+  fold_ramp_iterations_ = iterationsFor(T(control_config::recovery::fold_ramp));
+  fold_settle_iterations_ = iterationsFor(T(control_config::recovery::fold_settle));
+  standup_ramp_iterations_ = iterationsFor(T(control_config::recovery::standup_ramp));
 
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const LegId leg_id = static_cast<LegId>(leg);
@@ -42,12 +42,13 @@ FSM_State_RecoveryStand<T>::FSM_State_RecoveryStand(
     // DM1 关节方向与模型契约一致，并由下方限位保护。
     stand_joint_positions_[leg] = joints.home_position;
     fold_joint_positions_[leg] = clampToJointLimits(
-      Vec3<T>(T(0), T(1.4), T(-2.7)), joints);
+      control_config::vector3<T>(control_config::recovery::fold_position), joints);
 
     // 利用同向 Hip 外展和左右腿不对称收腿产生侧滚力矩，所有目标仍受模型限位保护。
     const bool right_side = leg_id == LegId::FR || leg_id == LegId::RR;
     rolling_joint_positions_[leg] = clampToJointLimits(
-      Vec3<T>(T(0.8), right_side ? T(1.6) : T(3.1), T(-2.77)), joints);
+      control_config::vector3<T>(right_side ? control_config::recovery::rolling_right_position :
+        control_config::recovery::rolling_left_position), joints);
   }
 }
 
@@ -72,7 +73,8 @@ void FSM_State_RecoveryStand<T>::onEnter()
   this->_data->gait_scheduler->requestGait(GaitType::STAND);
   const T height = this->_data->state_estimate->position_world.z();
   const bool standing_height = std::isfinite(static_cast<double>(height)) &&
-    height > T(0.20) && height < T(0.45);
+    height > T(control_config::recovery::standing_height_minimum) &&
+    height < T(control_config::recovery::standing_height_maximum);
   motion_ = !upsideDown() && standing_height ? Motion::StandUp : Motion::FoldLegs;
 }
 
@@ -136,10 +138,11 @@ void FSM_State_RecoveryStand<T>::standUp(std::size_t motion_iteration)
 {
   const T height = this->_data->state_estimate->position_world.z();
   const bool invalid_height = !std::isfinite(static_cast<double>(height)) ||
-    height < T(0.10);
+    height < T(control_config::recovery::low_height);
   const bool failed = upsideDown() || invalid_height;
   const std::size_t failure_check_iteration =
-    (standup_ramp_iterations_ * std::size_t(7)) / std::size_t(10);
+    static_cast<std::size_t>(T(standup_ramp_iterations_) *
+      T(control_config::recovery::failure_check_progress));
 
   if (motion_iteration > failure_check_iteration && failed) {
     JointPositions current_positions;
