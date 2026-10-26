@@ -128,7 +128,7 @@ void RobotRunner::initializeController(OrientationEstimatorMode orientation_mode
 
   desired_state_.mode = control_parameters_.start_in_prone_home ?
     ControlMode::JointPd : ControlMode::BalanceStand;
-  desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
+  desired_state_.body_position_world.z() = float(control_config::standing_height);
   desired_state_.valid = true;
   control_fsm_ = std::make_unique<ControlFSM<float>>(
     quadruped_, state_estimate_, joint_states_, leg_controller_, gait_scheduler_,
@@ -214,7 +214,7 @@ bool RobotRunner::requestStandUp() noexcept
     // 点击后把机身瞬移回世界原点。
     desired_state_.body_position_world.x() = state_estimate_.position_world.x();
     desired_state_.body_position_world.y() = state_estimate_.position_world.y();
-    desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
+    desired_state_.body_position_world.z() = float(control_config::standing_height);
     desired_state_.body_rpy << 0.0F, 0.0F, state_estimate_.rpy.z();
     desired_state_.body_velocity_world.setZero();
     desired_state_.body_acceleration_world.setZero();
@@ -239,7 +239,7 @@ bool RobotRunner::requestStandUp() noexcept
   prone_down_complete_ = false;
   desired_state_.body_position_world.x() = state_estimate_.position_world.x();
   desired_state_.body_position_world.y() = state_estimate_.position_world.y();
-  desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
+  desired_state_.body_position_world.z() = float(control_config::standing_height);
   desired_state_.body_rpy << 0.0F, 0.0F, state_estimate_.rpy.z();
   desired_state_.body_velocity_world.setZero();
   desired_state_.body_acceleration_world.setZero();
@@ -374,7 +374,7 @@ void RobotRunner::reset()
   desired_state_ = DesiredState<float>{};
   desired_state_.mode = control_parameters_.start_in_prone_home ?
     ControlMode::JointPd : ControlMode::BalanceStand;
-  desired_state_.body_position_world.z() = quadruped_.nominalBodyHeight();
+  desired_state_.body_position_world.z() = float(control_config::standing_height);
   desired_state_.valid = true;
   joint_initialization_started_ = false;
   motion_start_hold_active_ = false;

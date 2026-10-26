@@ -179,6 +179,9 @@ TransitionData<T> FSM_State_Locomotion<T>::transition()
     run();
     if (this->_data->use_wbc && this->_data->leg_controller->legsEnabled()) {
       handoff.height = wbc_data_.pBody_des.z();
+      handoff.force_standing_height =
+        applied_gait_ == GaitType::TWO_LEG_STAND ||
+        applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE;
       handoff.locomotion_commands = this->_data->leg_controller->commands;
       handoff.blend_frames = control_config::locomotion::stand_handoff_frames;
       handoff.blend_pending = true;

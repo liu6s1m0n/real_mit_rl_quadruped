@@ -2,15 +2,9 @@
  * @file control_config.h
  * @brief 软件算法控制参数的唯一修改入口；修改后重新编译。
  *
- * 关节向量 [hip, thigh, calf]；机身/足端向量 [x,y,z]；姿态 [roll,pitch,yaw]；
- * 四腿 [FR,FL,RR,RL] = [右前,左前,右后,左后]。MPC Q 的姿态顺序单独为 [yaw,pitch,roll]。
- *
- * 调参阅读方式：注释写明作用对象、何时生效及主要影响。带“承接”的字段只负责传值；
- * 带“通用”的默认值用于独立任务/控制器，完整运动通常使用文末 RobotControlParameters。
- * Kp 表示偏离目标后纠正的强度，Kd 表示对速度偏差的阻尼；二者不是动作速度旋钮。
- * 调大增益/权重不保证实际动作单调变快或更稳，最终结果还受任务优先级和力矩/接触约束影响。
- * 下游只转换类型、单位或传递参数，不重新指定数值。0/1 状态值、数学公式中的
- * 系数和物理模型/协议常量不是调参项。机械标定及 MuJoCo 参数仍在原模型文件。
+ * 向量顺序：关节 [hip, thigh, calf]，机身/足端 [x,y,z]，姿态 [roll,pitch,yaw]。
+ * MPC 姿态顺序为 [yaw,pitch,roll]；四腿顺序为 [FR,FL,RR,RL]。
+ * Kp 纠正位置/角度误差，Kd 抑制速度和振荡；实际效果还受 WBC、接触和力矩限制。
  */
 #ifndef MYMIT_ROBOT_CONFIG_CONTROL_CONFIG_H_
 #define MYMIT_ROBOT_CONFIG_CONTROL_CONFIG_H_
@@ -22,16 +16,18 @@
 
 namespace control_config
 {
-// 公共时序、站高和接触约束：MPC/WBC 共用同一来源。
-inline constexpr double control_time_step = 0.002; // 硬件控制循环的默认间隔，也是部分控制器的默认时间基准；减小会提高更新频率和计算负担。
-inline constexpr double gravity = 9.81; // 算法计算重力补偿、预测运动和名义支撑力时使用的重力值；各控制模块共用。
-inline constexpr double friction = 0.4; // MPC/WBC 的地面摩擦假设；越大越允许脚施加水平力，设得过大会高估地面的防滑能力。
-inline constexpr double minimum_normal_force = 0; // 支撑脚向上支撑力的下限；增大后不允许支撑脚轻载，摆动脚仍按无接触处理。
-inline constexpr double maximum_normal_force = 120; // 每只支撑脚的支撑力上限；增大可分配更大支撑力，但不会直接提高电机力矩限幅。
-inline constexpr bool use_wbc = true; // 行走状态是否用 WBC 把 MPC 结果转成关节命令；关闭时走足端控制分支，不影响站立/趴下的 WBC。
-inline constexpr double minimum_standing_height = 0.28; // 外部站立高度命令的下限；同时供界面、服务和控制入口校验使用。
-inline constexpr double maximum_standing_height = 0.42; // 外部站立高度命令的上限；提高它只放宽可请求范围，不会自动提高当前目标。
-inline constexpr double standing_height = minimum_standing_height; // 启动时采用的站立高度目标；默认跟随高度下限，运行时仍可由高度命令调整。
+// 公共时序、站高和接触参数。
+inline constexpr double control_time_step = 0.002; // 控制周期，500 Hz。
+inline constexpr double motor_joint_kp = 10; // 关节位置刚度。
+inline constexpr double motor_joint_kd = 2; // 关节速度阻尼。
+inline constexpr double gravity = 9.81; // 重力常数。
+inline constexpr double friction = 0.3; // MPC/WBC 摩擦系数。
+inline constexpr double minimum_normal_force = 0; // 单脚最小法向力。
+inline constexpr double maximum_normal_force = 120; // 单脚最大法向力。
+inline constexpr bool use_wbc = true; // 行走使用 WBC。
+inline constexpr double minimum_standing_height = 0.28; // 站高下限。
+inline constexpr double maximum_standing_height = 0.42; // 站高上限。
+inline constexpr double standing_height = 0.30; // 正常站立、行走和单次踏步回站共用的默认机身高度目标。
 
 // 操作档位：键盘、界面和硬件遥控使用同一组速度大小，具体方向由命令决定。
 namespace motion
@@ -46,15 +42,15 @@ inline constexpr float maximum_preset_speed = 0.6F; // 仿真界面速度档位�
 inline constexpr float maximum_preset_yaw_rate = 1.5F; // 仿真界面转向档位设置接口允许的上限；实际 MPC 命令另受 maximum_yaw_rate 校验。
 }
 
-// MPC：预测机身运动并分配各脚支撑力；权重决定“更看重哪项误差”。
+// MPC：预测机身运动并分配支撑力。
 namespace mpc
 {
-inline constexpr std::size_t horizon = 10; // 预测未来的段数，须为 2..18 的偶数；增大会扩大预测窗和求解量，也会加长由它派生的 TROT 周期。
-inline constexpr double time_step = 0.030; // 每个预测段的时长，也决定 MPC 求解间隔；按控制帧取整后，TROT 周期 = horizon × 实际段长。
-inline constexpr double alpha = 4e-5; // 接触力大小的惩罚权重；越大越倾向少用力，越小越优先追踪机身目标。
-inline constexpr double x_drag = 0; // 预测模型中世界 x 方向速度对竖直加速度的耦合补偿；0 表示不补偿，不是普通的前进速度阻尼。
-inline constexpr std::array<double, 12> state_weights{ // 各状态跟踪误差的惩罚权重；越大越重视该项，0 表示不直接惩罚该项误差。
-  0, 0.25, 10, 2, 2, 50, 0, 0, 0, 0.2, 0.2, 0.1};
+inline constexpr std::size_t horizon = 10; // 预测段数，须为偶数。
+inline constexpr double time_step = 0.010; // MPC 段长，约100 Hz。
+inline constexpr double alpha = 4e-5; // 接触力惩罚。
+inline constexpr double x_drag = 0; // 速度与竖直加速度补偿。
+inline constexpr std::array<double, 12> state_weights{ // MPC 状态权重，顺序见下方。
+  0, 10, 10, 2, 2, 60, 0.3, 0.3, 0.2, 0.2, 0.2, 0.1};
 // Q 顺序：[偏航,俯仰,侧倾,前后位置,横向位置,高度,世界角速度x/y/z,世界线速度x/y/z]。
 // 例如加大高度项会更重视保高，加大速度项会更重视走到目标速度；各项不是直接电机增益。
 inline constexpr std::array<double, 3> com_offset_body{0, 0, 0}; // 算法认为的重心相对机身原点的位置偏移；会改变力臂和前后/左右支撑分配，不修改机械模型。
@@ -73,23 +69,22 @@ inline constexpr double moving_yaw_rate = 1e-4; // 判定转向命令是否仍�
 
 namespace wbc
 {
-// WBC 分两层：运动学误差缩放生成关节位置参考；任务 Kp/Kd 生成加速度要求。
-// 关闭偏航位置反馈需关注姿态运动学增益和下方运动姿态 Kp；它们是不同反馈通道。
+// WBC：运动学增益生成关节参考，任务 Kp/Kd 生成加速度要求。
 inline constexpr std::array<double, 3> generic_orientation_kinematic_gain{1, 1, 1}; // 独立 BodyOriTask 的姿态误差到运动学修正的缩放；实际 LocomotionCtrl 使用下面的专用配置。
-inline constexpr std::array<double, 3> body_position_kinematic_gain{1, 1, 1}; // 机身位置误差对关节位置参考的修正强度；越大越积极纠正机身位置。
+inline constexpr std::array<double, 3> body_position_kinematic_gain{1.5, 1.5, 2.0}; // 机身位置修正，z 轴加强保高。
 inline constexpr std::array<double, 3> body_orientation_kinematic_gain{1, 1, 0}; // 站立/行走/趴下控制器中姿态误差对关节参考的修正强度；yaw=0 表示此通道不纠正偏航位置误差。
-inline constexpr std::array<double, 3> foot_kinematic_gain{1, 1, 1}; // 摆动脚位置误差对关节位置参考的修正强度；越大越积极把脚拉回目标轨迹。
+inline constexpr std::array<double, 3> foot_kinematic_gain{2, 2, 2}; // 足端位置修正。
 inline constexpr double kinematic_pseudoinverse_threshold = 0.001; // 运动学求逆时忽略过小奇异值的门槛；增大可减弱奇异姿态下的放大，也会放弃更多修正方向。
 inline constexpr double dynamic_pseudoinverse_threshold = 0.0001; // 动力学任务求逆时忽略过小奇异值的门槛；影响加速度任务在近奇异姿态下的求解。
 // 单独创建通用任务/控制器时的默认值；FSM 在构造时一次性传入各运动配置。
-inline constexpr double task_position_kp = 50; // 通用机身位置任务把位置误差转成目标加速度的比例增益；实际运动优先看下方 balance_body_position_kp。
-inline constexpr double task_position_kd = 1; // 通用机身位置任务的速度误差阻尼；实际运动优先看下方 balance_body_position_kd。
+inline constexpr double task_position_kp = 50; // 通用机身位置 Kp。
+inline constexpr double task_position_kd = 1; // 通用机身位置 Kd。
 inline constexpr double task_orientation_kp = 50; // 通用姿态任务把角度误差转成目标角加速度的比例增益；FSM 使用下方各运动的姿态增益。
 inline constexpr double task_orientation_kd = 1; // 通用姿态任务的角速度误差阻尼；FSM 使用下方各运动的姿态增益。
 inline constexpr double task_foot_kp = 100; // 通用足端任务的位置误差反馈；BalanceStand/Locomotion 构造时使用下方 wbc_foot_position_kp。
 inline constexpr double task_foot_kd = 5; // 通用足端任务的速度误差阻尼；BalanceStand/Locomotion 构造时使用下方 wbc_foot_position_kd。
-inline constexpr double generic_joint_kp = 100; // 通用 WBC 控制器输出的关节位置 PD 增益；FSM 会在构造时传入对应运动的关节增益。
-inline constexpr double generic_joint_kd = 2; // 通用 WBC 控制器输出的关节速度 PD 阻尼；FSM 会在构造时传入对应运动的关节增益。
+inline constexpr double generic_joint_kp = motor_joint_kp; // 承接统一电机关节位置刚度，供通用 WBC 控制器使用；FSM 会在构造时传入对应运动的关节增益。
+inline constexpr double generic_joint_kd = motor_joint_kd; // 承接统一电机关节速度阻尼，供通用 WBC 控制器使用；FSM 会在构造时传入对应运动的关节增益。
 inline constexpr double generic_floating_base_weight = 3000; // 通用 WBIC 对机身加速度修正的惩罚；越大越不愿偏离任务算出的机身加速度。
 inline constexpr double generic_reaction_force_weight = 1; // 通用 WBIC 对接触力修正的惩罚；越大越不愿改变传入的期望接触力。
 inline constexpr bool foot_include_floating_base = true; // 足端任务的雅可比是否包含机身自由度；关闭后只用关节运动解释足端运动。
@@ -106,12 +101,12 @@ inline constexpr double velocity_error_gain = 0.03; // 实测速度与目标速�
 inline constexpr double yaw_step_gain = 0.5; // 按转向速度和支撑时间预转名义落脚位置的比例；增大后转弯时的落脚旋转修正更强。
 inline constexpr double centrifugal_gain = 0.5; // 按机身高度、平移速度和转向速度计算的转弯落脚补偿强度。
 inline constexpr double entry_hold_duration = 0.2; // 进入行走后先保持四脚支撑多久，再执行请求的步态；增大后踏步启动更晚。
-inline constexpr std::size_t stand_handoff_frames = 2; // 正常退出行走回站立时，融合末帧行走命令与站立命令的帧数；用于减小切换突变。
+inline constexpr std::size_t stand_handoff_frames = 25; // 正常退出行走回站立时，融合末帧行走命令与站立命令的帧数；用于减小切换突变。
 inline constexpr double entry_height_margin = 0.005; // 允许机身低于名义站高多少仍可进入行走；越大越容易放行尚未完全站高的状态。
 inline constexpr double entry_minimum_calf_angle = 0.30; // 允许进入行走的小腿关节角下限；用于拦截仍在收腿/折叠的姿态。
 inline constexpr double touchdown_maximum_vertical_speed = 0.20; // 单次踏步落地确认时允许的足端竖直速度绝对值上限；越小越要求脚先稳定下来。
 inline constexpr double touchdown_probability = 0.5; // 单次踏步在有效实测接触数据下，认定落地所需的接触概率下限；无有效实测时跳过力确认。
-inline constexpr double touchdown_support_ratio = 0.15; // 单次踏步确认落地所需实测支撑力，占四脚均分体重时单脚支撑力的比例。
+inline constexpr double touchdown_support_ratio = 0.10; // 单次踏步确认落地所需实测支撑力，占四脚均分体重时单脚支撑力的比例。
 inline constexpr unsigned int touchdown_confirm_frames = 3; // 单次踏步的落地条件须连续满足多少帧才接受支撑切换；增大可抑制瞬时误判。
 inline constexpr unsigned int touchdown_timeout_frames = 50; // 单次踏步等待落地确认的最长帧数；达到后触发安全回站。
 inline constexpr double maximum_roll_degrees = 40; // 行走允许的最大左右侧倾；超过后停止继续行走并请求回到站立。
@@ -140,6 +135,7 @@ struct Profile
 inline constexpr Profile stand{10, 1, {0.5, 0.5, 0.5, 0.5}, 0}; // 四脚持续支撑的站立预设；支撑比为 1，因此周期和相位不会产生交替抬脚。
 inline constexpr Profile amble{0.5, 0.625, {0, 0.5, 0.25, 0.75}, 0}; // 错相慢走预设；每条腿错开抬脚，周期决定节奏，支撑比决定同一时刻的支撑重叠。
 inline constexpr double trot_stance_ratio = 0.5; // TROT 和单次踏步共用的支撑比例；增大后缩短每次摆腿时间。
+inline constexpr double single_step_swing_time = 0.25; // 按键 3/4 双腿单次踏步的摆腿时长；适当放慢以提高摆腿轨迹和落脚精度。
 inline constexpr std::array<double, 4> trot_phase_offset{0, 0.5, 0.5, 0}; // TROT 四腿的相位编组；相同值表示同步，默认 FR/RL 与 FL/RR 两组交替。
 inline constexpr double single_step_initial_phase = 0.5; // 单次踏步起始相位；决定选中的摆动腿从周期的哪个位置开始执行一次动作。
 inline constexpr Profile trot_run{0.4, 0.4, {0, 0.5, 0.5, 0}, 0}; // 跑动小跑预设；默认支撑比小于一半，两组对角腿交替时可出现腾空段。
@@ -252,7 +248,7 @@ inline constexpr double imu_recovery_interval = 2; // 两次 IMU 重连尝试之
 // MPC/WBIC 共用的 QP 求解选项，影响数值稳定性和求解工作量。
 namespace solver
 {
-inline constexpr int maximum_working_set_recalculations = 100; // QP 求解器每次求解最多进行的工作集更新次数；增大可能提高困难问题的求解机会，也可能增加耗时。
+inline constexpr int maximum_working_set_recalculations = 20; // QP 求解器每次求解最多进行的工作集更新次数；增大可能提高困难问题的求解机会，也可能增加耗时。
 inline constexpr double infinity = 1e20; // 交给 QP 求解器表示“无实际边界”的大数；不是物理力或位置上限。
 inline constexpr bool regularisation = true; // 是否启用 QP 正则化以改善近退化问题的数值条件；可能对原优化问题施加很小的修正。
 }
@@ -299,43 +295,43 @@ struct RobotControlParameters
   T balance_height_step = T(0.00016); // BalanceStand 每帧允许的最大高度目标变化；对 Runner 的站高限速再做一层限制，二者较严格者生效。
   T joint_initialization_duration = T(1.2); // 电机使能后，从实测关节位置平滑移动到初始化目标的时长；增大后初始化更慢。
   // 初始化与趴卧保持共用同一 PD。
-  Vec3<T> prone_home_joint_kp = Vec3<T>::Constant(T(70)); // 初始化和趴卧保持共用的电机关节位置刚度；增大后更用力保持目标关节角。
-  Vec3<T> prone_home_joint_kd = Vec3<T>::Constant(T(1.6)); // 初始化和趴卧保持共用的电机关节速度阻尼；增大后更强地抑制关节运动和振荡。
+  Vec3<T> prone_home_joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于初始化和趴卧保持。
+  Vec3<T> prone_home_joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于初始化和趴卧保持。
   bool start_in_prone_home = true; // 是否按机械趴卧零位启动并保持；开启时要先完成显式起身，才允许普通站立/行走。
   Vec3<T> motor_zero_position = Vec3<T>::Zero(); // 趴卧启动/保持时使用的电机坐标关节目标；这是控制目标，不是改写硬件零点或标定。
 
-  Vec3<T> balance_body_position_kp = Vec3<T>::Constant(T(100)); // 站立、行走和趴下共用的机身位置 WBC 比例增益；越大越积极纠正位置/高度误差。
-  Vec3<T> balance_body_position_kd = Vec3<T>::Constant(T(10)); // 站立、行走和趴下共用的机身速度误差阻尼；越大越强地抑制机身平移和升降振荡。
-  Vec3<T> balance_body_orientation_kp = Vec3<T>(T(200), T(200), T(0)); // 平衡站立的姿态误差反馈；增大对应轴后更积极扶正，默认 yaw=0 不追踪偏航角误差。
-  Vec3<T> balance_body_orientation_kd = Vec3<T>(T(10), T(10), T(0)); // 平衡站立的角速度误差阻尼；默认 yaw=0 不通过该动态反馈通道纠正偏航速度。
-  Vec3<T> balance_joint_kp = Vec3<T>(T(8), T(8), T(15)); // 平衡站立最终下发到电机的关节位置 PD 增益；决定关节参考跟踪的刚度，不是机身任务增益。
-  Vec3<T> balance_joint_kd = Vec3<T>(T(1.8), T(1.8), T(2)); // 平衡站立最终下发到电机的关节速度阻尼；增大后更强地抑制关节速度偏差。
-  Vec3<T> joint_kp = Vec3<T>::Constant(T(10)); // 行走及趴下折叠共用的电机关节位置 PD 增益；增大后关节更硬地追踪规划角度。
-  Vec3<T> joint_kd = Vec3<T>::Constant(T(2)); // 行走及趴下折叠共用的电机关节速度 PD 阻尼；不是足端任务的速度增益。
-  T balance_floating_base_weight = T(100); // 站立和趴下 WBIC 对机身加速度修正的惩罚；越大越优先保留机身任务的加速度要求。
+  Vec3<T> balance_body_position_kp = Vec3<T>(T(100), T(100), T(130)); // 站立、行走和趴下共用的机身位置 WBC 比例增益；z 轴提高以优先保持高度。
+  Vec3<T> balance_body_position_kd = Vec3<T>(T(10), T(10), T(14)); // 站立、行走和趴下共用的机身速度误差阻尼；z 轴提高以抑制升降振荡。
+  Vec3<T> balance_body_orientation_kp = Vec3<T>(T(220), T(220), T(0)); // 平衡站立的姿态误差反馈；提高 roll/pitch 扶正能力，默认 yaw=0 不追踪偏航角误差。
+  Vec3<T> balance_body_orientation_kd = Vec3<T>(T(12), T(12), T(0)); // 平衡站立的角速度误差阻尼；提高 roll/pitch 阻尼以减少俯仰回弹。
+  Vec3<T> balance_joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于平衡站立的关节参考跟踪，不是机身任务增益。
+  Vec3<T> balance_joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于平衡站立。
+  Vec3<T> joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于行走及趴下折叠。
+  Vec3<T> joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于行走及趴下折叠，不是足端任务增益。
+  T balance_floating_base_weight = T(500); // 站立和趴下 WBIC 对机身加速度修正的惩罚；站立时提高该值以优先保持机身任务。
   T balance_reaction_force_weight = T(1); // 站立和趴下 WBIC 对接触力修正的惩罚；越大越倾向保留传入的期望支撑力分配。
   T maximum_normal_force = T(control_config::maximum_normal_force); // 承接公共单脚支撑力上限，传给各状态的 MPC/WBC；统一调节应改上方同名公共配置。
 
   // 正常起身：从趴卧展开与非趴卧足端起身走不同分支；恢复动作只共用关节 PD。
-  T stand_up_duration = T(3.2); // 正常趴卧起身时髋/小腿展开时长的基准；增大后起身更慢，大腿时长还要除以下面的比例。
+  T stand_up_duration = T(2.4); // 正常趴卧起身时髋/小腿展开时长的基准；增大后起身更慢，大腿时长还要除以下面的比例。
   T stand_up_thigh_speed_scale = T(0.75); // 起身大腿的相对速度比例；大腿时长 = stand_up_duration / 此值，越小大腿展开越慢。
   Vec3<T> stand_up_prepare_position = Vec3<T>(T(0), T(0.1), T(-2.15)); // 正常趴卧起身展开阶段的三关节目标姿态；改变它会改变起身过程中的腿形。
-  Vec3<T> stand_up_joint_kp = Vec3<T>(T(80), T(80), T(90)); // 正常起身关节展开和恢复站立动作共用的电机关节位置刚度。
-  Vec3<T> stand_up_joint_kd = Vec3<T>::Constant(T(1.8)); // 正常起身关节展开和恢复站立动作共用的电机关节速度阻尼。
+  Vec3<T> stand_up_joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于正常起身关节展开和恢复站立。
+  Vec3<T> stand_up_joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于正常起身关节展开和恢复站立。
   Vec3<T> stand_up_cartesian_kp = Vec3<T>(T(190), T(190), T(260)); // 非趴卧起身路径的足端位置反馈增益；用于把脚推向起身目标，不作用于趴卧关节展开分支。
   Vec3<T> stand_up_cartesian_kd = Vec3<T>(T(10), T(10), T(14)); // 非趴卧起身路径的足端速度阻尼；与 stand_up_cartesian_kp 配合抑制足端偏差。
 
   // 行走：MPC 管力和机身参考，WBC 管任务跟踪，电机 PD 管最终关节参考跟踪。
-  Vec3<T> locomotion_body_orientation_kp = Vec3<T>(T(200), T(200), T(0)); // 行走和趴下共用的机身姿态反馈；roll/pitch 用于扶正，默认 yaw=0 不追踪偏航角误差。
-  Vec3<T> locomotion_body_orientation_kd = Vec3<T>(T(10), T(10), T(0)); // 行走和趴下共用的机身角速度误差阻尼；增大对应轴后更强地抑制旋转偏差。
-  T locomotion_swing_height = T(0.04); // 摆动脚相对起点的抬脚高度；增大更利于越障，但同样摆动时间内要求更大的脚速和加速度。
+  Vec3<T> locomotion_body_orientation_kp = Vec3<T>(T(220), T(220), T(0)); // 行走和趴下共用的机身姿态反馈；提高 roll/pitch 扶正能力，默认 yaw=0 不追踪偏航角误差。
+  Vec3<T> locomotion_body_orientation_kd = Vec3<T>(T(12), T(12), T(0)); // 行走和趴下共用的机身角速度误差阻尼；提高 roll/pitch 阻尼以减少俯仰回弹。
+  T locomotion_swing_height = T(0.06); // 摆动脚相对起点的抬脚高度；提高后摆腿轨迹更容易达标，但会增加所需脚速和加速度。
   T locomotion_max_lateral_foot_offset = T(0.30); // 行走时足端横向位置的基础安全边界；超出它加容差后回站，不是横向速度或步宽目标。
   T mpc_time_step = T(control_config::mpc::time_step); // 承接上方 MPC 段长，向 FSM 传递时序；统一修改预测段长应改 control_config::mpc::time_step。
-  Vec3<T> wbc_foot_position_kp = Vec3<T>::Constant(T(500)); // 站立/行走创建足端任务时使用的位置反馈增益，主要在摆腿任务激活时影响轨迹跟踪。
-  Vec3<T> wbc_foot_position_kd = Vec3<T>::Constant(T(10)); // 站立/行走足端任务的速度误差阻尼；配合位置反馈抑制摆动脚振荡。
+  Vec3<T> wbc_foot_position_kp = Vec3<T>::Constant(T(500)); // 站立/行走创建足端任务时使用的位置反馈增益，提高摆腿位置跟踪能力。
+  Vec3<T> wbc_foot_position_kd = Vec3<T>::Constant(T(15)); // 站立/行走足端任务的速度误差阻尼；降低过度阻尼，保留落脚时的速度抑制。
   T wbc_foot_velocity_damping = T(7); // 行走 WBC 输出外额外叠加的笛卡尔足速阻尼；经雅可比转为关节力矩，不等同于上面的任务 Kd。
-  T locomotion_floating_base_weight = T(100); // 行走 WBIC 对机身加速度修正的惩罚；越大越倾向保住机身任务，允许更多地调整接触力。
-  T locomotion_reaction_force_weight = T(1); // 行走 WBIC 对 MPC 接触力修正的惩罚；越大越倾向保留 MPC 的力分配，允许更多机身加速度修正。
+  T locomotion_floating_base_weight = T(100); // 行走 WBIC 对机身加速度修正的惩罚；相对站立降低，允许行走接触力适应摆腿。
+  T locomotion_reaction_force_weight = T(1); // 行走 WBIC 对 MPC 接触力修正的惩罚；与站立保持同一反力修正权重。
 
 };
 #endif // MYMIT_ROBOT_CONFIG_CONTROL_CONFIG_H_

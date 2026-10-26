@@ -50,11 +50,13 @@ void FSM_State_BalanceStand<T>::onEnter()
   // 普通入站从实测高度起身；正常回站继承最后一次 WBC 参考。
   auto & handoff = this->_data->stand_handoff;
   const bool has_handoff = handoff.pending;
+  force_standing_height_ = has_handoff && handoff.force_standing_height;
   handoff.pending = false;
+  handoff.force_standing_height = false;
   initial_body_position_ = this->_data->state_estimate->position_world;
   // 趴卧起身的高度限速从实测值开始。
   last_height_command_ = initial_body_position_.z();
-  if (has_handoff) {
+  if (has_handoff && !force_standing_height_) {
     last_height_command_ = handoff.height;
   }
   if (this->_data->control_parameters->start_in_prone_home &&
@@ -63,9 +65,9 @@ void FSM_State_BalanceStand<T>::onEnter()
   {
     initial_body_position_.z() = this->_data->quadruped->nominalBodyHeight();
   }
-  // 世界航向沿用进入状态时的实测值，但站立目标始终保持机身水平。不能把
-  // 切换瞬间的 roll/pitch 锁存为目标，否则已有倾斜会被 WBC 永久维持。
-  initial_body_rpy_ << T(0), T(0), this->_data->state_estimate->rpy.z();
+  // MIT BalanceStand 进入时锁存当前实际姿态，避免从 Locomotion 切换时
+  // 把仍在收敛的 roll/pitch 目标瞬间改成零，造成额外的姿态冲击。
+  initial_body_rpy_ = this->_data->state_estimate->rpy;
   posture_ramp_iteration_ = 0;
 }
 
@@ -130,8 +132,11 @@ void FSM_State_BalanceStand<T>::BalanceStandStep()
 
   //读取外部期望高度
   const DesiredState<T> & desired = *this->_data->desired_state;
-  if (desired.valid) {
+  if (desired.valid && !force_standing_height_) {
     wbc_data_.pBody_des.z() = desired.body_position_world.z();
+  }
+  if (force_standing_height_) {
+    wbc_data_.pBody_des.z() = T(control_config::standing_height);
   }
   // 额外限制单周期下降量，防止高度滑块快速下拉造成腿部瞬时折叠。
   // 参数2 高度变化率

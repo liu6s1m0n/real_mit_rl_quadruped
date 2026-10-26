@@ -475,7 +475,7 @@ int runSingleMotor(
     enable_frame.data[6], enable_frame.data[7],
     slow_move_test ?
     "已先切换 MIT 模式并重复发送 5 次 0xFC；将执行显式慢速动作测试："
-    "目标增量 30 deg（0.5236 rad），时长 5 s，Kp=20.0，Kd=0.2，前馈力矩=0。\n" :
+    "目标增量 30 deg（0.5236 rad），时长 5 s，关节 PD 使用统一配置，前馈力矩=0。\n" :
     "已先切换 MIT 模式并重复发送 5 次 0xFC；本模式不会发送任何 MIT 位置、速度、"
     "增益或力矩帧。\n");
 
@@ -519,8 +519,8 @@ int runSingleMotor(
     }
 
     constexpr float kMoveDeltaRad = 0.5235988F;
-    constexpr float kMoveKp = 20.0F;
-    constexpr float kMoveKd = 0.2F;
+    constexpr float kMoveKp = static_cast<float>(control_config::motor_joint_kp);
+    constexpr float kMoveKd = static_cast<float>(control_config::motor_joint_kd);
     const float start_position = feedback.position;
     const float target_position = start_position + kMoveDeltaRad;
     imu_log::print(

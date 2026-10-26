@@ -44,6 +44,7 @@ struct ControlFSMData
   struct StandHandoff
   {
     bool pending = false;
+    bool force_standing_height = false;
     T height = T(0);
     std::array<LegControllerCommand<T>, kNumLegs> locomotion_commands{};
     std::size_t blend_frames = 0;

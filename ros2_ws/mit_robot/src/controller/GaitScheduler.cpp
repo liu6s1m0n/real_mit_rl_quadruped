@@ -333,7 +333,9 @@ void GaitScheduler<T>::createGait()
       configureGait(
         gait_data.next_gait == GaitType::TWO_LEG_STAND ?
         "TWO_LEG_STAND" : "TWO_LEG_STAND_REVERSE",
-        parameters_.trot_period_time, T(control_config::gait::trot_stance_ratio),
+        T(control_config::gait::single_step_swing_time) /
+        (T(1) - T(control_config::gait::trot_stance_ratio)),
+        T(control_config::gait::trot_stance_ratio),
         all_legs, Vec4<T>::Zero(), unit_scale, false);
       gait_data.initial_phase = T(control_config::gait::single_step_initial_phase);
       break;
