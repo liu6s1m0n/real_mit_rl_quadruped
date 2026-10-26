@@ -50,7 +50,7 @@ inline constexpr double time_step = 0.010; // MPC 段长，约100 Hz。
 inline constexpr double alpha = 4e-5; // 接触力惩罚。
 inline constexpr double x_drag = 0; // 速度与竖直加速度补偿。
 inline constexpr std::array<double, 12> state_weights{ // MPC 状态权重，顺序见下方。
-  0, 10, 10, 2, 2, 60, 0.3, 0.3, 0.2, 0.2, 0.2, 0.1};
+  0, 15, 15, 2, 2, 100, 0.5, 0.5, 0.2, 0.2, 0.2, 0.5};
 // Q 顺序：[偏航,俯仰,侧倾,前后位置,横向位置,高度,世界角速度x/y/z,世界线速度x/y/z]。
 // 例如加大高度项会更重视保高，加大速度项会更重视走到目标速度；各项不是直接电机增益。
 inline constexpr std::array<double, 3> com_offset_body{0, 0, 0}; // 算法认为的重心相对机身原点的位置偏移；会改变力臂和前后/左右支撑分配，不修改机械模型。
@@ -135,7 +135,7 @@ struct Profile
 inline constexpr Profile stand{10, 1, {0.5, 0.5, 0.5, 0.5}, 0}; // 四脚持续支撑的站立预设；支撑比为 1，因此周期和相位不会产生交替抬脚。
 inline constexpr Profile amble{0.5, 0.625, {0, 0.5, 0.25, 0.75}, 0}; // 错相慢走预设；每条腿错开抬脚，周期决定节奏，支撑比决定同一时刻的支撑重叠。
 inline constexpr double trot_stance_ratio = 0.5; // TROT 和单次踏步共用的支撑比例；增大后缩短每次摆腿时间。
-inline constexpr double single_step_swing_time = 0.25; // 按键 3/4 双腿单次踏步的摆腿时长；适当放慢以提高摆腿轨迹和落脚精度。
+inline constexpr double single_step_swing_time = 0.35; // 按键 3/4 双腿单次踏步的摆腿时长；适当放慢以提高摆腿轨迹和落脚精度。
 inline constexpr std::array<double, 4> trot_phase_offset{0, 0.5, 0.5, 0}; // TROT 四腿的相位编组；相同值表示同步，默认 FR/RL 与 FL/RR 两组交替。
 inline constexpr double single_step_initial_phase = 0.5; // 单次踏步起始相位；决定选中的摆动腿从周期的哪个位置开始执行一次动作。
 inline constexpr Profile trot_run{0.4, 0.4, {0, 0.5, 0.5, 0}, 0}; // 跑动小跑预设；默认支撑比小于一半，两组对角腿交替时可出现腾空段。
@@ -300,13 +300,13 @@ struct RobotControlParameters
   bool start_in_prone_home = true; // 是否按机械趴卧零位启动并保持；开启时要先完成显式起身，才允许普通站立/行走。
   Vec3<T> motor_zero_position = Vec3<T>::Zero(); // 趴卧启动/保持时使用的电机坐标关节目标；这是控制目标，不是改写硬件零点或标定。
 
-  Vec3<T> balance_body_position_kp = Vec3<T>(T(100), T(100), T(130)); // 站立、行走和趴下共用的机身位置 WBC 比例增益；z 轴提高以优先保持高度。
-  Vec3<T> balance_body_position_kd = Vec3<T>(T(10), T(10), T(14)); // 站立、行走和趴下共用的机身速度误差阻尼；z 轴提高以抑制升降振荡。
-  Vec3<T> balance_body_orientation_kp = Vec3<T>(T(220), T(220), T(0)); // 平衡站立的姿态误差反馈；提高 roll/pitch 扶正能力，默认 yaw=0 不追踪偏航角误差。
-  Vec3<T> balance_body_orientation_kd = Vec3<T>(T(12), T(12), T(0)); // 平衡站立的角速度误差阻尼；提高 roll/pitch 阻尼以减少俯仰回弹。
-  Vec3<T> balance_joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于平衡站立的关节参考跟踪，不是机身任务增益。
+  Vec3<T> balance_body_position_kp = Vec3<T>(T(100), T(100), T(170)); // 站立、行走和趴下共用的机身位置 WBC 比例增益；z 轴提高以优先保持高度。
+  Vec3<T> balance_body_position_kd = Vec3<T>(T(10), T(10), T(18)); // 站立、行走和趴下共用的机身速度误差阻尼；z 轴提高以抑制升降振荡。
+  Vec3<T> balance_body_orientation_kp = Vec3<T>(T(220), T(260), T(0)); // 平衡站立的姿态误差反馈；提高 roll/pitch 扶正能力，默认 yaw=0 不追踪偏航角误差。
+  Vec3<T> balance_body_orientation_kd = Vec3<T>(T(14), T(16), T(0)); // 平衡站立的角速度误差阻尼；提高 roll/pitch 阻尼以减少俯仰回弹。
+  Vec3<T> balance_joint_kp = Vec3<T>(T(10), T(16), T(18)); // 承接统一电机关节位置刚度，用于平衡站立的关节参考跟踪，不是机身任务增益。
   Vec3<T> balance_joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于平衡站立。
-  Vec3<T> joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于行走及趴下折叠。
+  Vec3<T> joint_kp = Vec3<T>(T(10), T(16), T(18)); // 承接统一电机关节位置刚度，用于行走及趴下折叠。
   Vec3<T> joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于行走及趴下折叠，不是足端任务增益。
   T balance_floating_base_weight = T(500); // 站立和趴下 WBIC 对机身加速度修正的惩罚；站立时提高该值以优先保持机身任务。
   T balance_reaction_force_weight = T(1); // 站立和趴下 WBIC 对接触力修正的惩罚；越大越倾向保留传入的期望支撑力分配。
@@ -322,15 +322,15 @@ struct RobotControlParameters
   Vec3<T> stand_up_cartesian_kd = Vec3<T>(T(10), T(10), T(14)); // 非趴卧起身路径的足端速度阻尼；与 stand_up_cartesian_kp 配合抑制足端偏差。
 
   // 行走：MPC 管力和机身参考，WBC 管任务跟踪，电机 PD 管最终关节参考跟踪。
-  Vec3<T> locomotion_body_orientation_kp = Vec3<T>(T(220), T(220), T(0)); // 行走和趴下共用的机身姿态反馈；提高 roll/pitch 扶正能力，默认 yaw=0 不追踪偏航角误差。
-  Vec3<T> locomotion_body_orientation_kd = Vec3<T>(T(12), T(12), T(0)); // 行走和趴下共用的机身角速度误差阻尼；提高 roll/pitch 阻尼以减少俯仰回弹。
+  Vec3<T> locomotion_body_orientation_kp = Vec3<T>(T(220), T(260), T(0)); // 行走和趴下共用的机身姿态反馈；提高 roll/pitch 扶正能力，默认 yaw=0 不追踪偏航角误差。
+  Vec3<T> locomotion_body_orientation_kd = Vec3<T>(T(14), T(16), T(0)); // 行走和趴下共用的机身角速度误差阻尼；提高 roll/pitch 阻尼以减少俯仰回弹。
   T locomotion_swing_height = T(0.06); // 摆动脚相对起点的抬脚高度；提高后摆腿轨迹更容易达标，但会增加所需脚速和加速度。
   T locomotion_max_lateral_foot_offset = T(0.30); // 行走时足端横向位置的基础安全边界；超出它加容差后回站，不是横向速度或步宽目标。
   T mpc_time_step = T(control_config::mpc::time_step); // 承接上方 MPC 段长，向 FSM 传递时序；统一修改预测段长应改 control_config::mpc::time_step。
-  Vec3<T> wbc_foot_position_kp = Vec3<T>::Constant(T(500)); // 站立/行走创建足端任务时使用的位置反馈增益，提高摆腿位置跟踪能力。
-  Vec3<T> wbc_foot_position_kd = Vec3<T>::Constant(T(15)); // 站立/行走足端任务的速度误差阻尼；降低过度阻尼，保留落脚时的速度抑制。
+  Vec3<T> wbc_foot_position_kp = Vec3<T>(T(500), T(500), T(600)); // 站立/行走创建足端任务时使用的位置反馈增益，提高摆腿位置跟踪能力。
+  Vec3<T> wbc_foot_position_kd = Vec3<T>(T(15), T(15), T(18)); // 站立/行走足端任务的速度误差阻尼；降低过度阻尼，保留落脚时的速度抑制。
   T wbc_foot_velocity_damping = T(7); // 行走 WBC 输出外额外叠加的笛卡尔足速阻尼；经雅可比转为关节力矩，不等同于上面的任务 Kd。
-  T locomotion_floating_base_weight = T(100); // 行走 WBIC 对机身加速度修正的惩罚；相对站立降低，允许行走接触力适应摆腿。
+  T locomotion_floating_base_weight = T(200); // 行走 WBIC 对机身加速度修正的惩罚；相对站立降低，允许行走接触力适应摆腿。
   T locomotion_reaction_force_weight = T(1); // 行走 WBIC 对 MPC 接触力修正的惩罚；与站立保持同一反力修正权重。
 
 };
