@@ -163,6 +163,7 @@ int HardwareBridge::runKeyboardControl(
   DesiredState<float> opendog_desired = runner_.desiredState();
   opendog_desired.mode = ControlMode::Passive;
   ControlOutput algorithm_output;
+  std::uint64_t opendog_motion_sequence = 0;
   // 每次键盘控制启动都新建一个带时间戳的 CSV，记录全部 12 个关节的
   // q（实际位置）、q_des（期望位置）和 tau（反馈力矩），用于步态分析。
   std::time_t log_ts = std::time(nullptr);
@@ -262,6 +263,12 @@ int HardwareBridge::runKeyboardControl(
           return command.type == teleop::CommandType::KeyboardFailure;
         }), commands.end());
     arbiter.applyBatch(commands);
+    if (use_opendog) {
+      for (const auto & command : commands) {
+        if (command.type == teleop::CommandType::Motion && arbiter.motionActive() &&
+          command.motion == arbiter.motion()) {++opendog_motion_sequence;}
+      }
+    }
     if (input_failed && !keyboard_fault_reported) {
       keyboard_fault_reported = true;
       imu_log::print(
@@ -270,6 +277,10 @@ int HardwareBridge::runKeyboardControl(
     }
     arbiter.expireMotion(std::chrono::steady_clock::now());
     if (arbiter.takeHelpRequest()) {
+      if (use_opendog) {
+        imu_log::print(imu_log::Level::Info,
+          "OpenDog：2 连续原地踏步，3 左前/右后单次踏步，4 右前/左后单次踏步。\n");
+      }
       imu_log::print(
         imu_log::Level::Info,
         "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，3 双腿支撑测试，"
@@ -348,7 +359,9 @@ int HardwareBridge::runKeyboardControl(
       // 解锁后立即启动 RobotRunner 的零位初始化轨迹；首帧控制命令在本周期末发送。
       if (use_opendog) {
         backend_->reset();
-        opendog_desired.mode = ControlMode::Passive;
+        // OpenDog JointPd mirrors RobotRunner's startup initialization: keep
+        // the measured base pose and smoothly drive all joints to motor zero.
+        opendog_desired.mode = ControlMode::JointPd;
       } else {
         runner_.reset();
       }
@@ -371,6 +384,7 @@ int HardwareBridge::runKeyboardControl(
         imu_log::print(imu_log::Level::Info, "OpenDog 原目标轨迹未定义趴下命令。\n");
       }
       if (arbiter.motionActive()) {
+        opendog_algorithm_->setMotionRequest(arbiter.motion(), opendog_motion_sequence);
         const auto velocity = teleop::velocityForMotion(arbiter.motion());
         const Vec3<float> body_velocity(velocity.forward, velocity.lateral, 0.0F);
         opendog_desired.body_velocity_world =
@@ -484,6 +498,25 @@ int HardwareBridge::runKeyboardControl(
     const bool publish_ok = publish_attempted &&
       publishCommands(mit_, sender, algorithm_output.commands, now_s, &published_frames);
     if (publish_ok) {last_published_s = now_s;}
+    if (use_opendog && publish_attempted) {
+      static robot_log::Throttle freshness_log(1000);
+      if (freshness_log.ready()) {
+        const double publish_time = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - start).count();
+        const double snapshot_age_ms = 1000.0 * (publish_time - timestamp);
+        double motor_age_ms = 0.0;
+        for (const auto & motor : sample.motors) {
+          motor_age_ms = std::max(motor_age_ms, 1000.0 * (publish_time - motor.timestamp));
+        }
+        const auto & timing = opendog_algorithm_->timing();
+        imu_log::print(imu_log::Level::Info,
+          "[OpenDog][FRESHNESS] snapshot_age_ms=%.3f motor_feedback_max_age_ms=%.3f "
+          "policy_age_at_publish_ms=%.3f horizon_at_publish_ms=%.3f "
+          "publish_ok=%s monitor_only=true\n",
+          snapshot_age_ms, motor_age_ms, timing.policy_age_ms + snapshot_age_ms,
+          timing.horizon_remaining_ms - snapshot_age_ms, publish_ok ? "true" : "false");
+      }
+    }
     if (publish_attempted && !publish_ok) {
       report_control_failure("MIT命令校验/发布失败");
     }

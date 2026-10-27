@@ -2,8 +2,13 @@ centroidalModelType             0      ; 动力学模型：0=完整质心，1=�
 
 hardware_output
 {
-  kp                  4.0
-  kd                  5.0
+  ; 与当前 DM1 balance/locomotion 的直接关节 PD 保持同一量级，避免后腿承重时
+  ; 大腿参考已变化但输出刚度不足，导致后小腿继续压在地面上。
+  kp                  10.0
+  kd                  2.0
+  ; 后膝参考当前 MIT 的小腿位置增益，用于实机承重下的位置跟踪验证。
+  ; 不改变 MPC/WBC、前腿、其他关节或阻尼；缺省时沿用 kp。
+  rear_calf_kp        18.0
 }
 
 legged_robot_interface

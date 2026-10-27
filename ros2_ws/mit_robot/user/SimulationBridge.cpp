@@ -79,6 +79,7 @@ protected:
       case GLFW_KEY_1: decoded = '1'; break;
       case GLFW_KEY_2: decoded = '2'; break;
       case GLFW_KEY_3: decoded = '3'; break;
+      case GLFW_KEY_4: decoded = '4'; break;
       case GLFW_KEY_W: decoded = 'W'; break;
       case GLFW_KEY_S: decoded = 'S'; break;
       case GLFW_KEY_A: decoded = 'A'; break;
@@ -415,6 +416,7 @@ void runOpenDogPhysics(
   desired.valid = true;
   desired.body_position_world.z() = float(control_config::standing_height);
   ControlOutput output;
+  std::uint64_t motion_sequence = 0;
   bool control_active = false;
   bool was_enabled = false;
   bool controller_ready = false;
@@ -481,6 +483,7 @@ void runOpenDogPhysics(
         case kDisableMotors: key = '0'; break;
         case kStand: key = '1'; break;
         case kMarchInPlace: key = '2'; break;
+        case kTwoLegStand: key = '3'; break;
         case kForwardSlow: key = 'W'; break;
         case kBackward: key = 'S'; break;
         case kLeft: key = 'A'; break;
@@ -494,13 +497,17 @@ void runOpenDogPhysics(
       if (key != 0) {commands.push_back(*teleop::decodeKey(key));}
     }
     arbiter.applyBatch(commands);
+    for (const auto & command : commands) {
+      if (command.type == teleop::CommandType::Motion && arbiter.motionActive() &&
+        command.motion == arbiter.motion()) {++motion_sequence;}
+    }
     if (keyboard.available() && !keyboard.healthy() && !keyboard_fault_reported) {
       keyboard_fault_reported = true;
       std::fprintf(stderr, "OpenDog MuJoCo keyboard input stopped; GUI control remains active\n");
     }
     arbiter.expireMotion(std::chrono::steady_clock::now());
     if (arbiter.takeHelpRequest()) {
-      std::printf("OpenDog keys: U enable, 0 disable, 1 stand, W/S/A/D/Q/E locomotion, Space stop, Esc exit, H help\n");
+      std::printf("OpenDog keys: U enable, 0 disable, 1 stand, 2 trot, 3 LF/RH single step, 4 RF/LH single step, W/S/A/D/Q/E locomotion, Space stop, Esc exit, H help\n");
     }
     if (arbiter.quitRequested()) {
       simulation.exitrequest.store(1);
@@ -549,6 +556,7 @@ void runOpenDogPhysics(
       std::printf("OpenDog MuJoCo target trajectory has no prone-down command\n");
     }
     if (arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive()) {
+      algorithm.setMotionRequest(arbiter.motion(), motion_sequence);
       const auto velocity = teleop::velocityForMotion(arbiter.motion(), velocity_profile);
       const Vec3<float> body_velocity(velocity.forward, velocity.lateral, 0.0F);
       desired.body_velocity_world =

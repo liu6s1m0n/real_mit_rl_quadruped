@@ -11,23 +11,28 @@
 每次打开新的终端，先执行：
 
 ```bash
-cd /home/simon/real_mitrl_dog
+cd /home/simon/real_mitrl_dog/ros2_ws
 source /opt/ros/humble/setup.bash
-CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build --base-paths ros2_ws \
-  --packages-select mymit_robot --symlink-install --parallel-workers 1 --executor sequential
+for target in hardware_main mymit_robot_user mymit_opendog_user mymit_robot_height_service install/fast; do
+  CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build \
+    --packages-select mymit_robot --symlink-install --parallel-workers 1 --executor sequential \
+    --cmake-target "$target" --cmake-args -DMYMIT_ENABLE_OPENDOG=ON || break
+done
 source install/setup.bash
 ```
 
-如果只是运行已经成功构建过的程序，可以省略 `colcon build`，但仍需要执行两个
-`source` 命令。构建和运行统一使用工程根目录的 `build/`、`install/`；
-`ros2_ws/install/` 中存在旧产物，不要混用环境。
+两套算法属于同一个 `mymit_robot` 包；上述循环逐目标、单线程增量构建硬件入口、
+MIT/OpenDog 仿真入口及高度服务，最后安装已构建的程序，不构建全部测试。
+`build/`、`install/`、`log/` 均位于 `ros2_ws/` 下，MIT 默认保留，OpenDog 用参数选择。
+如果只是运行已经构建的程序，可以省略构建循环，但仍需执行两个 `source` 命令。
+请在新终端加载 `ros2_ws/install/setup.bash`，不要再加载工程根目录的旧安装环境。
 
 ## 2. 仿真程序
 
 ### 直接启动 MuJoCo 仿真
 
 ```bash
-cd /home/simon/real_mitrl_dog
+cd /home/simon/real_mitrl_dog/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -54,8 +59,28 @@ ros2 launch mymit_robot dm1_control.launch.py \
   algorithm_config:=/home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/algorithm
 ```
 
-仿真窗口中按 `Shift+U` 解锁，再按 `1` 进入 OpenDog 站起轨迹；站稳后可用方向键
-发送步态命令。`current_mit` 和 `opendog` 都通过同一个 MuJoCo 执行器写入路径。
+仿真窗口中按 `Shift+U` 解锁，再按 `1` 进入 OpenDog 站起轨迹；站稳后用
+`W/S/A/D/Q/E` 发送运动命令。OpenDog 的 `2` 保持连续原地小跑；`3` 让左前＋右后
+各踏一次，`4` 让右前＋左后各踏一次，随后保持四脚支撑。再次按 `3` 或 `4` 才重新
+发起一次；窗口按键重复事件不会连续触发。终端收到的每个按键字节均作为新请求。
+这两键在 OpenDog 真机入口使用同样语义，MIT 的原有控制逻辑保持不变。
+
+单次踏步参数在 `config/algorithm/opendog_gait.info` 的 `single_step_lf_rh` 和
+`single_step_rf_lh`：先四脚支撑 0.1 s、指定对角腿摆动 0.3 s、四脚支撑 0.1 s，
+然后持续站立。沿用原 OpenDog 在预测时域末端插入步态的方式，默认约 1 秒之后
+开始动作，另有后台求解延迟。`Space` 发送停止请求。
+
+`[OpenDog][TIMING]` 每秒观测控制计算、WBC、最近一次 MPC 求解耗时、策略观测年龄
+和剩余预测时域；真机另有 `[OpenDog][FRESHNESS]`，显示发布时的控制快照年龄、
+原始电机反馈最大年龄、策略年龄及剩余时域。这些日志只作观测，不触发保护动作。
+策略年龄与仿真/控制时间同轴；首次求解期间仿真时间不前进，需结合计算墙钟耗时判断。
+`current_mit` 和 `opendog` 都通过同一个 MuJoCo 执行器写入路径。
+
+OpenDog 电机输出增益位于 `config/algorithm/opendog_task.info` 的 `hardware_output`。
+`kp=4`、`kd=5` 保留原输出值；`rear_calf_kp=18` 仅作用于 RR/RL 的小腿，
+取值参考当前 MIT 的小腿位置增益。旧配置不包含该项时，后小腿仍使用 `kp`。
+该调整用于验证真机后膝承重时的跟踪偏差；仿真通过不能确认真机问题已解决。
+启动时 `[OpenDog][OUTPUT]` 会打印实际加载的三个增益值。
 
 默认启动 MPC/WBC 控制链。仿真窗口打开后默认电机上锁；先按键盘 `Shift+U`（或点击
 `Enable motors`），再按 `1`/点击 `Stand up`，最后按方向键或使用方向按钮。方向命令会
@@ -132,9 +157,13 @@ ros2 run mymit_robot mymit_robot_user --hardware-sim \
 构建并验证完整原始驱动闭环：
 
 ```bash
+cd /home/simon/real_mitrl_dog/ros2_ws
 source /opt/ros/humble/setup.bash
-CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build --base-paths ros2_ws \
-  --packages-select mymit_robot --symlink-install --parallel-workers 1 --executor sequential
+for target in test_dm1_full_hardware_simulation test_hardware_bridge test_dm_motor_driver test_imu_driver; do
+  CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build \
+    --packages-select mymit_robot --symlink-install --parallel-workers 1 --executor sequential \
+    --cmake-target "$target" --cmake-args -DMYMIT_ENABLE_OPENDOG=ON || break
+done
 source install/setup.bash
 ctest --test-dir build/mymit_robot \
   -R '^(test_dm1_full_hardware_simulation|test_hardware_bridge|test_dm_motor_driver|test_imu_driver)$' \
@@ -187,7 +216,7 @@ MuJoCo Reset 后会重新上锁；上锁时仍执行 `mj_step()`，机器人会�
 ### 自动选择 DM IMU 串口
 
 ```bash
-cd /home/simon/real_mitrl_dog
+cd /home/simon/real_mitrl_dog/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -227,7 +256,7 @@ ros2 launch mymit_robot dm1_imu.launch.py \
 ### 监听 can0 上物理 CAN ID 为 0x01 的电机
 
 ```bash
-cd /home/simon/real_mitrl_dog
+cd /home/simon/real_mitrl_dog/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -361,7 +390,7 @@ ros2 run mymit_robot hardware_main \
 先在工作空间准备环境，并将日志集中到一个目录：
 
 ```bash
-cd /home/simon/real_mitrl_dog
+cd /home/simon/real_mitrl_dog/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export DM1_LOG_DIR="$HOME/dm1_diag_$(date +%Y%m%d_%H%M%S)"

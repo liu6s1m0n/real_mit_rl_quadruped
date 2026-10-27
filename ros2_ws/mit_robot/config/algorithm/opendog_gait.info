@@ -253,3 +253,16 @@ pawup
      [1]     2.0
    }
 }
+
+; One key press: settle on four feet, swing one diagonal, then remain in STANCE.
+; Mode names describe SUPPORT legs. Key 3 swings LF/RH; key 4 swings RF/LH.
+single_step_lf_rh
+{
+  modeSequence { [0] STANCE [1] RF_LH [2] STANCE }
+  switchingTimes { [0] 0.0 [1] 0.1 [2] 0.4 [3] 0.5 }
+}
+single_step_rf_lh
+{
+  modeSequence { [0] STANCE [1] LF_RH [2] STANCE }
+  switchingTimes { [0] 0.0 [1] 0.1 [2] 0.4 [3] 0.5 }
+}

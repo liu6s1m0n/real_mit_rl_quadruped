@@ -5,6 +5,9 @@
 #include <mutex>
 #include <thread>
 #include <gtest/gtest.h>
+#if defined(MYMIT_ENABLE_OPENDOG)
+#include <rclcpp/rclcpp.hpp>
+#endif
 
 #include "HardwareSimulation.hpp"
 #include "hardware/dm1_hardware_driver.hpp"
@@ -260,3 +263,56 @@ TEST(Dm1FullHardwareSimulation, IntermittentWriteFailuresRetainHardwareHoldBehav
   EXPECT_TRUE(report.disabled);
 }
 }  // namespace
+
+#if defined(MYMIT_ENABLE_OPENDOG)
+TEST(Dm1FullHardwareSimulation, OpenDogUnfoldsBothRearKneesThroughRawDrivers)
+{
+  rclcpp::init(0, nullptr);
+  {
+    Plant plant;
+    Dm1HardwareDriver driver("sim0", "sim1", plant.devices->imuDevice(),
+      plant.calibration, plant.devices.get());
+    HardwareBridge::Options options;
+    options.keyboard_control = true;
+    options.algorithm_backend = AlgorithmBackendId::OpenDog;
+    options.algorithm_config_directory = MYMIT_OPENDOG_TEST_CONFIG;
+    auto start = HardwareSimulation::Clock::time_point{};
+    bool enable_sent = false, stand_sent = false;
+    double height = 0.0;
+    std::array<double, kNumLegs> calf{};
+    options.command_source = [&]() {
+        const auto now = HardwareSimulation::Clock::now();
+        if (start == HardwareSimulation::Clock::time_point{}) {start = now;}
+        const double elapsed = std::chrono::duration<double>(now - start).count();
+        int key = 0;
+        if (elapsed > 0.25 && !enable_sent) {enable_sent = true; key = 'U';}
+        else if (elapsed > 1.8 && !stand_sent) {stand_sent = true; key = '1';}
+        else if (elapsed > 9.5) {
+          key = 27;
+          std::lock_guard<std::recursive_mutex> lock(plant.mutex);
+          height = plant.data->qpos[2];
+          const char * names[] = {"FR_calf_joint", "FL_calf_joint", "RR_calf_joint", "RL_calf_joint"};
+          for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+            const int joint = mj_name2id(plant.model.get(), mjOBJ_JOINT, names[leg]);
+            calf[leg] = plant.data->qpos[plant.model->jnt_qposadr[joint]];
+          }
+        }
+        std::vector<teleop::OperatorCommand> result;
+        if (key) {result.push_back(*teleop::decodeKey(key));}
+        return result;
+      };
+    const std::atomic_bool stop{false};
+    HardwareBridge bridge(driver, plant.calibration, options);
+    EXPECT_EQ(bridge.run(stop), 0);
+    std::cout << "opendog_full_hardware height=" << height;
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      std::cout << " calf_" << leg << "=" << calf[leg];
+    }
+    std::cout << std::endl;
+    EXPECT_GT(height, 0.25);
+    EXPECT_GT(calf[2], 0.59);
+    EXPECT_GT(calf[3], 0.59);
+  }
+  rclcpp::shutdown();
+}
+#endif

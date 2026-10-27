@@ -249,7 +249,7 @@ TEST(HardwareBridgeTest, OpenDogKeyboardUsesSharedHardwareOutput)
     options.command_source = [frame = 0]() mutable {
         ++frame;
         const int key = frame == 1 ? 'U' : frame == 3 ? '1' : frame == 8 ? '2' :
-          frame == 20 ? ' ' : 0;
+          frame == 12 ? '3' : frame == 16 ? '4' : frame == 20 ? ' ' : 0;
         return key ? std::vector<teleop::OperatorCommand>{*teleop::decodeKey(key)} :
           std::vector<teleop::OperatorCommand>{};
       };

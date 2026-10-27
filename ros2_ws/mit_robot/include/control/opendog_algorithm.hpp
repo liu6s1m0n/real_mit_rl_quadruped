@@ -6,6 +6,7 @@
 
 #include "config/control_config.h"
 #include "control/algorithm_backend.hpp"
+#include "teleop/operator_command.hpp"
 
 class OpenDogAlgorithm final : public AlgorithmBackend
 {
@@ -14,6 +15,21 @@ public:
     std::string config_directory,
     double control_period = control_config::control_time_step);
   ~OpenDogAlgorithm() override;
+
+  // OpenDog-only command event; a latched request retains its sequence.
+  void setMotionRequest(teleop::Motion motion, std::uint64_t sequence);
+
+  struct Timing
+  {
+    double compute_ms = 0.0;
+    double wbc_ms = 0.0;
+    double mpc_ms = 0.0;
+    double policy_age_ms = 0.0;
+    double horizon_remaining_ms = 0.0;
+    std::size_t planned_mode = 15;
+    bool initial_policy = false;
+  };
+  const Timing & timing() const noexcept;
 
   bool configure() override;
   bool start() override;

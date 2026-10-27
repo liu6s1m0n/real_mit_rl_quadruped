@@ -82,3 +82,43 @@ TEST(OpenDogGaitCommand, InsertsOriginalTrotAndStanceTemplates)
   command.preSolverRun(1.0, 2.0, ocs2::vector_t(), reference);
   EXPECT_EQ(schedule->getModeSchedule(1.0, 3.0).modeAtTime(2.5), 15U);
 }
+
+TEST(OpenDogGaitCommand, SingleDiagonalStepsDoNotRepeatAndCanBeRequestedAgain)
+{
+  auto schedule = std::make_shared<ocs2::legged_robot::GaitSchedule>(
+    ocs2::ModeSchedule({0.5}, {15, 15}),
+    ocs2::legged_robot::loadModeSequenceTemplate(config("opendog_gait.info"), "stance", false), 0.1);
+  OpenDogGaitCommand command(config("opendog_gait.info"), schedule);
+  ocs2::ReferenceManager reference;
+  command.setMode(ControlMode::Locomotion);
+  command.setMotion(teleop::Motion::TwoLegStand, 1);
+  command.preSolverRun(0.0, 1.0, {}, reference);
+  auto modes = schedule->getModeSchedule(0.0, 3.0);
+  EXPECT_EQ(modes.modeAtTime(1.05), 15U);
+  EXPECT_EQ(modes.modeAtTime(1.25), 6U);  // RF/LH support, LF/RH swing.
+  EXPECT_EQ(modes.modeAtTime(1.45), 15U);
+  for (int i = 1; i <= 10; ++i) {
+    command.preSolverRun(i, i + 1.0, {}, reference);
+    EXPECT_EQ(schedule->getModeSchedule(i, i + 2.0).modeAtTime(i + 1.25), 15U);
+  }
+  command.setMotion(teleop::Motion::TwoLegStand, 2);
+  command.preSolverRun(11.0, 12.0, {}, reference);
+  EXPECT_EQ(schedule->getModeSchedule(11.0, 14.0).modeAtTime(12.25), 6U);
+  command.setMotion(teleop::Motion::TwoLegStandReverse, 3);
+  command.preSolverRun(12.0, 13.0, {}, reference);
+  modes = schedule->getModeSchedule(12.0, 15.0);
+  EXPECT_EQ(modes.modeAtTime(13.25), 9U);
+  EXPECT_EQ(modes.modeAtTime(14.25), 15U);
+  command.setMotion(teleop::Motion::MarchInPlace, 4);
+  command.preSolverRun(14.0, 15.0, {}, reference);
+  EXPECT_EQ(schedule->getModeSchedule(14.0, 17.0).modeAtTime(15.15), 9U);
+  command.setMode(ControlMode::BalanceStand);
+  command.preSolverRun(15.0, 16.0, {}, reference);
+  EXPECT_EQ(schedule->getModeSchedule(15.0, 18.0).modeAtTime(17.25), 15U);
+  command.reset();
+  EXPECT_EQ(schedule->getModeSchedule(0.0, 2.0).modeAtTime(1.25), 15U);
+  command.setMode(ControlMode::Locomotion);
+  command.setMotion(teleop::Motion::TwoLegStandReverse, 3);
+  command.preSolverRun(0.0, 1.0, {}, reference);
+  EXPECT_EQ(schedule->getModeSchedule(0.0, 3.0).modeAtTime(1.25), 9U);
+}

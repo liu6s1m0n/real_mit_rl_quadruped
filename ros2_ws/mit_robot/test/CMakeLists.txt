@@ -113,6 +113,13 @@ target_compile_definitions(test_dm1_full_hardware_simulation PRIVATE
   MYMIT_ROBOT_TEST_CALIBRATION_PATH="${PROJECT_SOURCE_DIR}/config/dm1_hardware_calibration.txt")
 target_include_directories(test_dm1_full_hardware_simulation PRIVATE
   ${PROJECT_SOURCE_DIR}/Middlewares/dm_imu/include)
+if(MYMIT_OPENDOG_AVAILABLE)
+  target_link_libraries(test_dm1_full_hardware_simulation tinyxml2::tinyxml2)
+  target_link_options(test_dm1_full_hardware_simulation PRIVATE -Wl,--no-as-needed)
+  target_compile_definitions(test_dm1_full_hardware_simulation PRIVATE
+    MYMIT_ENABLE_OPENDOG
+    MYMIT_OPENDOG_TEST_CONFIG="${PROJECT_SOURCE_DIR}/config/algorithm")
+endif()
 target_link_libraries(test_dm1_full_hardware_simulation mymit_robot_hardware util)
 
 ament_add_gtest(test_hardware_bridge

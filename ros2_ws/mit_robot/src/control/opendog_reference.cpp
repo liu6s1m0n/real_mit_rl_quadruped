@@ -37,16 +37,33 @@ ocs2::TargetTrajectories OpenDogReference::poseToTrajectory(
 ocs2::TargetTrajectories OpenDogReference::update(
   const DesiredState<float> & desired, const ocs2::SystemObservation & observation)
 {
-  if (!desired.valid || desired.mode == ControlMode::Passive ||
-    desired.mode == ControlMode::JointPd)
+  if (!desired.valid || desired.mode == ControlMode::Passive)
   {
     standing_up_ = false;
+    joint_pd_reference_set_ = false;
     if (!idle_reference_set_) {
       idle_target_ = {{observation.time}, {observation.state}, {observation.input}};
       idle_reference_set_ = true;
     }
     return idle_target_;
   }
+  if (desired.mode == ControlMode::JointPd) {
+    standing_up_ = false;
+    idle_reference_set_ = false;
+    if (!joint_pd_reference_set_) {
+      // Match the DM1 hardware runner's startup contract: keep the measured
+      // base pose and move all twelve model joints smoothly to motor zero.
+      auto current = observation.state;
+      current.head<6>().setZero();
+      auto target = current;
+      target.tail(12).setZero();
+      joint_pd_target_ = {{observation.time, observation.time + stand_up_duration_},
+        {current, target}, ocs2::vector_array_t(2, ocs2::vector_t::Zero(observation.input.size()))};
+      joint_pd_reference_set_ = true;
+    }
+    return joint_pd_target_;
+  }
+  joint_pd_reference_set_ = false;
   idle_reference_set_ = false;
   if (desired.mode == ControlMode::StandUp) {
     if (!standing_up_) {
@@ -87,7 +104,10 @@ OpenDogGaitCommand::OpenDogGaitCommand(
   std::shared_ptr<ocs2::legged_robot::GaitSchedule> schedule)
 : schedule_(std::move(schedule)),
   stance_(ocs2::legged_robot::loadModeSequenceTemplate(gait_file, "stance", false)),
-  trot_(ocs2::legged_robot::loadModeSequenceTemplate(gait_file, "trot", false))
+  trot_(ocs2::legged_robot::loadModeSequenceTemplate(gait_file, "trot", false)),
+  single_step_{
+    ocs2::legged_robot::loadModeSequenceTemplate(gait_file, "single_step_lf_rh", false),
+    ocs2::legged_robot::loadModeSequenceTemplate(gait_file, "single_step_rf_lh", false)}
 {}
 
 void OpenDogGaitCommand::setMode(ControlMode mode)
@@ -95,13 +115,53 @@ void OpenDogGaitCommand::setMode(ControlMode mode)
   requested_trot_.store(mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic);
 }
 
+void OpenDogGaitCommand::setMotion(teleop::Motion motion, std::uint64_t sequence)
+{
+  const std::uint64_t diagonal = motion == teleop::Motion::TwoLegStand ? 1 :
+    (motion == teleop::Motion::TwoLegStandReverse ? 2 : 0);
+  requested_motion_.store(diagonal == 0 ? 0 : (sequence << 2) | diagonal);
+}
+
+void OpenDogGaitCommand::reset() noexcept
+{
+  requested_trot_.store(false);
+  requested_motion_.store(0);
+  applied_trot_ = false;
+  applied_motion_ = 0;
+  // Called after the solver thread has joined. Restore its schedule and template.
+  schedule_->insertModeSequenceTemplate(stance_, 0.0, stance_.switchingTimes.back());
+  schedule_->setModeSchedule({{stance_.switchingTimes.back()}, {15, 15}});
+}
+
 void OpenDogGaitCommand::preSolverRun(
   double init_time, double final_time, const ocs2::vector_t &,
   const ocs2::ReferenceManagerInterface &)
 {
   const bool trot = requested_trot_.load();
-  if (trot != applied_trot_) {
-    schedule_->insertModeSequenceTemplate(trot ? trot_ : stance_, final_time, final_time - init_time);
-    applied_trot_ = trot;
+  const auto motion = trot ? requested_motion_.load() : 0;
+  if (trot == applied_trot_ && motion == applied_motion_) {return;}
+  const auto horizon = final_time - init_time;
+  const auto diagonal = motion & 3U;
+  if (diagonal == 0) {
+    schedule_->insertModeSequenceTemplate(trot ? trot_ : stance_, final_time, horizon);
+  } else {
+    // Keep the already planned prefix, then append exactly one finite step.
+    // Future getModeSchedule() extensions use STANCE, so a latched key cannot loop.
+    schedule_->insertModeSequenceTemplate(stance_, final_time, final_time + horizon);
+    auto modes = schedule_->getModeSchedule(init_time - horizon, final_time + horizon);
+    const auto first = std::lower_bound(modes.eventTimes.begin(), modes.eventTimes.end(), final_time);
+    const auto index = std::distance(modes.eventTimes.begin(), first);
+    modes.eventTimes.erase(first, modes.eventTimes.end());
+    modes.modeSequence.resize(index + 1);
+    const auto & step = single_step_[diagonal - 1];
+    for (std::size_t i = 0; i < step.modeSequence.size(); ++i) {
+      modes.eventTimes.push_back(final_time + step.switchingTimes[i]);
+      modes.modeSequence.push_back(step.modeSequence[i]);
+    }
+    modes.eventTimes.push_back(final_time + step.switchingTimes.back());
+    modes.modeSequence.push_back(ocs2::legged_robot::ModeNumber::STANCE);
+    schedule_->setModeSchedule(modes);
   }
+  applied_trot_ = trot;
+  applied_motion_ = motion;
 }

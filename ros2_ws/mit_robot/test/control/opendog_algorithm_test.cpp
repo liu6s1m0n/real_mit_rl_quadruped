@@ -35,11 +35,20 @@ TEST(OpenDogAlgorithm, SolvesDm1StandingWithoutHardware)
       input.timestamp = 0.002F * frame;
       ASSERT_TRUE(algorithm.compute(input, output));
       ASSERT_TRUE(output.valid);
+      EXPECT_EQ(algorithm.timing().initial_policy, frame == 1);
+      EXPECT_GE(algorithm.timing().compute_ms, algorithm.timing().wbc_ms);
+      EXPECT_GT(algorithm.timing().mpc_ms, 0.0);
+      EXPECT_GE(algorithm.timing().policy_age_ms, 0.0);
+      EXPECT_GT(algorithm.timing().horizon_remaining_ms, 0.0);
       ASSERT_EQ(output.backend, AlgorithmBackendId::OpenDog);
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         const auto & command = output.commands[leg];
         EXPECT_EQ(command.leg, static_cast<LegId>(leg));
         EXPECT_TRUE(command.enabled);
+        EXPECT_FLOAT_EQ(command.kp[0], 10.0F);
+        EXPECT_FLOAT_EQ(command.kp[1], 10.0F);
+        EXPECT_FLOAT_EQ(command.kp[2], leg >= 2 ? 18.0F : 10.0F);
+        EXPECT_TRUE(command.kd.isConstant(2.0F));
         EXPECT_TRUE(command.position_desired.allFinite());
         EXPECT_TRUE(command.velocity_desired.allFinite());
         EXPECT_TRUE(command.torque_feedforward.allFinite());

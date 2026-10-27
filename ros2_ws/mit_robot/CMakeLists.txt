@@ -629,6 +629,14 @@ set(MYMIT_USER_RUNTIME_TARGETS mymit_robot_user mymit_robot_height_service hardw
 if(MYMIT_OPENDOG_AVAILABLE)
   list(APPEND MYMIT_USER_RUNTIME_TARGETS mymit_opendog_user)
 endif()
+# Preserve the OpenDog dependency paths after installation as well as in build/.
+# Limit this to targets that load the OpenDog runtime; keep the MIT GUI link order.
+if(MYMIT_OPENDOG_AVAILABLE)
+  set_target_properties(mymit_opendog_hpipm mymit_opendog_mpc mymit_opendog_sqp
+    mymit_opendog_wbc mymit_opendog_interface mymit_opendog_estimation
+    mymit_opendog_algorithm mymit_robot_hardware mymit_opendog_user hardware_main
+    PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
+endif()
 install(TARGETS ${MYMIT_USER_RUNTIME_TARGETS}
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
@@ -645,7 +653,7 @@ if(BUILD_TESTING)
     target_compile_definitions(test_opendog_algorithm PRIVATE
       MYMIT_OPENDOG_TEST_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config/algorithm")
     ament_add_gtest(test_opendog_mujoco
-      test/control/opendog_mujoco_test.cpp)
+      test/control/opendog_mujoco_test.cpp user/SimulationActuatorWriter.cpp)
     target_compile_definitions(test_opendog_mujoco PRIVATE
       MYMIT_ENABLE_OPENDOG
       MYMIT_OPENDOG_TEST_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config/algorithm"

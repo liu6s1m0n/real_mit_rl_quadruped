@@ -16,7 +16,7 @@ binary="$build_dir/hardware_main"
 calibration="$ws_dir/mit_robot/config/dm1_hardware_calibration.txt"
 if [[ ! -x "$binary" ]]; then
   echo "找不到正式程序: $binary" >&2
-  echo "先执行: colcon build --base-paths ros2_ws --packages-select mymit_robot --cmake-target hardware_main --parallel-workers 1 --executor sequential" >&2
+  echo "先进入 $ws_dir，再执行: CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build --packages-select mymit_robot --cmake-target hardware_main --parallel-workers 1 --executor sequential" >&2
   exit 1
 fi
 if [[ ! -f "$calibration" ]]; then
