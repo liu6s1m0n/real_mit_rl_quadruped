@@ -20,6 +20,12 @@
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
 ```
 
+选择第二套 OpenDog WBC+NMPC 算法：
+
+```bash
+ros2 run mymit_robot mymit_robot_user --algorithm opendog --render-gpu auto
+```
+
 MuJoCo 控制面板提供 `Stand up`、`Forward slow`、`Forward fast`、`Backward`、
 `Left`、`Right` 和 `Rotate CCW` 按钮。行走中点击 `Stand up` 会回到当前位置的
 BalanceStand，不会跳回世界原点。

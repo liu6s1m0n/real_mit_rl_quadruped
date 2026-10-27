@@ -11,6 +11,7 @@
 #include <mujoco/mujoco.h>
 
 #include "model/robot_types.hpp"
+#include "control/algorithm_backend.hpp"
 
 class RobotRunner;
 
@@ -30,6 +31,11 @@ public:
     const RobotRunner & runner, mjData * data,
     bool motors_enabled = true) const;
 
+  /** Write the shared backend output with the same MuJoCo actuator semantics. */
+  void write(
+    const ControlOutput & output, mjData * data,
+    bool motors_enabled = true) const;
+
 private:
   struct JointAddress
   {
@@ -43,6 +49,10 @@ private:
 
   const mjModel * model_ = nullptr;
   JointAddresses addresses_{};
+
+  void writeCommands(
+    const std::array<JointCommand<float>, kNumLegs> & commands,
+    mjData * data, bool motors_enabled) const;
 };
 
 #endif  // MYMIT_ROBOT_USER_SIMULATION_ACTUATOR_WRITER_HPP_

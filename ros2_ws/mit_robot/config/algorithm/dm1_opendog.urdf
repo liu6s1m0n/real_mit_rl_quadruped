@@ -1,0 +1,633 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="dm1_opendog">
+  <link name="base">
+    <inertial>
+      <origin xyz="-0.001955 0.002743 -0.068608" rpy="0 0 0" />
+      <mass value="5.528134778326" />
+      <inertia ixx="0.028868805821" ixy="0.000061788360" ixz="-0.000118762043" iyy="0.065085611833" iyz="0.000218265376" izz="0.082712948320" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/base.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.882352941176471 0.882352941176471 0.882352941176471 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 -0.069779" />
+      <geometry>
+        <box size="0.28 0.18 0.1" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="base_imu_joint" type="fixed">
+    <origin rpy="0. 0. 0." xyz="0. 0. 0." />
+    <parent link="base" />
+    <child link="base_imu" />
+  </joint>
+  <link name="base_imu">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <box size="0.015 0.015 0.004" />
+      </geometry>
+    </visual>
+    <material name="orange">
+      <color rgba="255 108 10 255" />
+    </material>
+  </link>
+  <link name="LF_hip">
+    <inertial>
+      <origin xyz="0.047560000000 -0.010434000000 -0.000046000000" rpy="0 0 0" />
+      <mass value="0.566780616299" />
+      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LF_hip.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.43921568627451 0.43921568627451 0.43921568627451 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.0001 0.0001 0.0001" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LF_HAA" type="revolute">
+    <origin xyz="0.16175 0.059997 -0.061498" rpy="0 0 0" />
+    <parent link="base" />
+    <child link="LF_hip" />
+    <axis xyz="1 0 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.57" upper="1.57" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="LF_thigh">
+    <inertial>
+      <origin xyz="-0.023554000000 0.050542000000 0.001956000000" rpy="0 0 0" />
+      <mass value="0.784107130653" />
+      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LF_thigh.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0.1 0" xyz="-0.07 0.08 0.016" />
+      <geometry>
+        <box size="0.15 0.03 0.035" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LF_HFE" type="revolute">
+    <origin xyz="0.049998 0.019503 0" rpy="0 -0.203 0" />
+    <parent link="LF_hip" />
+    <child link="LF_thigh" />
+    <axis xyz="0 1 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.367" upper="2.603" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="LF_calf">
+    <inertial>
+      <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
+      <mass value="0.192776474180" />
+      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LF_calf.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 -0.76 0" xyz="-0.08 0.0 -0.08" />
+      <geometry>
+        <box size="0.18 0.015 0.018" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LF_KFE" type="revolute">
+    <origin xyz="-0.2 0.07825 0" rpy="0 -2.22 0" />
+    <parent link="LF_thigh" />
+    <child link="LF_calf" />
+    <axis xyz="0 1 0" />
+    <limit lower="-0.03" upper="2.72" effort="97.0" velocity="6.28318530718" />
+    <dynamics damping="1" friction="0.1" />
+  </joint>
+  <link name="LF_FOOT">
+    <inertial>
+      <origin xyz="-0.000269 -0.0002 -0.000005" rpy="0 0 0" />
+      <mass value="0.024302084286" />
+      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LF_FOOT.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LF_foot_fixed" type="fixed" dont_collapse="true">
+    <origin xyz="-0.17362 0 -0.14312" rpy="0 0 0" />
+    <parent link="LF_calf" />
+    <child link="LF_FOOT" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <transmission name="LF_HAA_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="LF_HAA">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="LF_HAA_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="LF_HFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="LF_HFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="LF_HFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="LF_KFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="LF_KFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="LF_KFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <link name="LH_hip">
+    <inertial>
+      <origin xyz="-0.047560000000 -0.010434000000 -0.000046000000" rpy="0 0 0" />
+      <mass value="0.566780616299" />
+      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LH_hip.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.0001 0.0001 0.0001" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LH_HAA" type="revolute">
+    <origin xyz="-0.16175 0.059997 -0.061498" rpy="0 0 0" />
+    <parent link="base" />
+    <child link="LH_hip" />
+    <axis xyz="1 0 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.57" upper="1.57" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="LH_thigh">
+    <inertial>
+      <origin xyz="-0.023554000000 0.050542000000 0.001956000000" rpy="0 0 0" />
+      <mass value="0.784107130653" />
+      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LH_thigh.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0.1 0" xyz="-0.07 0.08 0.016" />
+      <geometry>
+        <box size="0.15 0.03 0.035" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LH_HFE" type="revolute">
+    <origin xyz="-0.049998 0.019503 0" rpy="0 -0.203 0" />
+    <parent link="LH_hip" />
+    <child link="LH_thigh" />
+    <axis xyz="0 1 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.367" upper="2.603" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="LH_calf">
+    <inertial>
+      <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
+      <mass value="0.192776474180" />
+      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LH_calf.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 -0.76 0" xyz="-0.08 0.0 -0.08" />
+      <geometry>
+        <box size="0.18 0.015 0.018" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LH_KFE" type="revolute">
+    <origin xyz="-0.2 0.07825 0" rpy="0 -2.22 0" />
+    <parent link="LH_thigh" />
+    <child link="LH_calf" />
+    <axis xyz="0 1 0" />
+    <limit lower="-0.03" upper="2.72" effort="97.0" velocity="6.28318530718" />
+    <dynamics damping="1" friction="0.1" />
+  </joint>
+  <link name="LH_FOOT">
+    <inertial>
+      <origin xyz="-0.000269 -0.0002 -0.000005" rpy="0 0 0" />
+      <mass value="0.024302084286" />
+      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/LH_FOOT.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.298039215686275 0.298039215686275 0.298039215686275 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="LH_foot_fixed" type="fixed" dont_collapse="true">
+    <origin xyz="-0.17362 0 -0.14312" rpy="0 0 0" />
+    <parent link="LH_calf" />
+    <child link="LH_FOOT" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <transmission name="LH_HAA_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="LH_HAA">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="LH_HAA_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="LH_HFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="LH_HFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="LH_HFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="LH_KFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="LH_KFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="LH_KFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <link name="RF_hip">
+    <inertial>
+      <origin xyz="0.047560000000 0.010434000000 -0.000046000000" rpy="0 0 0" />
+      <mass value="0.566780616299" />
+      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RF_hip.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.43921568627451 0.43921568627451 0.43921568627451 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.0001 0.0001 0.0001" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RF_HAA" type="revolute">
+    <origin xyz="0.16175 -0.059997 -0.061498" rpy="0 0 0" />
+    <parent link="base" />
+    <child link="RF_hip" />
+    <axis xyz="1 0 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.57" upper="1.57" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="RF_thigh">
+    <inertial>
+      <origin xyz="-0.023554000000 -0.050542000000 0.001956000000" rpy="0 0 0" />
+      <mass value="0.784107130653" />
+      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RF_thigh.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0.1 0" xyz="-0.07 -0.08 0.016" />
+      <geometry>
+        <box size="0.15 0.03 0.035" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RF_HFE" type="revolute">
+    <origin xyz="0.049998 -0.019503 0" rpy="0 -0.203 0" />
+    <parent link="RF_hip" />
+    <child link="RF_thigh" />
+    <axis xyz="0 1 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.367" upper="2.603" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="RF_calf">
+    <inertial>
+      <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
+      <mass value="0.192776474180" />
+      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RF_calf.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 -0.76 0" xyz="-0.08 0.0 -0.08" />
+      <geometry>
+        <box size="0.18 0.015 0.018" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RF_KFE" type="revolute">
+    <origin xyz="-0.2 -0.07825 0" rpy="0 -2.22 0" />
+    <parent link="RF_thigh" />
+    <child link="RF_calf" />
+    <axis xyz="0 1 0" />
+    <limit lower="-0.03" upper="2.72" effort="97.0" velocity="6.28318530718" />
+    <dynamics damping="1" friction="0.1" />
+  </joint>
+  <link name="RF_FOOT">
+    <inertial>
+      <origin xyz="-0.000269 0.0002 -0.000005" rpy="0 0 0" />
+      <mass value="0.024302084286" />
+      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RF_FOOT.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RF_foot_fixed" type="fixed" dont_collapse="true">
+    <origin xyz="-0.17362 0 -0.14312" rpy="0 0 0" />
+    <parent link="RF_calf" />
+    <child link="RF_FOOT" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <transmission name="RF_HAA_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="RF_HAA">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="RF_HAA_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="RF_HFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="RF_HFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="RF_HFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="RF_KFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="RF_KFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="RF_KFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <link name="RH_hip">
+    <inertial>
+      <origin xyz="-0.047560000000 0.010434000000 -0.000046000000" rpy="0 0 0" />
+      <mass value="0.566780616299" />
+      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RH_hip.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.43921568627451 0.43921568627451 0.43921568627451 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.0001 0.0001 0.0001" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RH_HAA" type="revolute">
+    <origin xyz="-0.16175 -0.059997 -0.061498" rpy="0 0 0" />
+    <parent link="base" />
+    <child link="RH_hip" />
+    <axis xyz="1 0 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.57" upper="1.57" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="RH_thigh">
+    <inertial>
+      <origin xyz="-0.023554000000 -0.050542000000 0.001956000000" rpy="0 0 0" />
+      <mass value="0.784107130653" />
+      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RH_thigh.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0.1 0" xyz="-0.07 -0.08 0.016" />
+      <geometry>
+        <box size="0.15 0.03 0.035" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RH_HFE" type="revolute">
+    <origin xyz="-0.049998 -0.019503 0" rpy="0 -0.203 0" />
+    <parent link="RH_hip" />
+    <child link="RH_thigh" />
+    <axis xyz="0 1 0" />
+    <dynamics damping="1" friction="0.1" />
+    <limit lower="-1.367" upper="2.603" effort="97.0" velocity="6.28318530718" />
+  </joint>
+  <link name="RH_calf">
+    <inertial>
+      <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
+      <mass value="0.192776474180" />
+      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RH_calf.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 -0.76 0" xyz="-0.08 0.0 -0.08" />
+      <geometry>
+        <box size="0.18 0.015 0.018" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RH_KFE" type="revolute">
+    <origin xyz="-0.2 -0.07825 0" rpy="0 -2.22 0" />
+    <parent link="RH_thigh" />
+    <child link="RH_calf" />
+    <axis xyz="0 1 0" />
+    <limit lower="-0.03" upper="2.72" effort="97.0" velocity="6.28318530718" />
+    <dynamics damping="1" friction="0.1" />
+  </joint>
+  <link name="RH_FOOT">
+    <inertial>
+      <origin xyz="-0.000269 0.0002 -0.000005" rpy="0 0 0" />
+      <mass value="0.024302084286" />
+      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://mymit_robot/dm1/assets/RH_FOOT.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="RH_foot_fixed" type="fixed" dont_collapse="true">
+    <origin xyz="-0.17362 0 -0.14312" rpy="0 0 0" />
+    <parent link="RH_calf" />
+    <child link="RH_FOOT" />
+    <axis xyz="0 0 0" />
+  </joint>
+  <transmission name="RH_HAA_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="RH_HAA">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="RH_HAA_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="RH_HFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="RH_HFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="RH_HFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+  <transmission name="RH_KFE_tran">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="RH_KFE">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="RH_KFE_motor">
+      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+</robot>

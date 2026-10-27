@@ -13,6 +13,7 @@
 #include <string>
 
 #include "model/robot_types.hpp"
+#include "control/algorithm_backend.hpp"
 #include "HardwareSimulation.hpp"
 
 /** 管理 MuJoCo GUI 与物理对象生命周期，并将其接到 RobotRunner。 */
@@ -65,6 +66,10 @@ public:
 
   void setHardwareSimulation(const HardwareSimulationOptions & options);
 
+  /** Select the one controller used by the native MuJoCo physics loop. */
+  void setAlgorithm(
+    AlgorithmBackendId backend, std::string config_directory);
+
   /** @brief 读取当前目标站立高度，单位 m。 */
   float standingHeight() const noexcept {return standing_height_.load();}
 
@@ -93,6 +98,8 @@ private:
   float turning_yaw_rate_ = control_config::motion::yaw_rate;            ///< 原地自转角速度绝对值，rad/s。
   double standing_height_slider_ = control_config::standing_height;      ///< MuJoCo UI 滑块使用的双精度高度缓存，m。
   HardwareSimulationOptions hardware_simulation_;
+  AlgorithmBackendId algorithm_backend_ = AlgorithmBackendId::CurrentMit;
+  std::string algorithm_config_directory_ = "config/algorithm";
 };
 
 #endif  // MYMIT_ROBOT_USER_SIMULATION_BRIDGE_HPP_

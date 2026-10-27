@@ -80,6 +80,7 @@ public:
   /** 设置站立目标高度，实际命令会按 standing_height_rate_limit_ 平滑跟随。 */
   void setStandingHeight(float height);
   void setDesiredState(const DesiredState<float> & desired);
+  const DesiredState<float> & desiredState() const noexcept {return desired_state_;}
 
   float minimumStandingHeight() const noexcept
   {return control_parameters_.minimum_standing_height;}

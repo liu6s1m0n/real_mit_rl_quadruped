@@ -84,9 +84,22 @@ void SimulationActuatorWriter::write(
   const RobotRunner & runner, mjData * data,
   bool motors_enabled) const
 {
+  writeCommands(runner.jointCommands(), data, motors_enabled);
+}
+
+void SimulationActuatorWriter::write(
+  const ControlOutput & output, mjData * data,
+  bool motors_enabled) const
+{
+  writeCommands(output.commands, data, motors_enabled);
+}
+
+void SimulationActuatorWriter::writeCommands(
+  const std::array<JointCommand<float>, kNumLegs> & commands,
+  mjData * data, bool motors_enabled) const
+{
   if (data == nullptr) {throw std::invalid_argument("MuJoCo data is null");}
   mju_zero(data->qfrc_applied, model_->nv);
-  const auto & commands = runner.jointCommands();
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & command = commands[leg];
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {

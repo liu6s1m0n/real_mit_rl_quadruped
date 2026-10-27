@@ -122,4 +122,14 @@ target_include_directories(test_hardware_bridge PRIVATE
   ${PROJECT_SOURCE_DIR}/include
   ${PROJECT_SOURCE_DIR}/user
 )
+if(MYMIT_OPENDOG_AVAILABLE)
+  # This test intentionally exercises the ROS/OpenDog dependency order.
+  target_link_libraries(test_hardware_bridge tinyxml2::tinyxml2)
+  target_link_options(test_hardware_bridge PRIVATE -Wl,--no-as-needed)
+endif()
 target_link_libraries(test_hardware_bridge mymit_robot_hardware)
+if(MYMIT_OPENDOG_AVAILABLE)
+  target_compile_definitions(test_hardware_bridge PRIVATE
+    MYMIT_ENABLE_OPENDOG
+    MYMIT_OPENDOG_TEST_CONFIG="${PROJECT_SOURCE_DIR}/config/algorithm")
+endif()

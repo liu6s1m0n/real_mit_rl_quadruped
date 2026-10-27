@@ -13,11 +13,14 @@
 #include "hardware/dm_motor_driver.hpp"
 #include "sensor/imu.hpp"
 #include "sensor/imu_driver.hpp"
+#include "control/algorithm_backend.hpp"
 
 struct HardwareSimulationOptions
 {
   bool enabled = false;
   std::string calibration_path;
+  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+  std::string algorithm_config_directory = "config/algorithm";
   float torque_limit_nm = control_config::hardware::torque_limit;  // Same default as hardware_main.
   // Unmeasured stress assumptions, not identified DM1 device parameters.
   double command_delay_ms = 1.0;

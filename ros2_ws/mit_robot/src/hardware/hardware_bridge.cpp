@@ -108,10 +108,16 @@ HardwareBridge::HardwareBridge(
   const Options & options)
 : hardware_(hardware), calibration_(calibration), options_(options),
   runner_(options.control_time_step),
+  current_mit_backend_(std::make_unique<CurrentMitBackend>(runner_)),
+  opendog_algorithm_(std::make_unique<OpenDogAlgorithm>(
+    options.algorithm_config_directory, options.control_time_step)),
   // 默认 88 N*m 关节力矩饱和上限（电机峰值 97 N*m）：超限关节按比例缩小后
   // 照常发送，不丢弃整帧；可用 hardware_main --torque-limit 覆盖。
   mit_(hardware, calibration, options.feedback_timeout_s, false, options.torque_limit_nm)
 {
+  backend_ = options_.algorithm_backend == AlgorithmBackendId::OpenDog ?
+    static_cast<AlgorithmBackend *>(opendog_algorithm_.get()) :
+    static_cast<AlgorithmBackend *>(current_mit_backend_.get());
   if (!std::isfinite(options_.control_time_step) ||
     options_.control_time_step <= 0.0F)
   {
@@ -153,6 +159,10 @@ int HardwareBridge::runKeyboardControl(
   const std::atomic_bool & stop_requested)
 {
   teleop::KeyboardTeleop keyboard;
+  const bool use_opendog = options_.algorithm_backend == AlgorithmBackendId::OpenDog;
+  DesiredState<float> opendog_desired = runner_.desiredState();
+  opendog_desired.mode = ControlMode::Passive;
+  ControlOutput algorithm_output;
   // 每次键盘控制启动都新建一个带时间戳的 CSV，记录全部 12 个关节的
   // q（实际位置）、q_des（期望位置）和 tau（反馈力矩），用于步态分析。
   std::time_t log_ts = std::time(nullptr);
@@ -336,69 +346,97 @@ int HardwareBridge::runKeyboardControl(
       output_enabled = true;
       sender.arm();
       // 解锁后立即启动 RobotRunner 的零位初始化轨迹；首帧控制命令在本周期末发送。
-      runner_.reset();
+      if (use_opendog) {
+        backend_->reset();
+        opendog_desired.mode = ControlMode::Passive;
+      } else {
+        runner_.reset();
+      }
       control_active = true;
       imu_log::print(
         imu_log::Level::Info,
         "DM1 电机已使能；正在将电机平滑回到零位，完成后可按 1 站立。\n");
     }
-    if (arbiter.takeStopRequest()) {
-      if (control_active) {
-        runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
-        if (runner_.standingReady()) {runner_.setControlMode(ControlMode::BalanceStand);}
+    if (use_opendog) {
+      if (arbiter.takeStopRequest()) {
+        opendog_desired.mode = ControlMode::BalanceStand;
+        opendog_desired.body_velocity_world.setZero();
+        opendog_desired.body_angular_velocity.setZero();
+        opendog_desired.body_position_world.head<2>() =
+          algorithm_output.estimate.position_world.head<2>();
+        opendog_desired.body_rpy.z() = algorithm_output.estimate.rpy.z();
       }
-    }
-    if (arbiter.takeStandUpRequest()) {
-      if (!control_active) {
-        runner_.prepareForMotionControl();
-        control_active = true;
+      if (arbiter.takeStandUpRequest()) {opendog_desired.mode = ControlMode::StandUp;}
+      if (arbiter.takeProneDownRequest()) {
+        imu_log::print(imu_log::Level::Info, "OpenDog 原目标轨迹未定义趴下命令。\n");
       }
-      stand_up_pending = true;
-    }
-    if (arbiter.takeProneDownRequest()) {
-      if (!control_active || !runner_.requestProneDown()) {
-        imu_log::print(
-          imu_log::Level::Warning,
-          "趴下请求被拒绝：请按 1 并等待进入 BalanceStand。\n");
-      } else {
-        arbiter.stopMotion();
-        runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
-        stand_up_pending = false;
-        imu_log::print(
-          imu_log::Level::Info,
-          "趴下请求已接受：MPC/WBC 下降控制已激活。\n");
+      if (arbiter.motionActive()) {
+        const auto velocity = teleop::velocityForMotion(arbiter.motion());
+        const Vec3<float> body_velocity(velocity.forward, velocity.lateral, 0.0F);
+        opendog_desired.body_velocity_world =
+          sample.imu.orientation_world_from_body * body_velocity;
+        opendog_desired.body_angular_velocity.z() = velocity.yaw;
+        opendog_desired.mode = ControlMode::Locomotion;
       }
-    }
-    if (arbiter.motionActive()) {
-      const auto motion = arbiter.motion();
-      const bool two_leg_stand_experiment =
-        motion == teleop::Motion::TwoLegStand ||
-        motion == teleop::Motion::TwoLegStandReverse;
-      if (!control_active || (!runner_.standingReady() && !two_leg_stand_experiment)) {
-        imu_log::print(
-          imu_log::Level::Warning,
-          "运动请求被拒绝：请先按 1 并等待进入 BalanceStand。\n");
-        arbiter.stopMotion();
+    } else {
+      if (arbiter.takeStopRequest()) {
         if (control_active) {
           runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+          if (runner_.standingReady()) {runner_.setControlMode(ControlMode::BalanceStand);}
         }
-      } else {
-        const auto velocity = teleop::velocityForMotion(motion);
-        runner_.setLocomotionVelocityCommand(
-          velocity.forward, velocity.lateral, velocity.yaw);
-        runner_.setLocomotionGait(
-          two_leg_stand_experiment ?
-          (motion == teleop::Motion::TwoLegStandReverse ?
-          GaitType::TWO_LEG_STAND_REVERSE : GaitType::TWO_LEG_STAND) :
-          GaitType::TROT);
-        runner_.setControlMode(ControlMode::Locomotion);
+      }
+      if (arbiter.takeStandUpRequest()) {
+        if (!control_active) {
+          runner_.prepareForMotionControl();
+          control_active = true;
+        }
+        stand_up_pending = true;
+      }
+      if (arbiter.takeProneDownRequest()) {
+        if (!control_active || !runner_.requestProneDown()) {
+          imu_log::print(
+            imu_log::Level::Warning,
+            "趴下请求被拒绝：请按 1 并等待进入 BalanceStand。\n");
+        } else {
+          arbiter.stopMotion();
+          runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+          stand_up_pending = false;
+          imu_log::print(
+            imu_log::Level::Info,
+            "趴下请求已接受：MPC/WBC 下降控制已激活。\n");
+        }
+      }
+      if (arbiter.motionActive()) {
+        const auto motion = arbiter.motion();
+        const bool two_leg_stand_experiment =
+          motion == teleop::Motion::TwoLegStand ||
+          motion == teleop::Motion::TwoLegStandReverse;
+        if (!control_active || (!runner_.standingReady() && !two_leg_stand_experiment)) {
+          imu_log::print(
+            imu_log::Level::Warning,
+            "运动请求被拒绝：请先按 1 并等待进入 BalanceStand。\n");
+          arbiter.stopMotion();
+          if (control_active) {
+            runner_.setLocomotionVelocityCommand(0.0F, 0.0F, 0.0F);
+          }
+        } else {
+          const auto velocity = teleop::velocityForMotion(motion);
+          runner_.setLocomotionVelocityCommand(
+            velocity.forward, velocity.lateral, velocity.yaw);
+          runner_.setLocomotionGait(
+            two_leg_stand_experiment ?
+            (motion == teleop::Motion::TwoLegStandReverse ?
+            GaitType::TWO_LEG_STAND_REVERSE : GaitType::TWO_LEG_STAND) :
+            GaitType::TROT);
+          runner_.setControlMode(ControlMode::Locomotion);
+        }
       }
     }
     const float timestamp = static_cast<float>(now_s);
     sample.imu.timestamp = timestamp;
     // 在 updateHardwareFeedback 之前快照校准后的关节反馈，用于 CSV 记录。
     const auto log_js = mit_.jointStates(timestamp);
-    const bool feedback_valid = !control_active || runner_.updateHardwareFeedback(
+    const bool feedback_valid = use_opendog || !control_active || runner_.updateHardwareFeedback(
       sample.imu, log_js, timestamp);
     if (control_active && !feedback_valid) {
       report_control_failure("状态估计器拒绝硬件反馈");
@@ -407,8 +445,22 @@ int HardwareBridge::runKeyboardControl(
     }
 
     const FSM_StateName state_before_control = runner_.currentStateName();
-    const bool control_valid = !control_active || runner_.run();
-    if (control_active && control_valid && arbiter.motionActive() &&
+    bool control_valid = !control_active;
+    if (control_active) {
+      if (use_opendog) {
+        ControlInputSnapshot input;
+        input.imu = sample.imu;
+        input.joints = log_js;
+        input.desired = opendog_desired;
+        input.timestamp = timestamp;
+        control_valid = backend_->compute(input, algorithm_output);
+      } else {
+        control_valid = runner_.run();
+        algorithm_output.commands = runner_.jointCommands();
+        algorithm_output.estimate = runner_.stateEstimate();
+      }
+    }
+    if (!use_opendog && control_active && control_valid && arbiter.motionActive() &&
       state_before_control == FSM_StateName::LOCOMOTION &&
       runner_.currentStateName() == FSM_StateName::BALANCE_STAND)
     {
@@ -418,7 +470,7 @@ int HardwareBridge::runKeyboardControl(
         imu_log::Level::Warning,
         "Locomotion 安全回退已取消当前运动请求；保持 BalanceStand，需重新按运动键。\n");
     }
-    if (control_active && control_valid && stand_up_pending && runner_.requestStandUp()) {
+    if (!use_opendog && control_active && control_valid && stand_up_pending && runner_.requestStandUp()) {
       stand_up_pending = false;
       imu_log::print(imu_log::Level::Info, "站立请求已接受。\n");
     }
@@ -430,19 +482,19 @@ int HardwareBridge::runKeyboardControl(
     const bool publish_attempted = control_active &&
       arbiter.state() == teleop::MotorOutputState::Enabled && output_enabled;
     const bool publish_ok = publish_attempted &&
-      publishCommands(mit_, sender, runner_.jointCommands(), now_s, &published_frames);
+      publishCommands(mit_, sender, algorithm_output.commands, now_s, &published_frames);
     if (publish_ok) {last_published_s = now_s;}
     if (publish_attempted && !publish_ok) {
       report_control_failure("MIT命令校验/发布失败");
     }
     // 每个控制周期写一行 CSV：12 个关节的实际位置、期望位置和反馈力矩。
-    if (control_active && control_valid && options_.control_observer) {
+    if (!use_opendog && control_active && control_valid && options_.control_observer) {
       options_.control_observer(runner_);
     }
     if (control_active && csv_log.is_open()) {
       csv_log << std::fixed << std::setprecision(9) << now_s
-              << ',' << fsmStateLabel(runner_.currentStateName());
-      const auto & estimate = runner_.stateEstimate();
+              << ',' << (use_opendog ? "opendog" : fsmStateLabel(runner_.currentStateName()));
+      const auto & estimate = algorithm_output.estimate;
       csv_log << ',' << estimate.rpy.x() << ',' << estimate.rpy.y()
               << ',' << estimate.rpy.z() << ',' << estimate.position_world.z();
       float model_body_z = 0.0F;
@@ -462,7 +514,7 @@ int HardwareBridge::runKeyboardControl(
           (estimate.rotation_world_from_body *
           foot_body).z()) / kNumLegs;
       }
-      const auto & cmds = runner_.jointCommands();
+      const auto & cmds = algorithm_output.commands;
       for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
         for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
           const std::size_t idx = leg * kJointsPerLeg + joint;
@@ -833,10 +885,19 @@ bool HardwareBridge::performStartupZeroCalibration(
 
 // ---------- 主硬件控制循环 ----------
 
-// 打开设备、完成启动安全检查，并按固定周期运行 RobotRunner 和 MIT 输出。
+// 打开设备、完成启动检查，并按固定周期运行一个算法后端和 MIT 输出。
 int HardwareBridge::run(const std::atomic_bool & stop_requested)
 {
+  if (!backend_->configure() || !backend_->start()) {
+    imu_log::print(
+      imu_log::Level::Error,
+      "DM1 算法后端初始化失败：backend=%s config=%s。\n",
+      options_.algorithm_backend == AlgorithmBackendId::OpenDog ? "opendog" : "current_mit",
+      options_.algorithm_config_directory.c_str());
+    return 8;
+  }
   if (!hardware_.open()) {
+    backend_->stop();
     hardware_.disableAll();
     return 2;
   }
@@ -846,19 +907,23 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
 
   const auto start = std::chrono::steady_clock::now();
   if (!performStartupZeroCalibration(start, stop_requested)) {
+    backend_->stop();
     hardware_.close();
     return 7;
   }
   if (options_.set_zero) {
+    backend_->stop();
     hardware_.close();
     return 0;
   }
   if (options_.keyboard_control) {
     try {
       const int result = runKeyboardControl(start, stop_requested);
+      backend_->stop();
       hardware_.close();
       return result;
     } catch (...) {
+      backend_->stop();
       hardware_.close();
       throw;
     }
@@ -877,11 +942,13 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
           imu_log::Level::Error,
           "DM1 IMU 实时读取失败；电机保持失能。\n");
         hardware_.disableAll();
+        backend_->stop();
         hardware_.close();
         return 3;
       }
       std::this_thread::sleep_until(next_cycle);
     }
+    backend_->stop();
     hardware_.close();
     return 0;
   }
@@ -931,9 +998,17 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
     // updateFeedback() 中用于检查驱动器是否确实返回了新帧。
     sample.imu.timestamp = timestamp;
     const auto joints = mit_.jointStates(timestamp);
-    const bool runner_feedback_valid =
-      runner_.updateHardwareFeedback(sample.imu, joints, timestamp);
-    const bool runner_control_valid = runner_feedback_valid && runner_.run();
+    ControlInputSnapshot control_input;
+    control_input.imu = sample.imu;
+    control_input.joints = joints;
+    control_input.desired = runner_.desiredState();
+    if (options_.algorithm_backend == AlgorithmBackendId::OpenDog) {
+      control_input.desired.mode = options_.request_stand_up ?
+        ControlMode::StandUp : ControlMode::Passive;
+    }
+    control_input.timestamp = timestamp;
+    ControlOutput control_output;
+    const bool runner_control_valid = backend_->compute(control_input, control_output);
     if (!runner_control_valid) {
       ++consecutive_output_failures;
       if (consecutive_output_failures == 1 ||
@@ -942,7 +1017,7 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
         imu_log::print(
           imu_log::Level::Warning,
           "DM1 控制链失败：stage=%s fsm=%s now=%.6f consecutive=%zu；%s。\n",
-          runner_feedback_valid ? "RobotRunner.run" : "updateHardwareFeedback",
+          "active algorithm backend",
           fsmStateLabel(runner_.currentStateName()), now_s,
           consecutive_output_failures,
           output_enabled ? "独立线程持续保持上一有效命令，不失能" : "尚未使能");
@@ -959,7 +1034,7 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
     if (!output_enabled) {
       static robot_log::Throttle enable_error_log(1000);
       // 首个控制器帧必须完整且通过协议安全检查后，才能使能物理输出。
-      if (!mit_.validateCommands(runner_.jointCommands(), now_s)) {
+      if (!mit_.validateCommands(control_output.commands, now_s)) {
         if (enable_error_log.ready()) {
           imu_log::print(
             imu_log::Level::Error,
@@ -984,7 +1059,7 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
         imu_log::Level::Info,
         "DM1 电机已使能；正在将电机平滑回到零位。\n");
     }
-    if (!publishCommands(mit_, sender, runner_.jointCommands(), now_s)) {
+    if (!publishCommands(mit_, sender, control_output.commands, now_s)) {
       static robot_log::Throttle publish_log(1000);
       if (publish_log.ready()) {
         imu_log::print(
@@ -1039,6 +1114,7 @@ int HardwareBridge::run(const std::atomic_bool & stop_requested)
       output_enabled ? "true" : "false");
   }
   sender.shutdown();
+  backend_->stop();
   hardware_.close();
   return result;
 }

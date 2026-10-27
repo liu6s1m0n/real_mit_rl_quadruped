@@ -51,6 +51,43 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
+# OpenDog is an optional second backend.  Its source files stay separate from
+# the current MIT controller and are compiled against the existing ROS 2
+# install when the sibling OpenDog workspace is available.
+set(MYMIT_OPENDOG_PREFIX "/home/simon/open-dog/ros2_ws/install" CACHE PATH
+  "OpenDog ROS 2 install prefix")
+set(MYMIT_OPENDOG_OVERLAY "/home/simon/open-dog/.ros2_overlay/opt/ros/humble" CACHE PATH
+  "OpenDog ROS 2 overlay prefix")
+option(MYMIT_ENABLE_OPENDOG "Build the OpenDog WBC+NMPC backend" ON)
+if(MYMIT_ENABLE_OPENDOG AND
+  EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_interface/include/legged_interface/LeggedInterface.h" AND
+  EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_wbc/src/WeightedWbc.cpp" AND
+  EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_estimation_ros2/src/LinearKalmanFilter.cpp" AND
+  EXISTS "${MYMIT_OPENDOG_PREFIX}/lib/libocs2_sqp.a" AND
+  EXISTS "${MYMIT_OPENDOG_PREFIX}/lib/libocs2_mpc.a")
+  set(MYMIT_OPENDOG_AVAILABLE TRUE)
+else()
+  set(MYMIT_OPENDOG_AVAILABLE FALSE)
+  if(MYMIT_ENABLE_OPENDOG)
+    message(WARNING "OpenDog install not found; building the current MIT backend only")
+  endif()
+endif()
+
+if(MYMIT_OPENDOG_AVAILABLE)
+  find_package(Boost REQUIRED COMPONENTS system filesystem)
+  find_package(OpenMP REQUIRED)
+  find_package(tinyxml2_vendor REQUIRED)
+  find_package(TinyXML2 REQUIRED)
+  find_package(nav_msgs REQUIRED)
+  find_package(realtime_tools REQUIRED)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_geometry_msgs REQUIRED)
+  find_package(tf2_ros REQUIRED)
+  find_package(rcl REQUIRED)
+  find_package(rclcpp_lifecycle REQUIRED)
+  find_package(urdfdom_headers REQUIRED)
+endif()
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FootContact.msg"
   "msg/StateEstimate.msg"
@@ -201,6 +238,196 @@ install(TARGETS mymit_dmbot_serial
   RUNTIME DESTINATION bin
 )
 
+# Source-level OpenDog algorithm components. Only the WBC, legged OCP/reference
+# manager, and Kalman estimator are copied here. Gazebo, simulation,
+# controller_manager, and hardware plugins are intentionally excluded.
+# OCS2 remains a linked numerical framework dependency.
+if(MYMIT_OPENDOG_AVAILABLE)
+  set(MYMIT_OPENDOG_INCLUDE_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_wbc/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_interface/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_estimation_ros2/include"
+    "${MYMIT_OPENDOG_PREFIX}/include"
+    "${MYMIT_OPENDOG_OVERLAY}/include"
+    "/opt/ros/humble/include/urdfdom_headers"
+    "/opt/ros/humble/include/urdfdom"
+  )
+  set(MYMIT_OPENDOG_LINK_DIRS
+    "${MYMIT_OPENDOG_PREFIX}/lib"
+    "${MYMIT_OPENDOG_OVERLAY}/lib/x86_64-linux-gnu"
+    "${MYMIT_OPENDOG_OVERLAY}/../../../usr/lib/x86_64-linux-gnu"
+  )
+  set(MYMIT_OPENDOG_COMPILE_DEFINITIONS
+    MYMIT_ENABLE_OPENDOG
+    BOOST_MPL_LIMIT_LIST_SIZE=30
+    BOOST_MPL_LIMIT_VECTOR_SIZE=30
+    BOOST_MPL_LIMIT_MAP_SIZE=30
+    BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS
+  )
+
+  # The OCS2 static archives reference each other. Resolve them as a group,
+  # then link their shared numerical dependencies after the archives.
+  add_library(mymit_opendog_numerics INTERFACE)
+  target_link_directories(mymit_opendog_numerics INTERFACE ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_numerics INTERFACE
+    "-Wl,--start-group"
+    mymit_opendog_sqp mymit_opendog_mpc ocs2_qp_solver ocs2_oc ocs2_ddp ocs2_ipm
+    ocs2_legged_robot ocs2_self_collision ocs2_centroidal_model
+    ocs2_pinocchio_interface ocs2_robotic_tools ocs2_core
+    "-Wl,--end-group"
+    mymit_opendog_hpipm hpipm qpOASES pinocchio_default pinocchio_parsers
+    hpp-fcl coal tinyxml2::tinyxml2 Boost::filesystem Boost::system
+    ${OpenMP_CXX_LIBRARIES} pthread dl)
+
+  add_library(mymit_opendog_hpipm
+    opendog/hpipm_interface/src/HpipmInterface.cpp
+    opendog/hpipm_interface/src/HpipmInterfaceSettings.cpp)
+  target_compile_features(mymit_opendog_hpipm PUBLIC cxx_std_17)
+  target_include_directories(mymit_opendog_hpipm PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/hpipm_interface/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_PREFIX}/include>
+    $<INSTALL_INTERFACE:include>)
+  target_link_directories(mymit_opendog_hpipm PUBLIC ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_hpipm PUBLIC Eigen3::Eigen
+    "-Wl,--start-group" ocs2_qp_solver ocs2_oc ocs2_core "-Wl,--end-group"
+    hpipm blasfeo Boost::filesystem Boost::system ${OpenMP_CXX_LIBRARIES} pthread dl)
+
+  add_library(mymit_opendog_mpc
+    opendog/ocs2_mpc/src/MPC_BASE.cpp
+    opendog/ocs2_mpc/src/MPC_Settings.cpp
+    opendog/ocs2_mpc/src/SystemObservation.cpp
+    opendog/ocs2_mpc/src/MRT_BASE.cpp
+    opendog/ocs2_mpc/src/MPC_MRT_Interface.cpp)
+  target_compile_features(mymit_opendog_mpc PRIVATE cxx_std_17)
+  target_include_directories(mymit_opendog_mpc PRIVATE
+    opendog/ocs2_mpc/include "${MYMIT_OPENDOG_PREFIX}/include")
+  target_link_directories(mymit_opendog_mpc PRIVATE ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_mpc PRIVATE Eigen3::Eigen
+    "-Wl,--start-group" ocs2_oc ocs2_core "-Wl,--end-group"
+    Boost::filesystem Boost::system ${OpenMP_CXX_LIBRARIES} pthread dl)
+
+  add_library(mymit_opendog_sqp
+    opendog/ocs2_sqp/src/SqpLogging.cpp
+    opendog/ocs2_sqp/src/SqpSettings.cpp
+    opendog/ocs2_sqp/src/SqpSolver.cpp)
+  target_compile_features(mymit_opendog_sqp PRIVATE cxx_std_17)
+  target_include_directories(mymit_opendog_sqp PRIVATE
+    opendog/ocs2_sqp/include opendog/ocs2_mpc/include opendog/hpipm_interface/include
+    "${MYMIT_OPENDOG_PREFIX}/include")
+  target_link_directories(mymit_opendog_sqp PRIVATE ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_sqp PRIVATE Eigen3::Eigen
+    mymit_opendog_mpc mymit_opendog_hpipm
+    "-Wl,--start-group" ocs2_qp_solver ocs2_oc ocs2_core "-Wl,--end-group"
+    Boost::filesystem Boost::system ${OpenMP_CXX_LIBRARIES} pthread dl)
+
+  add_library(mymit_opendog_wbc
+    opendog/legged_wbc/src/HoQp.cpp
+    opendog/legged_wbc/src/WbcBase.cpp
+    opendog/legged_wbc/src/HierarchicalWbc.cpp
+    opendog/legged_wbc/src/WeightedWbc.cpp
+  )
+  target_compile_features(mymit_opendog_wbc PUBLIC cxx_std_17)
+  target_compile_definitions(mymit_opendog_wbc PUBLIC ${MYMIT_OPENDOG_COMPILE_DEFINITIONS})
+  target_include_directories(mymit_opendog_wbc PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_wbc/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_interface/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_estimation_ros2/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_PREFIX}/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_OVERLAY}/include>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom_headers>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom>
+    $<INSTALL_INTERFACE:include>)
+  target_link_directories(mymit_opendog_wbc PUBLIC ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_wbc
+    Eigen3::Eigen mymit_opendog_numerics)
+
+  add_library(mymit_opendog_interface
+    opendog/legged_interface/src/constraint/EndEffectorLinearConstraint.cpp
+    opendog/legged_interface/src/constraint/FrictionConeConstraint.cpp
+    opendog/legged_interface/src/constraint/NormalVelocityConstraintCppAd.cpp
+    opendog/legged_interface/src/constraint/SwingTrajectoryPlanner.cpp
+    opendog/legged_interface/src/constraint/ZeroForceConstraint.cpp
+    opendog/legged_interface/src/constraint/ZeroVelocityConstraintCppAd.cpp
+    opendog/legged_interface/src/initialization/LeggedRobotInitializer.cpp
+    opendog/legged_interface/src/SwitchedModelReferenceManager.cpp
+    opendog/legged_interface/src/LeggedRobotPreComputation.cpp
+    opendog/legged_interface/src/LeggedInterface.cpp
+  )
+  target_compile_features(mymit_opendog_interface PUBLIC cxx_std_17)
+  target_compile_definitions(mymit_opendog_interface PUBLIC ${MYMIT_OPENDOG_COMPILE_DEFINITIONS})
+  target_include_directories(mymit_opendog_interface PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_wbc/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_interface/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_estimation_ros2/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_PREFIX}/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_OVERLAY}/include>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom_headers>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom>
+    $<INSTALL_INTERFACE:include>)
+  target_link_directories(mymit_opendog_interface PUBLIC ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_interface PUBLIC
+    Eigen3::Eigen mymit_opendog_numerics)
+  ament_target_dependencies(mymit_opendog_interface PUBLIC
+    rcl rclcpp rclcpp_lifecycle std_msgs urdfdom_headers)
+
+  add_library(mymit_opendog_estimation
+    opendog/legged_estimation_ros2/src/StateEstimateBase.cpp
+    opendog/legged_estimation_ros2/src/LinearKalmanFilter.cpp
+    opendog/legged_estimation_ros2/src/FromTopicEstimate.cpp
+  )
+  target_compile_features(mymit_opendog_estimation PUBLIC cxx_std_17)
+  target_compile_definitions(mymit_opendog_estimation PUBLIC ${MYMIT_OPENDOG_COMPILE_DEFINITIONS})
+  target_include_directories(mymit_opendog_estimation PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_wbc/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_interface/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_estimation_ros2/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_PREFIX}/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_OVERLAY}/include>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom_headers>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom>
+    $<INSTALL_INTERFACE:include>)
+  target_link_directories(mymit_opendog_estimation PUBLIC ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_estimation PUBLIC
+    Eigen3::Eigen mymit_opendog_numerics)
+  ament_target_dependencies(mymit_opendog_estimation PUBLIC
+    rcl rclcpp geometry_msgs nav_msgs realtime_tools
+    tf2 tf2_geometry_msgs tf2_ros urdfdom_headers)
+
+  add_library(mymit_opendog_algorithm
+    src/control/opendog_algorithm.cpp
+    src/control/opendog_reference.cpp)
+  target_compile_features(mymit_opendog_algorithm PUBLIC cxx_std_17)
+  target_compile_definitions(mymit_opendog_algorithm PUBLIC ${MYMIT_OPENDOG_COMPILE_DEFINITIONS})
+  target_include_directories(mymit_opendog_algorithm PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_wbc/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_interface/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/opendog/legged_estimation_ros2/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_PREFIX}/include>
+    $<BUILD_INTERFACE:${MYMIT_OPENDOG_OVERLAY}/include>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom_headers>
+    $<BUILD_INTERFACE:/opt/ros/humble/include/urdfdom>
+    $<INSTALL_INTERFACE:include>)
+  target_link_directories(mymit_opendog_algorithm PUBLIC ${MYMIT_OPENDOG_LINK_DIRS})
+  target_link_libraries(mymit_opendog_algorithm PUBLIC
+    Eigen3::Eigen
+    mymit_opendog_wbc mymit_opendog_interface mymit_opendog_estimation
+    mymit_opendog_numerics)
+  ament_target_dependencies(mymit_opendog_algorithm PUBLIC rclcpp)
+
+  install(TARGETS mymit_opendog_numerics mymit_opendog_hpipm mymit_opendog_mpc mymit_opendog_sqp
+    mymit_opendog_wbc mymit_opendog_interface mymit_opendog_estimation
+    mymit_opendog_algorithm
+    EXPORT mymit_robot_model_targets
+    ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
+  install(DIRECTORY opendog/legged_wbc/include/ DESTINATION include)
+  install(DIRECTORY opendog/legged_interface/include/ DESTINATION include)
+  install(DIRECTORY opendog/legged_estimation_ros2/include/ DESTINATION include)
+  install(DIRECTORY opendog/hpipm_interface/include/ DESTINATION include)
+  install(DIRECTORY opendog/ocs2_mpc/include/ DESTINATION include)
+  install(DIRECTORY opendog/ocs2_sqp/include/ DESTINATION include)
+endif()
+
 ament_export_targets(mymit_robot_model_targets HAS_LIBRARY_TARGET)
 ament_export_libraries(mymit_robot_model)
 
@@ -209,6 +436,7 @@ ament_export_libraries(mymit_robot_model)
 # failure-path coverage instead of becoming the owner of the interface.
 add_library(mymit_robot_hardware
   src/hardware/hardware_bridge.cpp
+  src/control/current_mit_backend.cpp
   src/hardware/dm1_hardware_driver.cpp
   src/hardware/dm_motor_driver.cpp
   user/RobotRunner.cpp
@@ -227,6 +455,30 @@ target_link_libraries(mymit_robot_hardware PUBLIC
   Eigen3::Eigen
   pthread
 )
+if(MYMIT_OPENDOG_AVAILABLE)
+  target_compile_definitions(mymit_robot_hardware PRIVATE MYMIT_ENABLE_OPENDOG)
+  target_compile_definitions(mymit_robot_hardware PRIVATE
+    BOOST_MPL_LIMIT_LIST_SIZE=30
+    BOOST_MPL_LIMIT_VECTOR_SIZE=30
+    BOOST_MPL_LIMIT_MAP_SIZE=30
+    BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS)
+  target_include_directories(mymit_robot_hardware PRIVATE ${MYMIT_OPENDOG_INCLUDE_DIRS})
+  target_link_directories(mymit_robot_hardware PUBLIC
+    "${MYMIT_OPENDOG_PREFIX}/lib"
+    "${MYMIT_OPENDOG_OVERLAY}/lib/x86_64-linux-gnu"
+    "${MYMIT_OPENDOG_OVERLAY}/../../../usr/lib/x86_64-linux-gnu"
+  )
+  target_link_libraries(mymit_robot_hardware PUBLIC
+    # MuJoCo exports its bundled tinyxml2 symbols globally.  Keep ROS 2's
+    # ABI-compatible system tinyxml2 in the hardware process dependency order
+    # so rclcpp/fastdds resolve the same library as the rest of ROS 2.
+    tinyxml2::tinyxml2
+    mymit_opendog_algorithm ${OpenMP_CXX_LIBRARIES})
+  # tinyxml2 is otherwise dropped by --as-needed because no local object calls
+  # it directly; retain it as a DT_NEEDED entry before libmujoco is loaded.
+  target_link_options(mymit_robot_hardware PRIVATE -Wl,--no-as-needed)
+  ament_target_dependencies(mymit_robot_hardware PUBLIC rclcpp)
+endif()
 install(TARGETS mymit_robot_hardware
   EXPORT mymit_robot_model_targets
   ARCHIVE DESTINATION lib
@@ -245,6 +497,7 @@ add_executable(mymit_robot_user
 target_compile_definitions(mymit_robot_user PRIVATE
   MYMIT_ROBOT_DM1_SCENE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
   MYMIT_ROBOT_DM1_CALIBRATION_PATH="${CMAKE_CURRENT_SOURCE_DIR}/config/dm1_hardware_calibration.txt"
+  MYMIT_ROBOT_ALGORITHM_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/algorithm"
 )
 target_include_directories(mymit_robot_user PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -271,6 +524,58 @@ target_link_libraries(mymit_robot_user
   pthread
   util
 )
+if(MYMIT_OPENDOG_AVAILABLE)
+  target_compile_definitions(mymit_robot_user PRIVATE MYMIT_ENABLE_OPENDOG)
+  target_link_options(mymit_robot_user PRIVATE -Wl,--no-as-needed)
+  ament_target_dependencies(mymit_robot_user rclcpp)
+
+  # MuJoCo and ROS2 ship incompatible global tinyxml2 symbol providers.  The
+  # original user executable keeps MuJoCo first; OpenDog runs in this sibling
+  # executable with system tinyxml2 deliberately first.  main.cpp dispatches
+  # --algorithm opendog to this process before either runtime is initialized.
+  add_executable(mymit_opendog_user
+    user/main.cpp
+    user/HardwareSimulation.cpp
+    user/SimulationActuatorWriter.cpp
+    user/SimulationBridge.cpp
+  )
+  target_compile_definitions(mymit_opendog_user PRIVATE
+    MYMIT_ENABLE_OPENDOG
+    MYMIT_OPENDOG_USER_STANDALONE
+    MYMIT_ROBOT_DM1_SCENE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml"
+    MYMIT_ROBOT_DM1_CALIBRATION_PATH="${CMAKE_CURRENT_SOURCE_DIR}/config/dm1_hardware_calibration.txt"
+    MYMIT_ROBOT_ALGORITHM_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/algorithm"
+  )
+  target_include_directories(mymit_opendog_user PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/user
+    ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/dm_imu/include
+  )
+  target_include_directories(mymit_opendog_user BEFORE PRIVATE
+    "${MYMIT_LOCAL_MUJOCO_INCLUDE}"
+  )
+  target_include_directories(mymit_opendog_user SYSTEM PRIVATE
+    /usr/local/include/simulate
+  )
+  target_link_libraries(mymit_opendog_user
+    tinyxml2::tinyxml2
+    mymit_robot_hardware
+    mymit_robot_model
+    mymit_robot_teleop
+    mymit_dmbot_serial
+    Eigen3::Eigen
+    /usr/local/lib/libmujoco.so
+    /usr/local/lib/libsimulate.a
+    OpenGL::OpenGL
+    OpenGL::GLX
+    glfw
+    dl
+    pthread
+    util
+  )
+  target_link_options(mymit_opendog_user PRIVATE -Wl,--no-as-needed)
+  ament_target_dependencies(mymit_opendog_user rclcpp)
+endif()
 # libsimulate.a is distributed with GCC LTO objects. Tell GCC to use the
 # available parallelism when materializing those objects; otherwise lto-wrapper
 # falls back to serial LTRANS and emits a warning on every clean link.
@@ -297,6 +602,9 @@ target_link_libraries(mymit_robot_height_service
 add_executable(hardware_main
   src/hardware/hardware_main.cpp
 )
+target_compile_definitions(hardware_main PRIVATE
+  MYMIT_ROBOT_ALGORITHM_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/algorithm"
+)
 target_compile_features(hardware_main PRIVATE cxx_std_17)
 target_include_directories(hardware_main PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -305,11 +613,23 @@ target_include_directories(hardware_main PRIVATE
 target_include_directories(hardware_main BEFORE PRIVATE
   "${MYMIT_LOCAL_MUJOCO_INCLUDE}"
 )
+if(MYMIT_OPENDOG_AVAILABLE)
+  target_link_libraries(hardware_main tinyxml2::tinyxml2)
+endif()
 target_link_libraries(hardware_main
   mymit_robot_hardware
 )
+if(MYMIT_OPENDOG_AVAILABLE)
+  target_link_options(hardware_main PRIVATE -Wl,--no-as-needed)
+  target_compile_definitions(hardware_main PRIVATE MYMIT_ENABLE_OPENDOG)
+  ament_target_dependencies(hardware_main rclcpp)
+endif()
 
-install(TARGETS mymit_robot_user mymit_robot_height_service hardware_main
+set(MYMIT_USER_RUNTIME_TARGETS mymit_robot_user mymit_robot_height_service hardware_main)
+if(MYMIT_OPENDOG_AVAILABLE)
+  list(APPEND MYMIT_USER_RUNTIME_TARGETS mymit_opendog_user)
+endif()
+install(TARGETS ${MYMIT_USER_RUNTIME_TARGETS}
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY docs/
@@ -318,6 +638,29 @@ install(DIRECTORY docs/
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  if(MYMIT_OPENDOG_AVAILABLE)
+    ament_add_gtest(test_opendog_algorithm
+      test/control/opendog_algorithm_test.cpp test/control/opendog_reference_test.cpp)
+    target_link_libraries(test_opendog_algorithm mymit_opendog_algorithm)
+    target_compile_definitions(test_opendog_algorithm PRIVATE
+      MYMIT_OPENDOG_TEST_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config/algorithm")
+    ament_add_gtest(test_opendog_mujoco
+      test/control/opendog_mujoco_test.cpp)
+    target_compile_definitions(test_opendog_mujoco PRIVATE
+      MYMIT_ENABLE_OPENDOG
+      MYMIT_OPENDOG_TEST_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config/algorithm"
+      MYMIT_ROBOT_TEST_SCENE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/dm1_description/dm1/scene.xml")
+    target_include_directories(test_opendog_mujoco PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/user)
+    target_link_libraries(test_opendog_mujoco
+      tinyxml2::tinyxml2 mymit_opendog_algorithm mymit_robot_model)
+    target_link_options(test_opendog_mujoco PRIVATE -Wl,--no-as-needed)
+    ament_target_dependencies(test_opendog_mujoco rclcpp)
+    add_test(NAME test_opendog_model_contract
+      COMMAND ${MYMIT_ROS_PYTHON_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/model/opendog_model_contract_test.py)
+  endif()
   find_package(ament_lint_auto REQUIRED)
   add_subdirectory(test)
 

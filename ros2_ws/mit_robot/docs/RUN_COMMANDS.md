@@ -3,7 +3,7 @@
 以下命令默认工程路径为：
 
 ```text
-/home/simon/real_mitrl_dog/ros2_ws
+/home/simon/real_mitrl_dog
 ```
 
 ## 1. 准备 ROS 2 环境
@@ -11,26 +11,51 @@
 每次打开新的终端，先执行：
 
 ```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
+cd /home/simon/real_mitrl_dog
 source /opt/ros/humble/setup.bash
-colcon build --packages-select mymit_robot --symlink-install
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build --base-paths ros2_ws \
+  --packages-select mymit_robot --symlink-install --parallel-workers 1 --executor sequential
 source install/setup.bash
 ```
 
 如果只是运行已经成功构建过的程序，可以省略 `colcon build`，但仍需要执行两个
-`source` 命令。
+`source` 命令。构建和运行统一使用工程根目录的 `build/`、`install/`；
+`ros2_ws/install/` 中存在旧产物，不要混用环境。
 
 ## 2. 仿真程序
 
 ### 直接启动 MuJoCo 仿真
 
 ```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
+cd /home/simon/real_mitrl_dog
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
 ```
+
+选择 OpenDog WBC+NMPC 仿真；当前 MIT 算法仍是默认值：
+
+```bash
+ros2 run mymit_robot mymit_robot_user \
+  --algorithm opendog \
+  --algorithm-config /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/algorithm \
+  --render-gpu auto
+```
+
+该选择会由原入口转交同目录的 `mymit_opendog_user` 进程，隔离 ROS2 与 MuJoCo
+的 `tinyxml2` 符号顺序；`current_mit` 继续留在原 `mymit_robot_user` 进程。
+
+使用 launch 时选择同一个参数：
+
+```bash
+ros2 launch mymit_robot dm1_control.launch.py \
+  algorithm:=opendog \
+  algorithm_config:=/home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/algorithm
+```
+
+仿真窗口中按 `Shift+U` 解锁，再按 `1` 进入 OpenDog 站起轨迹；站稳后可用方向键
+发送步态命令。`current_mit` 和 `opendog` 都通过同一个 MuJoCo 执行器写入路径。
 
 默认启动 MPC/WBC 控制链。仿真窗口打开后默认电机上锁；先按键盘 `Shift+U`（或点击
 `Enable motors`），再按 `1`/点击 `Stand up`，最后按方向键或使用方向按钮。方向命令会
@@ -108,7 +133,8 @@ ros2 run mymit_robot mymit_robot_user --hardware-sim \
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --packages-select mymit_robot --symlink-install
+CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1 colcon build --base-paths ros2_ws \
+  --packages-select mymit_robot --symlink-install --parallel-workers 1 --executor sequential
 source install/setup.bash
 ctest --test-dir build/mymit_robot \
   -R '^(test_dm1_full_hardware_simulation|test_hardware_bridge|test_dm_motor_driver|test_imu_driver)$' \
@@ -161,7 +187,7 @@ MuJoCo Reset 后会重新上锁；上锁时仍执行 `mj_step()`，机器人会�
 ### 自动选择 DM IMU 串口
 
 ```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
+cd /home/simon/real_mitrl_dog
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -201,7 +227,7 @@ ros2 launch mymit_robot dm1_imu.launch.py \
 ### 监听 can0 上物理 CAN ID 为 0x01 的电机
 
 ```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
+cd /home/simon/real_mitrl_dog
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -335,7 +361,7 @@ ros2 run mymit_robot hardware_main \
 先在工作空间准备环境，并将日志集中到一个目录：
 
 ```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
+cd /home/simon/real_mitrl_dog
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export DM1_LOG_DIR="$HOME/dm1_diag_$(date +%Y%m%d_%H%M%S)"

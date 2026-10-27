@@ -1,0 +1,327 @@
+centroidalModelType             0      ; 动力学模型：0=完整质心，1=单刚体
+
+hardware_output
+{
+  kp                  4.0
+  kd                  5.0
+}
+
+legged_robot_interface
+{
+  verbose                               false  ; 是否打印加载的参数
+}
+
+model_settings
+{
+  positionErrorGain             0.0       ; 摆腿末端位置误差增益
+  phaseTransitionStanceTime     0.1       ; 步态切换时的支撑过渡时间[s]
+
+  verboseCppAd                  true      ; 是否打印CppAD信息
+  recompileLibrariesCppAd       false     ; 是否重新编译CppAD库
+  modelFolderCppAd              /tmp/legged_control/dm1_opendog_mjcf ; CppAD库缓存目录
+}
+
+swing_trajectory_config
+{
+  liftOffVelocity               0.05      ; 抬脚初速度[m/s]
+  touchDownVelocity            -0.1       ; 落脚末速度[m/s]
+  swingHeight                   0.08      ; 摆腿抬脚高度[m]
+  swingTimeScale                0.15      ; 短摆腿时间缩放阈值[s]
+}
+
+; DDP设置：连续时间最优控制求解
+ddp
+{
+  algorithm                       SLQ       ; DDP算法类型
+
+  nThreads                        3         ; 并行线程数
+  threadPriority                  50        ; 线程优先级
+
+  maxNumIterations                1         ; 最大迭代次数
+  minRelCost                      1e-1      ; 最小相对代价下降
+  constraintTolerance             5e-3      ; 约束容差
+
+  displayInfo                     false     ; 是否打印详细信息
+  displayShortSummary             false     ; 是否打印简要摘要
+  checkNumericalStability         false     ; 是否检查数值稳定性
+  debugPrintRollout               false     ; 是否打印轨迹展开调试信息
+  debugCaching                    false     ; 是否打印缓存调试信息
+
+  AbsTolODE                       1e-5      ; ODE绝对误差容差
+  RelTolODE                       1e-3      ; ODE相对误差容差
+  maxNumStepsPerSecond            10000     ; 每秒最大积分步数
+  timeStep                        0.015     ; 积分时间步长[s]
+  backwardPassIntegratorType      ODE45     ; 反向积分器
+
+  constraintPenaltyInitialValue   20.0      ; 初始约束惩罚系数
+  constraintPenaltyIncreaseRate   2.0       ; 惩罚系数增长倍率
+
+  preComputeRiccatiTerms          true      ; 是否预计算Riccati项
+
+  useFeedbackPolicy               false     ; 是否使用反馈策略
+
+  strategy                        LINE_SEARCH ; 搜索策略
+  lineSearch
+  {
+    minStepLength                 1e-2      ; 线搜索最小步长
+    maxStepLength                 1.0       ; 线搜索最大步长
+    hessianCorrectionStrategy     DIAGONAL_SHIFT ; Hessian修正方法
+    hessianCorrectionMultiple     1e-5      ; Hessian修正强度
+  }
+}
+
+
+; SQP设置：多重射击序列二次规划
+sqp
+{
+  nThreads                              3         ; 并行线程数
+  dt                                    0.015     ; 离散时间步长[s]
+  sqpIteration                          1         ; SQP迭代次数
+  deltaTol                              1e-4      ; 步长收敛阈值
+  g_max                                 1e-2      ; 约束残差上限
+  g_min                                 1e-6      ; 约束残差下限
+  inequalityConstraintMu                0.1       ; 不等式约束屏障参数
+  inequalityConstraintDelta             5.0       ; 不等式约束平滑参数
+  projectStateInputEqualityConstraints  true      ; 是否投影等式约束
+  printSolverStatistics                 true      ; 是否打印求解统计
+  printSolverStatus                     false     ; 是否打印求解状态
+  printLinesearch                       false     ; 是否打印线搜索信息
+  useFeedbackPolicy                     false     ; 是否使用反馈策略
+  integratorType                        RK2       ; 积分器类型
+  threadPriority                        50        ; 线程优先级
+}
+
+; IPM设置：多重射击内点法
+ipm
+{
+  nThreads                              3         ; 并行线程数
+  dt                                    0.015     ; 离散时间步长[s]
+  ipmIteration                          1         ; IPM迭代次数
+  deltaTol                              1e-4      ; 步长收敛阈值
+  g_max                                 10.0      ; 约束残差上限
+  g_min                                 1e-6      ; 约束残差下限
+  computeLagrangeMultipliers            true      ; 是否计算拉格朗日乘子
+  printSolverStatistics                 true      ; 是否打印求解统计
+  printSolverStatus                     false     ; 是否打印求解状态
+  printLinesearch                       false     ; 是否打印线搜索信息
+  useFeedbackPolicy                     false     ; 是否使用反馈策略
+  integratorType                        RK2       ; 积分器类型
+  threadPriority                        50        ; 线程优先级
+
+  initialBarrierParameter               1e-4      ; 初始屏障参数
+  targetBarrierParameter                1e-4      ; 目标屏障参数
+  barrierLinearDecreaseFactor           0.2       ; 屏障参数线性衰减因子
+  barrierSuperlinearDecreasePower       1.5       ; 屏障参数超线性衰减幂
+  barrierReductionCostTol               1e-3      ; 代价下降触发阈值
+  barrierReductionConstraintTol         1e-3      ; 约束下降触发阈值
+
+  fractionToBoundaryMargin              0.995     ; 接近边界的最大步长比例
+  usePrimalStepSizeForDual              false     ; 对偶变量是否沿用原始步长
+
+  initialSlackLowerBound                1e-4      ; 初始松弛变量下界
+  initialDualLowerBound                 1e-4      ; 初始对偶变量下界
+  initialSlackMarginRate                1e-2      ; 初始松弛变量裕量
+  initialDualMarginRate                 1e-2      ; 初始对偶变量裕量
+}
+
+; Rollout设置：数值积分轨迹
+rollout
+{
+  AbsTolODE                       1e-5      ; ODE绝对误差容差
+  RelTolODE                       1e-3      ; ODE相对误差容差
+  timeStep                        0.015     ; 积分时间步长[s]
+  integratorType                  ODE45     ; 积分器类型
+  maxNumStepsPerSecond            10000     ; 每秒最大积分步数
+  checkNumericalStability         false     ; 是否检查数值稳定性
+}
+
+mpc
+{
+  timeHorizon                     1.0  ; 预测时域[s]
+  solutionTimeWindow              -1   ; 求解时间上限[s]，-1=不限
+  coldStart                       false     ; 是否每次冷启动
+
+  debugPrint                      false     ; 是否打印MPC调试信息
+
+  mpcDesiredFrequency             100  ; MPC频率[Hz]
+  mrtDesiredFrequency             1000 ; MRT频率[Hz]（当前未使用）
+}
+
+initialState
+{
+   ;; 归一化质心动量：[线动量，角动量] ;;
+   (0,0)  0.0     ; 质心线速度x
+   (1,0)  0.0     ; 质心线速度y
+   (2,0)  0.0     ; 质心线速度z
+   (3,0)  0.0     ; 归一化角动量x
+   (4,0)  0.0     ; 归一化角动量y
+   (5,0)  0.0     ; 归一化角动量z
+
+   ;; 基座位姿：[位置，姿态] ;;
+   (6,0)  0.0     ; 基座位置x
+   (7,0)  0.0     ; 基座位置y
+   (8,0)  0.28     ; 基座位置z
+   (9,0)  0.0     ; 基座姿态z
+   (10,0) 0.0     ; 基座姿态y
+   (11,0) 0.0     ; 基座姿态x
+
+   ;; 腿部关节位置：[左前，左后，右前，右后] ;;
+   (12,0) 0.0   ; 左前HAA关节
+   (13,0)  -0.282961   ; 左前HFE关节
+   (14,0) 0.739729   ; 左前KFE关节
+   (15,0) 0.0   ; 左后HAA关节
+   (16,0)  -0.282961   ; 左后HFE关节
+   (17,0) 0.739729   ; 左后KFE关节
+   (18,0)  0.0   ; 右前HAA关节
+   (19,0)  -0.282961   ; 右前HFE关节
+   (20,0) 0.739729   ; 右前KFE关节
+   (21,0)  0.0   ; 右后HAA关节
+   (22,0)  -0.282961   ; 右后HFE关节
+   (23,0) 0.739729   ; 右后KFE关节
+}
+
+; Q：状态误差权重矩阵
+Q
+{
+  scaling 1e+0                     ; Q矩阵整体缩放
+
+  ;; 归一化质心动量权重 ;;
+  (0,0)   15.0     ; 质心线速度x
+  (1,1)   15.0     ; 质心线速度y
+  (2,2)   100.0    ; 质心线速度z
+  (3,3)   10.0     ; 归一化角动量x
+  (4,4)   30.0     ; 归一化角动量y
+  (5,5)   30.0     ; 归一化角动量z
+
+  ;; 基座位姿权重 ;;
+  (6,6)   1000.0   ; 基座位置x
+  (7,7)   1000.0   ; 基座位置y
+  (8,8)   1500.0   ; 基座位置z
+  (9,9)   100.0    ; 基座姿态z
+  (10,10) 300.0    ; 基座姿态y
+  (11,11) 300.0    ; 基座姿态x
+
+  ;; 腿部关节位置权重 ;;
+  (12,12) 5.0     ; 左前HAA
+  (13,13) 5.0     ; 左前HFE
+  (14,14) 2.5     ; 左前KFE
+  (15,15) 5.0     ; 左后HAA
+  (16,16) 5.0     ; 左后HFE
+  (17,17) 2.5     ; 左后KFE
+  (18,18) 5.0     ; 右前HAA
+  (19,19) 5.0     ; 右前HFE
+  (20,20) 2.5     ; 右前KFE
+  (21,21) 5.0     ; 右后HAA
+  (22,22) 5.0     ; 右后HFE
+  (23,23) 2.5     ; 右后KFE
+}
+
+; R：控制输入权重矩阵
+R
+{
+  scaling 1e-3                     ; R矩阵整体缩放
+
+  ;; 足端接触力权重 ;;
+  (0,0)   1.0       ; 左前接触力
+  (1,1)   1.0       ; 左前接触力
+  (2,2)   1.0       ; 左前接触力
+  (3,3)   1.0       ; 右前接触力
+  (4,4)   1.0       ; 右前接触力
+  (5,5)   1.0       ; 右前接触力
+  (6,6)   1.0       ; 左后接触力
+  (7,7)   1.0       ; 左后接触力
+  (8,8)   1.0       ; 左后接触力
+  (9,9)   1.0       ; 右后接触力
+  (10,10) 1.0       ; 右后接触力
+  (11,11) 1.0       ; 右后接触力
+
+  ;; 足端相对基座速度权重 ;;
+  (12,12) 5000.0    ; 左前足端速度x
+  (13,13) 5000.0    ; 左前足端速度y
+  (14,14) 5000.0    ; 左前足端速度z
+  (15,15) 5000.0    ; 左后足端速度x
+  (16,16) 5000.0    ; 左后足端速度y
+  (17,17) 5000.0    ; 左后足端速度z
+  (18,18) 5000.0    ; 右前足端速度x
+  (19,19) 5000.0    ; 右前足端速度y
+  (20,20) 5000.0    ; 右前足端速度z
+  (21,21) 5000.0    ; 右后足端速度x
+  (22,22) 5000.0    ; 右后足端速度y
+  (23,23) 5000.0    ; 右后足端速度z
+}
+
+; 摩擦锥软约束
+frictionConeSoftConstraint
+{
+  frictionCoefficient    0.3       ; 摩擦系数
+
+  ; relaxed log barrier parameters
+  mu                     0.1       ; 对数屏障权重
+  delta                  5.0       ; 对数屏障平滑量
+}
+
+; 自碰撞约束
+selfCollision
+{
+  ; 原始碰撞对象对（当前为空）
+  collisionObjectPairs
+  {
+  }
+
+  ; 碰撞连杆对
+  collisionLinkPairs
+  {
+    [0] "LF_calf, RF_calf" ; 左右前小腿
+    [1] "LH_calf, RH_calf" ; 左右后小腿
+    [2] "LF_calf, LH_calf" ; 左侧小腿
+    [3] "RF_calf, RH_calf" ; 右侧小腿
+    [4] "LF_FOOT, RF_FOOT" ; 左右前足端
+    [5] "LH_FOOT, RH_FOOT" ; 左右后足端
+    [6] "LF_FOOT, LH_FOOT" ; 左侧足端
+    [7] "RF_FOOT, RH_FOOT" ; 右侧足端
+  }
+
+  minimumDistance  0.05             ; 碰撞最小距离[m]
+
+  ; relaxed log barrier parameters
+  mu      1e-2                     ; 自碰撞屏障权重
+  delta   1e-3                     ; 自碰撞屏障平滑量
+}
+
+; 全身控制
+torqueLimitsTask
+{
+   (0,0)  97.0     ; HAA机械峰值力矩[Nm]
+   (1,0)  97.0     ; HFE机械峰值力矩[Nm]
+   (2,0)  97.0     ; KFE机械峰值力矩[Nm]
+}
+
+frictionConeTask
+{
+  frictionCoefficient    0.3       ; 摩擦系数
+}
+
+swingLegTask
+{
+    kp                   350       ; 摆腿位置增益
+    kd                   37        ; 摆腿速度增益
+}
+
+weight
+{
+    swingLeg        100             ; 摆腿任务权重
+    baseAccel       1               ; 基座加速度权重
+    contactForce    0.01            ; 接触力权重
+}
+
+; 状态估计
+kalmanFilter
+{
+    footRadius                  0.02      ; 足端半径[m]
+    imuProcessNoisePosition     0.02      ; IMU位置过程噪声
+    imuProcessNoiseVelocity     0.02      ; IMU速度过程噪声
+    footProcessNoisePosition    0.002     ; 足端位置过程噪声
+    footSensorNoisePosition     0.005     ; 足端位置测量噪声
+    footSensorNoiseVelocity     0.1       ; 足端速度测量噪声
+    footHeightSensorNoise       0.01      ; 足端高度测量噪声
+}

@@ -1,6 +1,6 @@
 // ============================================================
 // DM1 真机硬件桥接接口。
-// 负责连接真实硬件、执行启动安全检查，并驱动 RobotRunner 控制管线。
+// 负责连接真实硬件、执行启动检查，并驱动选中的单一控制算法后端。
 // ============================================================
 #ifndef MYMIT_ROBOT_HARDWARE_HARDWARE_BRIDGE_HPP_
 #define MYMIT_ROBOT_HARDWARE_HARDWARE_BRIDGE_HPP_
@@ -9,8 +9,13 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
+#include <string>
 
 #include "RobotRunner.hpp"
+#include "control/algorithm_backend.hpp"
+#include "control/current_mit_backend.hpp"
+#include "control/opendog_algorithm.hpp"
 #include "hardware/dm1_hardware_io.hpp"
 #include "teleop/keyboard_teleop.hpp"
 
@@ -36,6 +41,9 @@ public:
     bool keyboard_control = false;
     bool request_stand_up = false;
     bool set_zero = false;
+    // Exactly one backend owns the control computation in a run.
+    AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+    std::string algorithm_config_directory = "config/algorithm";
     // Optional window/test input port. The same command arbiter handles it.
     std::function<std::vector<teleop::OperatorCommand>()> command_source;
     // Optional read-only telemetry; never changes control or send decisions.
@@ -79,6 +87,9 @@ private:
   dm1_hardware::Dm1MitInterface::CalibrationArray calibration_;
   Options options_;
   RobotRunner runner_;
+  std::unique_ptr<CurrentMitBackend> current_mit_backend_;
+  std::unique_ptr<OpenDogAlgorithm> opendog_algorithm_;
+  AlgorithmBackend * backend_ = nullptr;
   dm1_hardware::Dm1MitInterface mit_;
 };
 

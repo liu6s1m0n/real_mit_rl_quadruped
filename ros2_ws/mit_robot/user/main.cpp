@@ -8,9 +8,14 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <unistd.h>
 
 #include "SimulationBridge.hpp"
+
+#if defined(MYMIT_ENABLE_OPENDOG)
+#include <rclcpp/rclcpp.hpp>
+#endif
 
 namespace
 {
@@ -21,6 +26,8 @@ struct RobotSelection
   const char * scene_path;    ///< DM1 MuJoCo 场景。
   const char * render_gpu;    ///< OpenGL 渲染设备策略：auto 或 nvidia。
   HardwareSimulationOptions hardware_simulation;
+  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+  std::string algorithm_config_directory = "config/algorithm";
 };
 
 RobotSelection selectRobot(int argc, char ** argv)
@@ -30,10 +37,29 @@ RobotSelection selectRobot(int argc, char ** argv)
   const char * render_gpu = "auto";
   HardwareSimulationOptions hardware_simulation;
   hardware_simulation.calibration_path = MYMIT_ROBOT_DM1_CALIBRATION_PATH;
+  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+#ifdef MYMIT_ROBOT_ALGORITHM_CONFIG_DIR
+  std::string algorithm_config_directory = MYMIT_ROBOT_ALGORITHM_CONFIG_DIR;
+#else
+  std::string algorithm_config_directory = "config/algorithm";
+#endif
   bool hardware_options_used = false;
   for (int index = 1; index < argc; ++index) {
     if (std::strcmp(argv[index], "--ros-args") == 0) {break;}
-    if (std::strcmp(argv[index], "--hardware-sim") == 0) {
+    if (std::strcmp(argv[index], "--algorithm") == 0) {
+      if (++index >= argc) {throw std::invalid_argument("--algorithm requires current_mit or opendog");}
+      const std::string value(argv[index]);
+      if (value == "current_mit" || value == "mit") {
+        algorithm_backend = AlgorithmBackendId::CurrentMit;
+      } else if (value == "opendog") {
+        algorithm_backend = AlgorithmBackendId::OpenDog;
+      } else {
+        throw std::invalid_argument("--algorithm must be current_mit or opendog");
+      }
+    } else if (std::strcmp(argv[index], "--algorithm-config") == 0) {
+      if (++index >= argc) {throw std::invalid_argument("--algorithm-config requires a path");}
+      algorithm_config_directory = argv[index];
+    } else if (std::strcmp(argv[index], "--hardware-sim") == 0) {
       hardware_simulation.enabled = true;
     } else if (std::strcmp(argv[index], "--calibration") == 0) {
       hardware_options_used = true;
@@ -80,12 +106,14 @@ RobotSelection selectRobot(int argc, char ** argv)
     throw std::invalid_argument("render GPU must be nvidia or auto");
   }
   hardware_simulation.validate();
+  hardware_simulation.algorithm_backend = algorithm_backend;
+  hardware_simulation.algorithm_config_directory = algorithm_config_directory;
   if (hardware_options_used && !hardware_simulation.enabled) {
     throw std::invalid_argument("hardware simulation options require --hardware-sim");
   }
   return {
     MYMIT_ROBOT_DM1_SCENE_PATH, render_gpu,
-    hardware_simulation};
+    hardware_simulation, algorithm_backend, algorithm_config_directory};
 }
 
 /**
@@ -154,6 +182,8 @@ int main(int argc, char ** argv)
   if (argc == 2 && std::strcmp(argv[1], "--help") == 0) {
     std::printf(
       "Usage: mymit_robot_user [--hardware-sim] [--render-gpu auto|nvidia]\n"
+      "  --algorithm current_mit|opendog  select one controller (default current_mit)\n"
+      "  --algorithm-config DIR           OpenDog config/algorithm directory\n"
       "Hardware simulation (all actual hardware algorithms, simulated devices):\n"
       "  --calibration FILE              same calibration format as hardware_main\n"
       "  --torque-limit NM               same default as hardware_main: 88\n"
@@ -171,11 +201,50 @@ int main(int argc, char ** argv)
   }
   try {
     const RobotSelection robot = selectRobot(argc, argv);
+#if defined(MYMIT_ENABLE_OPENDOG) && !defined(MYMIT_OPENDOG_USER_STANDALONE)
+    if (robot.algorithm_backend == AlgorithmBackendId::OpenDog) {
+      // Keep the original MuJoCo executable's dependency order intact.  The
+      // sibling OpenDog process loads ROS2's tinyxml2 before MuJoCo and then
+      // runs the same main/SimulationBridge code with the selected algorithm.
+      const std::filesystem::path self(argv[0] == nullptr ? "" : argv[0]);
+      const std::filesystem::path sibling = self.has_parent_path() ?
+        self.parent_path() / "mymit_opendog_user" :
+        std::filesystem::path("mymit_opendog_user");
+      std::string replacement = sibling.string();
+      argv[0] = const_cast<char *>(replacement.c_str());
+      if (self.has_parent_path()) {
+        ::execv(replacement.c_str(), argv);
+      } else {
+        ::execvp(replacement.c_str(), argv);
+      }
+      throw std::runtime_error(
+              "unable to dispatch OpenDog MuJoCo process: " + replacement);
+    }
+#elif defined(MYMIT_OPENDOG_USER_STANDALONE)
+    if (robot.algorithm_backend != AlgorithmBackendId::OpenDog) {
+      throw std::invalid_argument(
+              "mymit_opendog_user only accepts --algorithm opendog");
+    }
+#endif
+#if defined(MYMIT_ENABLE_OPENDOG)
+    bool ros_initialized = false;
+    if (robot.algorithm_backend == AlgorithmBackendId::OpenDog) {
+      // The simulation parser already consumed the application arguments;
+      // initialize ROS without handing custom --algorithm flags to rclcpp.
+      rclcpp::init(0, nullptr);
+      ros_initialized = true;
+    }
+#endif
     configureDesktopSession();
     configureGpuRendering(robot.render_gpu);
     SimulationBridge bridge(robot.scene_path, RobotType::DM1);
+    bridge.setAlgorithm(robot.algorithm_backend, robot.algorithm_config_directory);
     bridge.setHardwareSimulation(robot.hardware_simulation);
-    return bridge.run();
+    const int result = bridge.run();
+#if defined(MYMIT_ENABLE_OPENDOG)
+    if (ros_initialized) {rclcpp::shutdown();}
+#endif
+    return result;
   } catch (const std::exception & error) {
     std::fprintf(stderr, "simulation failed: %s\n", error.what());
     return 1;

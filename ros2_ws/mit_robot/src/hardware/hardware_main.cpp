@@ -22,6 +22,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(MYMIT_ENABLE_OPENDOG)
+#include <rclcpp/rclcpp.hpp>
+#endif
+
 #include "hardware/dm1_hardware_driver.hpp"
 #include "hardware/hardware_bridge.hpp"
 #include "hardware/motor_calibration.hpp"
@@ -30,6 +34,13 @@
 // ---------- 本文件内部辅助函数（匿名命名空间） ----------
 namespace
 {
+
+#ifdef MYMIT_ROBOT_ALGORITHM_CONFIG_DIR
+constexpr const char * kDefaultAlgorithmConfigDirectory =
+  MYMIT_ROBOT_ALGORITHM_CONFIG_DIR;
+#else
+constexpr const char * kDefaultAlgorithmConfigDirectory = "config/algorithm";
+#endif
 
 // 收到 Ctrl+C 或终止信号后，所有运行循环都会在下一个周期安全退出。
 std::atomic_bool g_stop_requested{false};
@@ -69,6 +80,9 @@ struct Arguments
   bool keyboard_control = false;
   bool stand_up = false;
   bool set_zero = false;
+  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+  std::string algorithm_config_directory = kDefaultAlgorithmConfigDirectory;
+  bool algorithm_explicit = false;
   bool imu_only = false;
   bool motor_only = false;
   // 仅在 motor-only 模式下可选：指定需要周期性轮询的单个电机。
@@ -93,6 +107,7 @@ struct Arguments
           "[--imu auto|DEVICE] [--control-dt 0.002] "
           "[--zero-tolerance 0.05]（自动输出启动/零位维护容差） "
           "[--torque-limit 88]（0~97 Nm，关节力矩饱和上限） "
+          "[--algorithm current_mit|opendog] [--algorithm-config DIR] "
           "[--enable-output | --keyboard-control] [--stand-up] [--set-zero] "
           "[--imu-only | --motor-only] "
           "[--poll-feedback BUS CAN_ID] "
@@ -139,6 +154,25 @@ std::string resolveImuDevice(const std::string & requested)
           "检测到多个 DM IMU 设备；请使用 --imu DEVICE 明确指定");
 }
 
+void loadConfiguredAlgorithm(Arguments & result)
+{
+  if (result.algorithm_explicit) {return;}
+  std::ifstream file(
+    std::filesystem::path(result.algorithm_config_directory) / "opendog.yaml");
+  std::string line;
+  while (std::getline(file, line)) {
+    const auto marker = line.find("active_backend:");
+    if (marker == std::string::npos) {continue;}
+    const auto value = line.substr(marker + std::string("active_backend:").size());
+    if (value.find("opendog") != std::string::npos) {
+      result.algorithm_backend = AlgorithmBackendId::OpenDog;
+    } else if (value.find("current_mit") != std::string::npos) {
+      result.algorithm_backend = AlgorithmBackendId::CurrentMit;
+    }
+    return;
+  }
+}
+
 Arguments parseArguments(int argc, char ** argv)
 {
   Arguments result;
@@ -173,6 +207,18 @@ Arguments parseArguments(int argc, char ** argv)
       // 电机力矩上限；站立吃力时可在 0~97 Nm 内临时放宽。
     } else if (argument == "--torque-limit") {
       result.torque_limit_nm = std::stof(requireValue("--torque-limit"));
+    } else if (argument == "--algorithm") {
+      const std::string backend = requireValue("--algorithm");
+      if (backend == "current_mit" || backend == "mit") {
+        result.algorithm_backend = AlgorithmBackendId::CurrentMit;
+      } else if (backend == "opendog") {
+        result.algorithm_backend = AlgorithmBackendId::OpenDog;
+      } else {
+        usageError("--algorithm 必须是 current_mit 或 opendog");
+      }
+      result.algorithm_explicit = true;
+    } else if (argument == "--algorithm-config") {
+      result.algorithm_config_directory = requireValue("--algorithm-config DIR");
       // 允许完整控制模式真正向电机输出命令。
     } else if (argument == "--enable-output") {
       result.enable_output = true;
@@ -259,6 +305,8 @@ Arguments parseArguments(int argc, char ** argv)
       usageError("未知参数: " + argument);
     }
   }
+
+  loadConfiguredAlgorithm(result);
 
   // 除 IMU-only 外，其余模式都需要完整的 12 电机标定信息。
   if (!result.imu_only && result.calibration_path.empty()) {
@@ -643,6 +691,7 @@ int runImuOnly(const std::string & device, float control_time_step)
 
 int main(int argc, char ** argv)
 {
+  bool ros_initialized = false;
   try {
     // 先解析并验证参数，再打开任何硬件设备。
     const Arguments arguments = parseArguments(argc, argv);
@@ -677,6 +726,18 @@ int main(int argc, char ** argv)
         arguments.poll_feedback_address);
     }
 
+    if (arguments.algorithm_backend == AlgorithmBackendId::OpenDog) {
+#if defined(MYMIT_ENABLE_OPENDOG)
+      // OpenDog 的 OCS2/MPC-MRT 接口和状态估计器属于 ROS 2 算法层；
+      // 当前 MIT 后端不创建 ROS 节点，因此只在选中 OpenDog 时初始化 ROS。
+      rclcpp::init(0, nullptr);
+      ros_initialized = true;
+#else
+      throw std::runtime_error(
+              "当前构建未启用 OpenDog 后端；请配置 MYMIT_OPENDOG_PREFIX 后重新构建");
+#endif
+    }
+
     // 完整模式的底层硬件适配器，统一管理两条 CAN 总线和一个 IMU 串口。
     Dm1HardwareDriver driver(
       arguments.can0, arguments.can1, resolveImuDevice(arguments.imu_device), calibration);
@@ -689,6 +750,8 @@ int main(int argc, char ** argv)
     options.keyboard_control = arguments.keyboard_control;
     options.request_stand_up = arguments.stand_up;
     options.set_zero = arguments.set_zero;
+    options.algorithm_backend = arguments.algorithm_backend;
+    options.algorithm_config_directory = arguments.algorithm_config_directory;
     // HardwareBridge 构造函数还会检查参数组合和安全阈值。
     HardwareBridge bridge(driver, calibration, options);
 
@@ -721,11 +784,21 @@ int main(int argc, char ** argv)
       static_cast<double>(arguments.torque_limit_nm));
     // 进入完整硬件桥：打开设备、执行启动检查，然后运行控制循环。
     const int result = bridge.run(g_stop_requested);
+    if (ros_initialized) {
+#if defined(MYMIT_ENABLE_OPENDOG)
+      rclcpp::shutdown();
+#endif
+    }
     return result;
   } catch (const std::exception & error) {
     // 参数、文件或设备初始化异常统一转换为错误日志和返回码 1。
     imu_log::print(
       imu_log::Level::Error, "DM1 硬件启动失败: %s\n", error.what());
+    if (ros_initialized) {
+#if defined(MYMIT_ENABLE_OPENDOG)
+      rclcpp::shutdown();
+#endif
+    }
     return 1;
   }
 }

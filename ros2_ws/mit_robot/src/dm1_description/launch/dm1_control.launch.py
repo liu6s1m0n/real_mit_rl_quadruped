@@ -5,8 +5,9 @@ from pathlib import Path
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def _desktop_session_environment():
@@ -45,6 +46,18 @@ def generate_launch_description():
             ),
         ),
         DeclareLaunchArgument(
+            "algorithm",
+            default_value="current_mit",
+            description="Controller backend: current_mit or opendog",
+        ),
+        DeclareLaunchArgument(
+            "algorithm_config",
+            default_value=PathJoinSubstitution([
+                FindPackageShare("mymit_robot"), "config", "algorithm"
+            ]),
+            description="OpenDog algorithm configuration directory",
+        ),
+        DeclareLaunchArgument(
             "torque_limit",
             default_value="88",
             description="Hardware simulation torque limit; match the hardware_main run",
@@ -57,6 +70,8 @@ def generate_launch_description():
 def _controller_node(context):
     arguments = [
         "--render-gpu", LaunchConfiguration("render_gpu").perform(context),
+        "--algorithm", LaunchConfiguration("algorithm").perform(context),
+        "--algorithm-config", LaunchConfiguration("algorithm_config").perform(context),
     ]
     hardware_sim = LaunchConfiguration("hardware_sim").perform(context).lower()
     if hardware_sim not in ("true", "false", "1", "0"):

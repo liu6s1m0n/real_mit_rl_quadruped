@@ -41,6 +41,13 @@
 #include "hardware/hardware_bridge.hpp"
 #include "hardware/dm1_hardware_driver.hpp"
 #include "hardware/motor_calibration.hpp"
+#include "control/opendog_algorithm.hpp"
+#include "sensor/imu.hpp"
+#include "sensor/leg.hpp"
+
+#if defined(MYMIT_ENABLE_OPENDOG)
+#include <rclcpp/rclcpp.hpp>
+#endif
 
 namespace mj = ::mujoco;
 
@@ -384,6 +391,225 @@ float synchronizeStandingHeight(
   return previous_slider_height;
 }
 
+void runOpenDogPhysics(
+  mj::Simulate & simulation, mjModel * model, mjData * data,
+  const SimulationActuatorWriter & actuator_writer,
+  const std::string & algorithm_config_directory,
+  std::atomic<float> & standing_height, double & standing_height_slider,
+  std::atomic<int> & pending_motion_command, std::atomic_bool & pending_disable_command,
+  teleop::KeyboardTeleop & keyboard,
+  float slow_walking_forward_speed, float fast_walking_forward_speed,
+  float walking_backward_speed, float walking_lateral_speed, float turning_yaw_rate)
+{
+  OpenDogAlgorithm algorithm(algorithm_config_directory, model->opt.timestep);
+  if (!algorithm.configure() || !algorithm.start()) {
+    throw std::runtime_error("OpenDog MuJoCo backend initialization failed");
+  }
+  SimImu sim_imu(model, data);
+  std::array<std::unique_ptr<SimLeg>, kNumLegs> sim_legs;
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    sim_legs[leg] = std::make_unique<SimLeg>(model, data, static_cast<LegId>(leg));
+  }
+  teleop::OperatorCommandArbiter arbiter;
+  DesiredState<float> desired;
+  desired.valid = true;
+  desired.body_position_world.z() = float(control_config::standing_height);
+  ControlOutput output;
+  bool control_active = false;
+  bool was_enabled = false;
+  bool controller_ready = false;
+  std::size_t consecutive_failures = 0;
+  double previous_simulation_time = data->time;
+  bool keyboard_fault_reported = false;
+  const teleop::VelocityProfile velocity_profile{
+    slow_walking_forward_speed, fast_walking_forward_speed,
+    walking_backward_speed, walking_lateral_speed, turning_yaw_rate};
+  using PhysicsClock = std::chrono::steady_clock;
+  const auto physics_period = std::chrono::duration_cast<PhysicsClock::duration>(
+    std::chrono::duration<double>(model->opt.timestep));
+  auto next_physics_deadline = PhysicsClock::now();
+  bool was_running = false;
+
+  std::printf(
+    "MuJoCo DM1 OpenDog control started: dt=%.4f s, default mode=OpenDog WBC+NMPC\n",
+    model->opt.timestep);
+
+  while (!simulation.exitrequest.load()) {
+    std::unique_lock<std::recursive_mutex> lock(simulation.mtx);
+    const bool simulation_running = simulation.run != 0;
+    if (data->time + 0.5 * model->opt.timestep < previous_simulation_time) {
+      mj_forward(model, data);
+      algorithm.reset();
+      desired = DesiredState<float>{};
+      desired.valid = true;
+      desired.body_position_world.z() = float(control_config::standing_height);
+      output = ControlOutput{};
+      control_active = false;
+      was_enabled = false;
+      controller_ready = false;
+      consecutive_failures = 0;
+      arbiter.lock();
+      std::printf("MuJoCo reset detected: OpenDog controller reset; motors locked\n");
+    }
+    previous_simulation_time = data->time;
+    const float commanded_height = std::clamp(
+      standing_height.load(), float(control_config::minimum_standing_height),
+      float(control_config::maximum_standing_height));
+    standing_height.store(commanded_height);
+    standing_height_slider = commanded_height;
+
+    const bool pending_disable = simulation_running ?
+      pending_disable_command.exchange(false) : false;
+    const int pending_command = simulation_running ?
+      pending_motion_command.exchange(kNoMotionCommand) : kNoMotionCommand;
+    std::vector<teleop::OperatorCommand> commands;
+    if (pending_disable) {commands.push_back({teleop::CommandType::DisableMotors});}
+    const auto window_commands = keyboard.consumeWindow();
+    commands.insert(commands.end(), window_commands.begin(), window_commands.end());
+    const auto terminal_commands = keyboard.consume();
+    commands.insert(commands.end(), terminal_commands.begin(), terminal_commands.end());
+    if (pending_command == kForwardFast) {
+      teleop::OperatorCommand command;
+      command.type = teleop::CommandType::Motion;
+      command.motion = teleop::Motion::ForwardFast;
+      command.received_at = std::chrono::steady_clock::now();
+      commands.push_back(command);
+    } else {
+      int key = 0;
+      switch (pending_command) {
+        case kEnableMotors: key = 'U'; break;
+        case kDisableMotors: key = '0'; break;
+        case kStand: key = '1'; break;
+        case kMarchInPlace: key = '2'; break;
+        case kForwardSlow: key = 'W'; break;
+        case kBackward: key = 'S'; break;
+        case kLeft: key = 'A'; break;
+        case kRight: key = 'D'; break;
+        case kRotateCounterClockwise: key = 'Q'; break;
+        case kRotateClockwise: key = 'E'; break;
+        case kProneDown: key = 'P'; break;
+        case kStop: key = ' '; break;
+        default: break;
+      }
+      if (key != 0) {commands.push_back(*teleop::decodeKey(key));}
+    }
+    arbiter.applyBatch(commands);
+    if (keyboard.available() && !keyboard.healthy() && !keyboard_fault_reported) {
+      keyboard_fault_reported = true;
+      std::fprintf(stderr, "OpenDog MuJoCo keyboard input stopped; GUI control remains active\n");
+    }
+    arbiter.expireMotion(std::chrono::steady_clock::now());
+    if (arbiter.takeHelpRequest()) {
+      std::printf("OpenDog keys: U enable, 0 disable, 1 stand, W/S/A/D/Q/E locomotion, Space stop, Esc exit, H help\n");
+    }
+    if (arbiter.quitRequested()) {
+      simulation.exitrequest.store(1);
+      lock.unlock();
+      break;
+    }
+    if (arbiter.takeEnableRequest()) {
+      arbiter.markEnabled();
+      algorithm.reset();
+      output = ControlOutput{};
+      control_active = false;
+      was_enabled = true;
+      controller_ready = false;
+      std::printf("OpenDog MuJoCo motors unlocked; press Stand up\n");
+    }
+    if (arbiter.state() != teleop::MotorOutputState::Enabled) {
+      if (was_enabled) {algorithm.reset();}
+      was_enabled = false;
+      control_active = false;
+      controller_ready = false;
+      consecutive_failures = 0;
+    }
+    if (arbiter.takeStandUpRequest() &&
+      arbiter.state() == teleop::MotorOutputState::Enabled)
+    {
+      desired.mode = ControlMode::StandUp;
+      desired.body_position_world.z() = commanded_height;
+      desired.valid = true;
+      control_active = true;
+      std::printf("OpenDog stand-up request accepted\n");
+    }
+    if (arbiter.takeStopRequest()) {
+      desired.mode = ControlMode::BalanceStand;
+      desired.body_velocity_world.setZero();
+      desired.body_angular_velocity.setZero();
+      if (output.estimate.valid) {
+        desired.body_position_world.x() = output.estimate.position_world.x();
+        desired.body_position_world.y() = output.estimate.position_world.y();
+        desired.body_rpy.z() = output.estimate.rpy.z();
+      }
+      desired.body_position_world.z() = commanded_height;
+      desired.valid = true;
+      control_active = true;
+    }
+    if (arbiter.takeProneDownRequest()) {
+      std::printf("OpenDog MuJoCo target trajectory has no prone-down command\n");
+    }
+    if (arbiter.state() == teleop::MotorOutputState::Enabled && arbiter.motionActive()) {
+      const auto velocity = teleop::velocityForMotion(arbiter.motion(), velocity_profile);
+      const Vec3<float> body_velocity(velocity.forward, velocity.lateral, 0.0F);
+      desired.body_velocity_world =
+        output.estimate.orientation_world_from_body * body_velocity;
+      desired.body_angular_velocity.z() = velocity.yaw;
+      desired.body_position_world.z() = commanded_height;
+      desired.mode = ControlMode::Locomotion;
+      desired.valid = true;
+      control_active = true;
+    }
+
+    if (simulation_running && control_active) {
+      ControlInputSnapshot input;
+      input.imu = sim_imu.read();
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        input.joints[leg] = sim_legs[leg]->read();
+      }
+      input.desired = desired;
+      input.timestamp = static_cast<float>(data->time);
+      const bool control_valid = algorithm.compute(input, output);
+      if (control_valid) {
+        consecutive_failures = 0;
+        if (!controller_ready) {
+          controller_ready = true;
+          std::printf("OpenDog MuJoCo WBC+NMPC is producing valid commands\n");
+        }
+      } else if (++consecutive_failures % 500 == 0) {
+        std::fprintf(stderr, "OpenDog rejected %zu consecutive simulation frames\n", consecutive_failures);
+      }
+      actuator_writer.write(output, data,
+        arbiter.state() == teleop::MotorOutputState::Enabled && control_valid);
+      mj_step(model, data);
+    } else if (simulation_running) {
+      actuator_writer.write(output, data, false);
+      mj_step(model, data);
+    } else {
+      actuator_writer.write(output, data, false);
+      mj_forward(model, data);
+    }
+    lock.unlock();
+    if (simulation_running) {
+      const auto now = PhysicsClock::now();
+      if (!was_running) {next_physics_deadline = now;}
+      next_physics_deadline += physics_period;
+      if (now < next_physics_deadline) {
+        std::this_thread::sleep_until(next_physics_deadline);
+      } else if (now - next_physics_deadline > physics_period * 4) {
+        next_physics_deadline = now;
+        std::this_thread::yield();
+      } else {
+        std::this_thread::yield();
+      }
+    } else {
+      next_physics_deadline = PhysicsClock::now();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    was_running = simulation_running;
+  }
+  algorithm.stop();
+}
+
 /**
  * @brief 运行 MuJoCo 物理、状态估计和机器人控制循环。
  *
@@ -396,6 +622,7 @@ float synchronizeStandingHeight(
  */
 void runPhysics(
   mj::Simulate & simulation, const std::string & scene_path, RobotType robot_type,
+  AlgorithmBackendId algorithm_backend, const std::string & algorithm_config_directory,
   std::atomic<float> & standing_height, double & standing_height_slider,
   std::atomic<int> & pending_motion_command, std::atomic_bool & pending_disable_command,
   teleop::KeyboardTeleop & keyboard,
@@ -426,13 +653,30 @@ void runPhysics(
     mj_forward(model, data);
     // GUI 与无界面回归测试共用同一个执行器写入实现，避免双重位置控制。
     const SimulationActuatorWriter actuator_writer(model);
-    // RobotRunner 负责状态估计、步态/WBC 等控制流程；本文件只负责仿真桥接。
-    RobotRunner runner(model, data, robot_type);
-    StandingHeightReceiver height_receiver;
-    teleop::OperatorCommandArbiter arbiter;
+    // Preserve the original MIT initialization order: RobotRunner must finish
+    // binding MuJoCo state before Simulate receives the model/data pointers.
+    std::unique_ptr<RobotRunner> mit_runner;
+    if (algorithm_backend == AlgorithmBackendId::CurrentMit) {
+      mit_runner = std::make_unique<RobotRunner>(model, data, robot_type);
+    }
 
     // 将模型和数据交给 MuJoCo 的渲染器，使窗口能够显示当前物理状态。
     simulation.Load(model, data, scene_path.c_str());
+    if (algorithm_backend == AlgorithmBackendId::OpenDog) {
+      runOpenDogPhysics(
+        simulation, model, data, actuator_writer, algorithm_config_directory,
+        standing_height, standing_height_slider, pending_motion_command,
+        pending_disable_command, keyboard, slow_walking_forward_speed,
+        fast_walking_forward_speed, walking_backward_speed,
+        walking_lateral_speed, turning_yaw_rate);
+      return;
+    }
+
+    // RobotRunner 负责当前 MIT 的状态估计、步态/WBC 等控制流程；原有
+    // current_mit 分支完整保留，OpenDog 只在上面的显式分支中运行。
+    RobotRunner & runner = *mit_runner;
+    StandingHeightReceiver height_receiver;
+    teleop::OperatorCommandArbiter arbiter;
     std::printf(
       "MuJoCo %s control started: dt=%.4f s, slow/fast=%.2f/%.2f m/s, "
       "backward=%.2f m/s, lateral=%.2f m/s, turning=%.2f rad/s, "
@@ -747,6 +991,8 @@ void runHardwarePhysics(
     options.keyboard_control = true;
     // Keep actual hardware timing, heights, safety thresholds and command defaults.
     options.torque_limit_nm = settings.torque_limit_nm;
+    options.algorithm_backend = settings.algorithm_backend;
+    options.algorithm_config_directory = settings.algorithm_config_directory;
     options.command_source = [&]() {
       auto commands = keyboard.consumeWindow();
       auto terminal = keyboard.consume();
@@ -876,6 +1122,18 @@ SimulationBridge::SimulationBridge(std::string scene_path, RobotType robot_type)
   if (scene_path_.empty()) {throw std::invalid_argument("scene path must not be empty");}
 }
 
+void SimulationBridge::setAlgorithm(
+  AlgorithmBackendId backend, std::string config_directory)
+{
+  if (config_directory.empty()) {
+    throw std::invalid_argument("algorithm config directory must not be empty");
+  }
+  algorithm_backend_ = backend;
+  algorithm_config_directory_ = std::move(config_directory);
+  hardware_simulation_.algorithm_backend = backend;
+  hardware_simulation_.algorithm_config_directory = algorithm_config_directory_;
+}
+
 /**
  * @brief 设置站立高度，并同步更新 GUI 滑块的初始值。
  */
@@ -997,6 +1255,7 @@ int SimulationBridge::run()
   } else {
     physics = std::thread(
       runPhysics, std::ref(*simulation), std::cref(scene_path_), robot_type_,
+      algorithm_backend_, std::cref(algorithm_config_directory_),
       std::ref(standing_height_), std::ref(standing_height_slider_),
       std::ref(pending_motion_command_), std::ref(pending_disable_command_),
       std::ref(keyboard),

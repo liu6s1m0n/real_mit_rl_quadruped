@@ -1,0 +1,11 @@
+# Second algorithm configuration for the ROS 2 OpenDog backend.
+# Mechanical geometry, joint zero, directions and limits remain those of the
+# current DM1 model; this file only selects the algorithm and its source data.
+algorithm:
+  active_backend: current_mit
+
+opendog:
+  urdf_file: "dm1_opendog.urdf"
+  task_file: "opendog_task.info"
+  reference_file: "opendog_reference.info"
+  gait_file: "opendog_gait.info"

@@ -14,6 +14,9 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#if defined(MYMIT_ENABLE_OPENDOG)
+#include <rclcpp/rclcpp.hpp>
+#endif
 
 #include "hardware/hardware_bridge.hpp"
 #include "hardware/dm_motor_driver.hpp"
@@ -115,6 +118,7 @@ public:
         seen_positions[index] = true;
       }
       last_positions[index] = frame.position;
+      last_kp[index] = frame.kp;
     }
     if (stop_after_send_count > 0 && send_count >= stop_after_send_count) {
       if (!stop_requested_.load()) {disable_count_before_stop = disable_count;}
@@ -205,6 +209,7 @@ public:
   float startup_offset = 0.1F;
   std::array<float, kNumJoints> first_positions{};
   std::array<float, kNumJoints> last_positions{};
+  std::array<float, kNumJoints> last_kp{};
   std::array<bool, kNumJoints> seen_positions{};
 
 private:
@@ -224,6 +229,40 @@ dm1_hardware::Dm1MitInterface::CalibrationArray calibration()
   return result;
 }
 }  // namespace
+
+#if defined(MYMIT_ENABLE_OPENDOG)
+TEST(HardwareBridgeTest, OpenDogKeyboardUsesSharedHardwareOutput)
+{
+  rclcpp::init(0, nullptr);
+  {
+    std::atomic_bool stop{false};
+    StartupZeroHardware hardware(stop);
+    hardware.stop_after_read_count = 40;
+    for (std::size_t joint = 0; joint < kNumJoints; ++joint) {
+      hardware.seen_positions[joint] = true;
+      hardware.last_positions[joint] = std::array<float, 3>{0.0F, -0.282961F, 0.739729F}[joint % 3];
+    }
+    HardwareBridge::Options options;
+    options.keyboard_control = true;
+    options.algorithm_backend = AlgorithmBackendId::OpenDog;
+    options.algorithm_config_directory = MYMIT_OPENDOG_TEST_CONFIG;
+    options.command_source = [frame = 0]() mutable {
+        ++frame;
+        const int key = frame == 1 ? 'U' : frame == 3 ? '1' : frame == 8 ? '2' :
+          frame == 20 ? ' ' : 0;
+        return key ? std::vector<teleop::OperatorCommand>{*teleop::decodeKey(key)} :
+          std::vector<teleop::OperatorCommand>{};
+      };
+    HardwareBridge bridge(hardware, calibration(), options);
+    ASSERT_EQ(bridge.run(stop), 0);
+    EXPECT_GT(hardware.send_count, 0);
+    EXPECT_EQ(hardware.zero_count, 0);
+    EXPECT_EQ(hardware.enable_count, 1);
+    for (const auto gain : hardware.last_kp) {EXPECT_NEAR(gain, 4.0F, 1e-5F);}
+  }
+  rclcpp::shutdown();
+}
+#endif
 
 TEST(HardwareBridgeTest, ReadOnlyStartupDoesNotResetMotorZeros)
 {
