@@ -40,10 +40,10 @@ vector_t WeightedWbc::update(const vector_t& stateDesired, const vector_t& input
   qpProblem.setOptions(options);
   int nWsr = 20;
 
-  qpProblem.init(H.data(), g.data(), A.data(), nullptr, nullptr, lbA.data(), ubA.data(), nWsr);
+  lastSolveStatus_ = qpProblem.init(H.data(), g.data(), A.data(), nullptr, nullptr, lbA.data(), ubA.data(), nWsr);
   vector_t qpSol(getNumDecisionVars());
 
-  qpProblem.getPrimalSolution(qpSol.data());
+  lastSolutionStatus_ = qpProblem.getPrimalSolution(qpSol.data());
   return qpSol;
 }
 

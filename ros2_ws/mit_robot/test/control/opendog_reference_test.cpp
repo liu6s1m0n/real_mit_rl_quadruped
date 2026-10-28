@@ -1,6 +1,7 @@
 #include <string>
 
 #include <gtest/gtest.h>
+#include <ocs2_core/misc/LoadData.h>
 #include <ocs2_oc/synchronized_module/ReferenceManager.h>
 
 #include "control/opendog_reference.hpp"
@@ -25,6 +26,8 @@ ocs2::SystemObservation observation()
 
 TEST(OpenDogReference, KeepsOriginalVelocityTrajectoryFieldOrder)
 {
+  double horizon = 0.0;
+  ocs2::loadData::loadCppDataType(config("opendog_task.info"), "mpc.timeHorizon", horizon);
   OpenDogReference reference(config("opendog_reference.info"), config("opendog_task.info"));
   auto state = observation();
   DesiredState<float> desired;
@@ -35,11 +38,11 @@ TEST(OpenDogReference, KeepsOriginalVelocityTrajectoryFieldOrder)
   desired.body_angular_velocity.z() = 0.3F;
   auto target = reference.update(desired, state);
   ASSERT_EQ(target.stateTrajectory.size(), 2U);
-  EXPECT_DOUBLE_EQ(target.timeTrajectory.back(), 3.0);
-  EXPECT_NEAR(target.stateTrajectory.back()(6), 1.2, 1e-7);
-  EXPECT_NEAR(target.stateTrajectory.back()(7), 1.9, 1e-7);
+  EXPECT_DOUBLE_EQ(target.timeTrajectory.back(), state.time + horizon);
+  EXPECT_NEAR(target.stateTrajectory.back()(6), 1.0 + 0.2 * horizon, 1e-7);
+  EXPECT_NEAR(target.stateTrajectory.back()(7), 2.0 - 0.1 * horizon, 1e-7);
   EXPECT_NEAR(target.stateTrajectory.back()(8), 0.28, 1e-7);
-  EXPECT_NEAR(target.stateTrajectory.back()(9), 0.7, 1e-7);
+  EXPECT_NEAR(target.stateTrajectory.back()(9), 0.4 + 0.3 * horizon, 1e-7);
   EXPECT_NEAR(target.stateTrajectory.back()(0), 0.2, 1e-7);
   EXPECT_NEAR(target.stateTrajectory.back()(1), -0.1, 1e-7);
   EXPECT_DOUBLE_EQ(target.stateTrajectory.back()(3), 0.0);

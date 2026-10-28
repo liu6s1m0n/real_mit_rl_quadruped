@@ -93,6 +93,7 @@ struct OpenDogAlgorithm::Impl
 
   std::string config_directory;
   Timing timing;
+  CommandSettings command_settings;
   std::chrono::steady_clock::time_point last_timing_log{};
   double max_compute_ms = 0.0;
   std::atomic<double> last_mpc_ms{0.0};
@@ -101,6 +102,8 @@ struct OpenDogAlgorithm::Impl
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> executor;
   std::thread mpc_thread;
   std::atomic<bool> mpc_running{false};
+  std::atomic<bool> initial_policy_ready{false};
+  ocs2::vector_t initial_state;
   std::exception_ptr mpc_error;
   std::shared_ptr<legged::LeggedInterface> legged_interface;
   std::unique_ptr<ocs2::SqpMpc> mpc;
@@ -114,7 +117,6 @@ struct OpenDogAlgorithm::Impl
   double initial_period;
   float joint_kp = 4.0F;
   float joint_kd = 5.0F;
-  float rear_calf_kp = 4.0F;
   ocs2::SystemObservation observation;
   ocs2::vector_t measured_rbd_state;
   double time = 0.0;
@@ -144,6 +146,11 @@ void OpenDogAlgorithm::setMotionRequest(teleop::Motion motion, std::uint64_t seq
 const OpenDogAlgorithm::Timing & OpenDogAlgorithm::timing() const noexcept
 {
   return impl_->timing;
+}
+
+const OpenDogAlgorithm::CommandSettings & OpenDogAlgorithm::commandSettings() const noexcept
+{
+  return impl_->command_settings;
 }
 
 bool OpenDogAlgorithm::configure()
@@ -197,9 +204,17 @@ bool OpenDogAlgorithm::configure()
   ocs2::loadData::loadCppDataType(task, "hardware_output.kd", impl_->joint_kd);
   boost::property_tree::ptree output_settings;
   boost::property_tree::read_info(task, output_settings);
-  impl_->rear_calf_kp = output_settings.get<float>("hardware_output.rear_calf_kp", impl_->joint_kp);
-  std::printf("[OpenDog][OUTPUT] kp=%.3f kd=%.3f rear_calf_kp=%.3f\n",
-    impl_->joint_kp, impl_->joint_kd, impl_->rear_calf_kp);
+  ocs2::loadData::loadCppDataType(reference, "comHeight", impl_->command_settings.standing_height);
+  auto & velocity = impl_->command_settings.velocity;
+  velocity.forward = output_settings.get<float>("hardware_command.forward", velocity.forward);
+  velocity.forward_fast = output_settings.get<float>("hardware_command.forward_fast", velocity.forward_fast);
+  velocity.backward = output_settings.get<float>("hardware_command.backward", velocity.backward);
+  velocity.lateral = output_settings.get<float>("hardware_command.lateral", velocity.lateral);
+  velocity.yaw = output_settings.get<float>("hardware_command.yaw_rate", velocity.yaw);
+  impl_->command_settings.joint_kp = impl_->joint_kp;
+  impl_->command_settings.joint_kd = impl_->joint_kd;
+  std::printf("[OpenDog][OUTPUT] kp=%.3f kd=%.3f\n",
+    impl_->joint_kp, impl_->joint_kd);
   impl_->legged_interface->getSwitchedModelReferenceManagerPtr()->attachRosNode(impl_->node);
   impl_->executor = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
   impl_->executor->add_node(impl_->node);
@@ -240,7 +255,9 @@ bool OpenDogAlgorithm::compute(
   }
 
   const auto compute_start = std::chrono::steady_clock::now();
-  impl_->timing.initial_policy = !impl_->initialized;
+  const bool policy_ready = impl_->initial_policy_ready.load();
+  impl_->timing.initial_policy = !policy_ready;
+  if (policy_ready) {impl_->mrt->updatePolicy();}
   const auto & info = impl_->legged_interface->getCentroidalModelInfo();
   ocs2::vector_t joint_position(info.actuatedDofNum);
   ocs2::vector_t joint_velocity(info.actuatedDofNum);
@@ -256,7 +273,7 @@ bool OpenDogAlgorithm::compute(
   }
 
   impl_->state_estimate->updateJointStates(joint_position, joint_velocity);
-  const auto mode = impl_->initialized ?
+  const auto mode = impl_->initialized && !impl_->timing.initial_policy ?
     impl_->mrt->getPolicy().modeSchedule_.modeAtTime(impl_->time) :
     ocs2::legged_robot::ModeNumber::STANCE;
   impl_->state_estimate->updateContact(ocs2::legged_robot::modeNumber2StanceLeg(mode));
@@ -279,22 +296,14 @@ bool OpenDogAlgorithm::compute(
   impl_->observation.state(9) = yaw_last + std::atan2(std::sin(yaw_delta), std::cos(yaw_delta));
   impl_->observation.mode = impl_->state_estimate->getMode();
 
-  // The shared desired-state snapshot is the command boundary for both
-  // algorithms.  Keep the OpenDog reference manager current without routing
-  // commands through its original controller_manager hardware plugin.
   impl_->mrt->setCurrentObservation(impl_->observation);
-  impl_->mrt->getReferenceManager().setTargetTrajectories(
-    impl_->reference->update(input.desired, impl_->observation));
-  impl_->gait_command->setMode(input.desired.mode);
-
   if (!impl_->initialized) {
+    // LeggedController::starting(): first solve holds the measured state.
+    // Run it on the existing MPC worker so hardware keeps its 2 ms cycle.
     impl_->observation.input.setZero();
-    while (!impl_->mrt->initialPolicyReceived()) {
-      const auto solve_start = std::chrono::steady_clock::now();
-      impl_->mrt->advanceMpc();
-      impl_->last_mpc_ms.store(std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - solve_start).count());
-    }
+    impl_->initial_state = impl_->observation.state;
+    impl_->mrt->getReferenceManager().setTargetTrajectories(
+      {{impl_->observation.time}, {impl_->initial_state}, {impl_->observation.input}});
     impl_->initialized = true;
     impl_->mpc_error = nullptr;
     impl_->mpc_running.store(true);
@@ -307,6 +316,7 @@ bool OpenDogAlgorithm::compute(
                 impl_->mrt->advanceMpc();
                 impl_->last_mpc_ms.store(std::chrono::duration<double, std::milli>(
                   std::chrono::steady_clock::now() - solve_start).count());
+                impl_->initial_policy_ready.store(impl_->mrt->initialPolicyReceived());
               }, impl_->legged_interface->mpcSettings().mpcDesiredFrequency_);
           }
         } catch (const std::exception &) {
@@ -317,22 +327,29 @@ bool OpenDogAlgorithm::compute(
     ocs2::setThreadPriority(
       impl_->legged_interface->sqpSettings().threadPriority, impl_->mpc_thread);
   }
-  impl_->mrt->updatePolicy();
-
-  ocs2::vector_t optimized_state;
-  ocs2::vector_t optimized_input;
-  std::size_t planned_mode = 0;
-  impl_->mrt->evaluatePolicy(
-    impl_->observation.time, impl_->observation.state,
-    optimized_state, optimized_input, planned_mode);
-  impl_->observation.input = optimized_input;
-  const auto wbc_start = std::chrono::steady_clock::now();
-  const auto wbc_solution = impl_->wbc->update(
-    optimized_state, optimized_input, impl_->measured_rbd_state,
-    planned_mode, period.seconds());
-  impl_->timing.wbc_ms = std::chrono::duration<double, std::milli>(
-    std::chrono::steady_clock::now() - wbc_start).count();
-  const auto torque = wbc_solution.tail(static_cast<Eigen::Index>(kNumJoints));
+  ocs2::vector_t optimized_state = impl_->initial_state;
+  ocs2::vector_t optimized_input = ocs2::vector_t::Zero(info.inputDim);
+  ocs2::vector_t torque = ocs2::vector_t::Zero(kNumJoints);
+  ocs2::vector_t wbc_solution;
+  std::size_t planned_mode = ocs2::legged_robot::ModeNumber::STANCE;
+  impl_->timing.wbc_ms = 0.0;
+  if (policy_ready) {
+    // Start the requested trajectory only after the initial holding policy.
+    impl_->mrt->getReferenceManager().setTargetTrajectories(
+      impl_->reference->update(input.desired, impl_->observation));
+    impl_->gait_command->setMode(input.desired.mode);
+    impl_->mrt->evaluatePolicy(
+      impl_->observation.time, impl_->observation.state,
+      optimized_state, optimized_input, planned_mode);
+    impl_->observation.input = optimized_input;
+    const auto wbc_start = std::chrono::steady_clock::now();
+    wbc_solution = impl_->wbc->update(
+      optimized_state, optimized_input, impl_->measured_rbd_state,
+      planned_mode, period.seconds());
+    impl_->timing.wbc_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - wbc_start).count();
+    torque = wbc_solution.tail(static_cast<Eigen::Index>(kNumJoints));
+  }
   const auto position = ocs2::centroidal_model::getJointAngles(
     optimized_state, info);
   const auto velocity = ocs2::centroidal_model::getJointVelocities(
@@ -363,11 +380,6 @@ bool OpenDogAlgorithm::compute(
     command.timestamp = static_cast<float>(input.timestamp);
     command.sequence = impl_->command_sequence;
     command.kp.setConstant(impl_->joint_kp);
-    if (current_leg == static_cast<std::size_t>(LegId::RR) ||
-      current_leg == static_cast<std::size_t>(LegId::RL))
-    {
-      command.kp[2] = impl_->rear_calf_kp;
-    }
     command.kd.setConstant(impl_->joint_kd);
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t opendog_index = opendog_leg * kJointsPerLeg + joint;
@@ -384,10 +396,10 @@ bool OpenDogAlgorithm::compute(
   const auto now = std::chrono::steady_clock::now();
   timing.compute_ms = std::chrono::duration<double, std::milli>(now - compute_start).count();
   timing.mpc_ms = impl_->last_mpc_ms.load();
-  timing.policy_age_ms = 1000.0 *
-    (impl_->observation.time - impl_->mrt->getCommand().mpcInitObservation_.time);
-  timing.horizon_remaining_ms = 1000.0 *
-    (impl_->mrt->getPolicy().timeTrajectory_.back() - impl_->observation.time);
+  timing.policy_age_ms = policy_ready ? 1000.0 *
+    (impl_->observation.time - impl_->mrt->getCommand().mpcInitObservation_.time) : 0.0;
+  timing.horizon_remaining_ms = policy_ready ? 1000.0 *
+    (impl_->mrt->getPolicy().timeTrajectory_.back() - impl_->observation.time) : 0.0;
   timing.planned_mode = planned_mode;
   impl_->max_compute_ms = std::max(impl_->max_compute_ms, timing.compute_ms);
   if (now - impl_->last_timing_log >= std::chrono::seconds(1)) {
@@ -395,6 +407,20 @@ bool OpenDogAlgorithm::compute(
       "mpc_ms=%.3f policy_age_ms=%.3f horizon_remaining_ms=%.3f monitor_only=true\n",
       timing.compute_ms, impl_->max_compute_ms, timing.wbc_ms, timing.mpc_ms,
       timing.policy_age_ms, timing.horizon_remaining_ms);
+    if (policy_ready) {
+      std::printf("[OpenDog][WBC] solve_status=%d solution_status=%d mode=%zu finite=%s",
+        impl_->wbc->lastSolveStatus(), impl_->wbc->lastSolutionStatus(), planned_mode,
+        wbc_solution.allFinite() ? "true" : "false");
+      for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+        const auto index = 3 * impl_->opendog_leg_for_current[leg];
+        std::printf(" leg=%zu force_des=(%.3f,%.3f,%.3f) force_wbc=(%.3f,%.3f,%.3f)",
+          leg, optimized_input(index), optimized_input(index + 1), optimized_input(index + 2),
+          wbc_solution(info.generalizedCoordinatesNum + index),
+          wbc_solution(info.generalizedCoordinatesNum + index + 1),
+          wbc_solution(info.generalizedCoordinatesNum + index + 2));
+      }
+      std::printf(" monitor_only=true\n");
+    }
     impl_->last_timing_log = now;
     impl_->max_compute_ms = 0.0;
   }
@@ -412,6 +438,7 @@ void OpenDogAlgorithm::stop() noexcept
   if (impl_->reference) {impl_->reference->reset();}
   if (impl_->gait_command) {impl_->gait_command->reset();}
   impl_->initialized = false;
+  impl_->initial_policy_ready.store(false);
 #endif
 }
 

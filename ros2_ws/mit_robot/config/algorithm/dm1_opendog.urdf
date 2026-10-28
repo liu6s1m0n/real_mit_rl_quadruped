@@ -3,8 +3,8 @@
   <link name="base">
     <inertial>
       <origin xyz="-0.001955 0.002743 -0.068608" rpy="0 0 0" />
-      <mass value="5.528134778326" />
-      <inertia ixx="0.028868805821" ixy="0.000061788360" ixz="-0.000118762043" iyy="0.065085611833" iyz="0.000218265376" izz="0.082712948320" />
+      <mass value="6.889103" />
+      <inertia ixx="0.035976" ixy="0.000077" ixz="-0.000148" iyy="0.081109" iyz="0.000272" izz="0.103076" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -41,8 +41,8 @@
   <link name="LF_hip">
     <inertial>
       <origin xyz="0.047560000000 -0.010434000000 -0.000046000000" rpy="0 0 0" />
-      <mass value="0.566780616299" />
-      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+      <mass value="0.706316" />
+      <inertia ixx="0.000403" ixy="0" ixz="0" iyy="0.000535" iyz="0" izz="0.000446" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -71,8 +71,8 @@
   <link name="LF_thigh">
     <inertial>
       <origin xyz="-0.023554000000 0.050542000000 0.001956000000" rpy="0 0 0" />
-      <mass value="0.784107130653" />
-      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+      <mass value="0.977146" />
+      <inertia ixx="0.000887" ixy="0" ixz="0" iyy="0.003756" iyz="0" izz="0.003918" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -101,8 +101,8 @@
   <link name="LF_calf">
     <inertial>
       <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
-      <mass value="0.192776474180" />
-      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+      <mass value="0.240236" />
+      <inertia ixx="0.000969" ixy="0" ixz="0" iyy="0.005316" iyz="0" izz="0.004359" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -131,8 +131,8 @@
   <link name="LF_FOOT">
     <inertial>
       <origin xyz="-0.000269 -0.0002 -0.000005" rpy="0 0 0" />
-      <mass value="0.024302084286" />
-      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+      <mass value="0.030285" />
+      <inertia ixx="0.000008" ixy="0" ixz="0" iyy="0.000005" iyz="0" izz="0.000008" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -189,8 +189,8 @@
   <link name="LH_hip">
     <inertial>
       <origin xyz="-0.047560000000 -0.010434000000 -0.000046000000" rpy="0 0 0" />
-      <mass value="0.566780616299" />
-      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+      <mass value="0.706316" />
+      <inertia ixx="0.000403" ixy="0" ixz="0" iyy="0.000535" iyz="0" izz="0.000446" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -219,8 +219,8 @@
   <link name="LH_thigh">
     <inertial>
       <origin xyz="-0.023554000000 0.050542000000 0.001956000000" rpy="0 0 0" />
-      <mass value="0.784107130653" />
-      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+      <mass value="0.977146" />
+      <inertia ixx="0.000887" ixy="0" ixz="0" iyy="0.003756" iyz="0" izz="0.003918" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -249,8 +249,8 @@
   <link name="LH_calf">
     <inertial>
       <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
-      <mass value="0.192776474180" />
-      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+      <mass value="0.240236" />
+      <inertia ixx="0.000969" ixy="0" ixz="0" iyy="0.005316" iyz="0" izz="0.004359" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -279,8 +279,8 @@
   <link name="LH_FOOT">
     <inertial>
       <origin xyz="-0.000269 -0.0002 -0.000005" rpy="0 0 0" />
-      <mass value="0.024302084286" />
-      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+      <mass value="0.030285" />
+      <inertia ixx="0.000008" ixy="0" ixz="0" iyy="0.000005" iyz="0" izz="0.000008" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -337,8 +337,8 @@
   <link name="RF_hip">
     <inertial>
       <origin xyz="0.047560000000 0.010434000000 -0.000046000000" rpy="0 0 0" />
-      <mass value="0.566780616299" />
-      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+      <mass value="0.706316" />
+      <inertia ixx="0.000403" ixy="0" ixz="0" iyy="0.000535" iyz="0" izz="0.000446" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -367,8 +367,8 @@
   <link name="RF_thigh">
     <inertial>
       <origin xyz="-0.023554000000 -0.050542000000 0.001956000000" rpy="0 0 0" />
-      <mass value="0.784107130653" />
-      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+      <mass value="0.977146" />
+      <inertia ixx="0.000887" ixy="0" ixz="0" iyy="0.003756" iyz="0" izz="0.003918" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -397,8 +397,8 @@
   <link name="RF_calf">
     <inertial>
       <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
-      <mass value="0.192776474180" />
-      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+      <mass value="0.240236" />
+      <inertia ixx="0.000969" ixy="0" ixz="0" iyy="0.005316" iyz="0" izz="0.004359" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -427,8 +427,8 @@
   <link name="RF_FOOT">
     <inertial>
       <origin xyz="-0.000269 0.0002 -0.000005" rpy="0 0 0" />
-      <mass value="0.024302084286" />
-      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+      <mass value="0.030285" />
+      <inertia ixx="0.000008" ixy="0" ixz="0" iyy="0.000005" iyz="0" izz="0.000008" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -485,8 +485,8 @@
   <link name="RH_hip">
     <inertial>
       <origin xyz="-0.047560000000 0.010434000000 -0.000046000000" rpy="0 0 0" />
-      <mass value="0.566780616299" />
-      <inertia ixx="0.000323385833" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000429308737" iyz="0.000000000000" izz="0.000357891022" />
+      <mass value="0.706316" />
+      <inertia ixx="0.000403" ixy="0" ixz="0" iyy="0.000535" iyz="0" izz="0.000446" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -515,8 +515,8 @@
   <link name="RH_thigh">
     <inertial>
       <origin xyz="-0.023554000000 -0.050542000000 0.001956000000" rpy="0 0 0" />
-      <mass value="0.784107130653" />
-      <inertia ixx="0.000711769812" ixy="0.000000000000" ixz="0.000000000000" iyy="0.003013988066" iyz="0.000000000000" izz="0.003143984356" />
+      <mass value="0.977146" />
+      <inertia ixx="0.000887" ixy="0" ixz="0" iyy="0.003756" iyz="0" izz="0.003918" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -545,8 +545,8 @@
   <link name="RH_calf">
     <inertial>
       <origin xyz="-0.010235 0.000248 -0.054204" rpy="0 0 0" />
-      <mass value="0.192776474180" />
-      <inertia ixx="0.000777570404" ixy="0.000000000000" ixz="0.000000000000" iyy="0.004265804196" iyz="0.000000000000" izz="0.003497863147" />
+      <mass value="0.240236" />
+      <inertia ixx="0.000969" ixy="0" ixz="0" iyy="0.005316" iyz="0" izz="0.004359" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
@@ -575,8 +575,8 @@
   <link name="RH_FOOT">
     <inertial>
       <origin xyz="-0.000269 0.0002 -0.000005" rpy="0 0 0" />
-      <mass value="0.024302084286" />
-      <inertia ixx="0.000006419570" ixy="0.000000000000" ixz="0.000000000000" iyy="0.000004012231" iyz="0.000000000000" izz="0.000006419570" />
+      <mass value="0.030285" />
+      <inertia ixx="0.000008" ixy="0" ixz="0" iyy="0.000005" iyz="0" izz="0.000008" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />

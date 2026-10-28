@@ -155,6 +155,9 @@ FSM_StateName FSM_State_Locomotion<T>::checkTransition()
     applied_gait_ == GaitType::TWO_LEG_STAND_REVERSE) &&
     this->_data->locomotion_gait == applied_gait_ &&
     this->_data->gait_scheduler->gait_data.initial_phase >= T(1) &&
+    // 相位先于 run() 更新；必须等摆动腿经过落地确认并退出摆动态。
+    std::none_of(swing_active_.begin(), swing_active_.end(),
+      [](bool active) {return active;}) &&
     std::none_of(touchdown_waiting_.begin(), touchdown_waiting_.end(),
       [](bool waiting) {return waiting;}) &&
     this->_data->desired_state->mode == ControlMode::Locomotion)
@@ -543,6 +546,10 @@ void FSM_State_Locomotion<T>::LocomotionControlStep()
     wbc_data_.pFoot_des[leg] = trajectory.getPosition();
     wbc_data_.vFoot_des[leg] = trajectory.getVelocity();
     wbc_data_.aFoot_des[leg] = trajectory.getAcceleration();
+    if (landing_candidate) {
+      // 等待落地期间保持终点，不能持续施加 Bezier 末端的非零加速度。
+      wbc_data_.aFoot_des[leg].setZero();
+    }
   }
 
   if (this->_data->use_wbc) {

@@ -12,6 +12,7 @@
 #include "HardwareSimulation.hpp"
 #include "hardware/dm1_hardware_driver.hpp"
 #include "hardware/hardware_bridge.hpp"
+#include "RobotRunner.hpp"
 #include "hardware/motor_calibration.hpp"
 
 namespace
@@ -279,6 +280,7 @@ TEST(Dm1FullHardwareSimulation, OpenDogUnfoldsBothRearKneesThroughRawDrivers)
     auto start = HardwareSimulation::Clock::time_point{};
     bool enable_sent = false, stand_sent = false;
     double height = 0.0;
+    double zero_error = -1.0;
     std::array<double, kNumLegs> calf{};
     options.command_source = [&]() {
         const auto now = HardwareSimulation::Clock::now();
@@ -286,6 +288,20 @@ TEST(Dm1FullHardwareSimulation, OpenDogUnfoldsBothRearKneesThroughRawDrivers)
         const double elapsed = std::chrono::duration<double>(now - start).count();
         int key = 0;
         if (elapsed > 0.25 && !enable_sent) {enable_sent = true; key = 'U';}
+        else if (elapsed > 1.7 && zero_error < 0.0) {
+          std::lock_guard<std::recursive_mutex> lock(plant.mutex);
+          zero_error = 0.0;
+          const char * legs[] = {"FR", "FL", "RR", "RL"};
+          const char * axes[] = {"hip", "thigh", "calf"};
+          for (const auto * leg : legs) {
+            for (const auto * axis : axes) {
+              const auto name = std::string(leg) + "_" + axis + "_joint";
+              const int joint = mj_name2id(plant.model.get(), mjOBJ_JOINT, name.c_str());
+              zero_error = std::max(zero_error,
+                std::abs(plant.data->qpos[plant.model->jnt_qposadr[joint]]));
+            }
+          }
+        }
         else if (elapsed > 1.8 && !stand_sent) {stand_sent = true; key = '1';}
         else if (elapsed > 9.5) {
           key = 27;
@@ -304,11 +320,13 @@ TEST(Dm1FullHardwareSimulation, OpenDogUnfoldsBothRearKneesThroughRawDrivers)
     const std::atomic_bool stop{false};
     HardwareBridge bridge(driver, plant.calibration, options);
     EXPECT_EQ(bridge.run(stop), 0);
-    std::cout << "opendog_full_hardware height=" << height;
+    std::cout << "opendog_full_hardware height=" << height << " zero_error=" << zero_error;
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       std::cout << " calf_" << leg << "=" << calf[leg];
     }
     std::cout << std::endl;
+    EXPECT_GE(zero_error, 0.0);
+    EXPECT_LT(zero_error, double(control_config::hardware::startup_zero_tolerance));
     EXPECT_GT(height, 0.25);
     EXPECT_GT(calf[2], 0.59);
     EXPECT_GT(calf[3], 0.59);

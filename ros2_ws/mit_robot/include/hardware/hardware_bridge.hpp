@@ -12,10 +12,8 @@
 #include <memory>
 #include <string>
 
-#include "RobotRunner.hpp"
 #include "control/algorithm_backend.hpp"
-#include "control/current_mit_backend.hpp"
-#include "control/opendog_algorithm.hpp"
+#include "hardware/hardware_robot_runner.hpp"
 #include "hardware/dm1_hardware_io.hpp"
 #include "teleop/keyboard_teleop.hpp"
 
@@ -86,10 +84,7 @@ private:
   dm1_hardware::Dm1HardwareIo & hardware_;
   dm1_hardware::Dm1MitInterface::CalibrationArray calibration_;
   Options options_;
-  RobotRunner runner_;
-  std::unique_ptr<CurrentMitBackend> current_mit_backend_;
-  std::unique_ptr<OpenDogAlgorithm> opendog_algorithm_;
-  AlgorithmBackend * backend_ = nullptr;
+  std::unique_ptr<HardwareRobotRunner> backend_;
   dm1_hardware::Dm1MitInterface mit_;
 };
 

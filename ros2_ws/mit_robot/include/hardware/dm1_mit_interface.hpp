@@ -274,7 +274,8 @@ public:
    * @brief Validate a complete command frame without sending or disabling.
    *
    * This is used before a physical enable so the first enabled frame cannot
-   * be the operation that discovers a joint-limit or torque violation.
+   * be the operation that discovers invalid protocol fields. Finite joint
+   * targets are bounded by the existing model limits before transmission.
    */
   bool validateCommands(
     const CommandArray & commands, double now_s,
@@ -379,7 +380,8 @@ public:
           "command_age_s", command_age, 0.0, feedback_timeout_s_);
       }
       for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
-        const float q = command.position_desired[static_cast<Eigen::Index>(joint)];
+        const float requested_q = command.position_desired[static_cast<Eigen::Index>(joint)];
+        const float q = std::clamp(requested_q, kLowerLimit[joint], kUpperLimit[joint]);
         const float dq = command.velocity_desired[static_cast<Eigen::Index>(joint)];
         const float kp = command.kp[static_cast<Eigen::Index>(joint)];
         const float kd = command.kd[static_cast<Eigen::Index>(joint)];
@@ -393,10 +395,15 @@ public:
         const float motor_position =
           calibration_[leg * kJointsPerLeg + joint].direction * q +
           calibration_[leg * kJointsPerLeg + joint].zero_position;
-        if (q < kLowerLimit[joint] || q > kUpperLimit[joint]) {
-          return reject(
-            "command", leg, joint,
-            "position_desired", q, kLowerLimit[joint], kUpperLimit[joint]);
+        if (q != requested_q) {
+          static robot_log::Throttle position_limit_log(1000);
+          if (position_limit_log.ready()) {
+            imu_log::print(
+              imu_log::Level::Warning,
+              "DM1 关节目标已限幅：leg=%zu joint=%zu requested=%.6f bounded=%.6f；"
+              "完整命令继续发送。\n", leg, joint,
+              static_cast<double>(requested_q), static_cast<double>(q));
+          }
         }
         if (std::abs(dq) > kVelocityLimit) {
           return reject(
@@ -472,7 +479,10 @@ public:
       for (const std::size_t leg : kInterleavedLegOrder) {
         const auto & command = commands[leg];
         const auto & calibration = calibration_[leg * kJointsPerLeg + joint];
-        const float q = command.position_desired[static_cast<Eigen::Index>(joint)];
+        // 单个目标越界只在硬件边界限幅，不阻断其他十一关节的新命令。
+        const float q = std::clamp(
+          command.position_desired[static_cast<Eigen::Index>(joint)],
+          kLowerLimit[joint], kUpperLimit[joint]);
         const float dq = command.velocity_desired[static_cast<Eigen::Index>(joint)];
         const float kp = command.kp[static_cast<Eigen::Index>(joint)];
         const float kd = command.kd[static_cast<Eigen::Index>(joint)];

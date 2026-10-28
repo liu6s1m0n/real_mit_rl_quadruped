@@ -12,8 +12,8 @@ joint_upper_limit_rad: [1.57, 2.603, 2.72, 1.57, 2.603, 2.72, 1.57, 2.603, 2.72,
 stand_joint_position_front_rad: [0, -0.282961, 0.739729]
 stand_joint_position_rear_rad: [0, -0.282961, 0.739729]
 nominal_body_height_m: 0.28
-# 临时整机等比例校准：14.705035 kg 模型缩放到实测 11.8 kg，比例 0.802446236952。
-body_mass_kg: 5.528134778326
+# 按用户要求恢复 f3c1696 父提交的整机模型 14.705035 kg；实测整机仍为 11.8 kg。
+body_mass_kg: 6.889103
 motor:
   name: DM-J6248P-2EC
   continuous_torque_nm: 30
@@ -27,13 +27,13 @@ control:
   # 站立速度参数：硬件版和 MuJoCo 共用。
   # 换站立速度要修改的地方：抬升速率（m/s）。
   standing_height_rate_mps: 0.04
-  # 换站立速度要修改的地方：趴地展开阶段持续时间（s），对应 C++ stand_up_duration。
-  stand_up_duration_s: 3.2
+  # MIT 趴地展开时长，对应现有 C++ stand_up_duration；OpenDog 独立配置为 3.2 s。
+  stand_up_duration_s: 2.4
   # 仅放慢大腿（HFE）展开速度；髋关节和小腿保持 stand_up_duration_s 的速度。
   stand_up_thigh_speed_scale: 0.75
   physics_timestep_s: 0.002
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, prone_down]
 mjcf:
   file: src/dm1_description/dm1/dm1.xml
-  sha256: 8df17748d050890f7734e82e113906b70a565d5f926bbc0f8965edbd2c3d0775
+  sha256: c6ea83e830b2df14fe2ffa976b054652533486b66c1ac386c8481b74b756cecd
   fixed_installation_rotations_baked_in: true

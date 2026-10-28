@@ -434,12 +434,32 @@ ament_export_libraries(mymit_robot_model)
 # Formal DM1 hardware layer.  The concrete Dm1HardwareIo implementation and
 # the control bridge live in this target; tests inject only a small mock for
 # failure-path coverage instead of becoming the owner of the interface.
+add_library(mymit_mit_hardware_runner
+  src/hardware/mit_hardware_runner.cpp
+  src/control/current_mit_backend.cpp
+  user/RobotRunner.cpp)
+target_compile_features(mymit_mit_hardware_runner PUBLIC cxx_std_17)
+target_include_directories(mymit_mit_hardware_runner PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/user>
+  $<INSTALL_INTERFACE:include>)
+target_link_libraries(mymit_mit_hardware_runner PUBLIC mymit_robot_model mymit_robot_teleop)
+install(FILES user/RobotRunner.hpp DESTINATION include)
+if(MYMIT_OPENDOG_AVAILABLE)
+  add_library(mymit_opendog_hardware_runner src/hardware/opendog_robot_runner.cpp)
+  target_compile_features(mymit_opendog_hardware_runner PUBLIC cxx_std_17)
+  target_link_libraries(mymit_opendog_hardware_runner PUBLIC
+    mymit_opendog_algorithm mymit_robot_teleop)
+  install(TARGETS mymit_opendog_hardware_runner
+    EXPORT mymit_robot_model_targets
+    ARCHIVE DESTINATION lib LIBRARY DESTINATION lib)
+endif()
+
 add_library(mymit_robot_hardware
   src/hardware/hardware_bridge.cpp
-  src/control/current_mit_backend.cpp
+  src/hardware/hardware_robot_runner.cpp
   src/hardware/dm1_hardware_driver.cpp
   src/hardware/dm_motor_driver.cpp
-  user/RobotRunner.cpp
 )
 target_compile_features(mymit_robot_hardware PUBLIC cxx_std_17)
 target_include_directories(mymit_robot_hardware PUBLIC
@@ -449,7 +469,7 @@ target_include_directories(mymit_robot_hardware PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(mymit_robot_hardware PUBLIC
-  mymit_robot_model
+  mymit_mit_hardware_runner
   mymit_robot_teleop
   mymit_dmbot_serial
   Eigen3::Eigen
@@ -473,13 +493,13 @@ if(MYMIT_OPENDOG_AVAILABLE)
     # ABI-compatible system tinyxml2 in the hardware process dependency order
     # so rclcpp/fastdds resolve the same library as the rest of ROS 2.
     tinyxml2::tinyxml2
-    mymit_opendog_algorithm ${OpenMP_CXX_LIBRARIES})
+    mymit_opendog_hardware_runner ${OpenMP_CXX_LIBRARIES})
   # tinyxml2 is otherwise dropped by --as-needed because no local object calls
   # it directly; retain it as a DT_NEEDED entry before libmujoco is loaded.
   target_link_options(mymit_robot_hardware PRIVATE -Wl,--no-as-needed)
   ament_target_dependencies(mymit_robot_hardware PUBLIC rclcpp)
 endif()
-install(TARGETS mymit_robot_hardware
+install(TARGETS mymit_robot_hardware mymit_mit_hardware_runner
   EXPORT mymit_robot_model_targets
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -634,7 +654,8 @@ endif()
 if(MYMIT_OPENDOG_AVAILABLE)
   set_target_properties(mymit_opendog_hpipm mymit_opendog_mpc mymit_opendog_sqp
     mymit_opendog_wbc mymit_opendog_interface mymit_opendog_estimation
-    mymit_opendog_algorithm mymit_robot_hardware mymit_opendog_user hardware_main
+    mymit_opendog_algorithm mymit_opendog_hardware_runner
+    mymit_mit_hardware_runner mymit_robot_hardware mymit_opendog_user hardware_main
     PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
 endif()
 install(TARGETS ${MYMIT_USER_RUNTIME_TARGETS}

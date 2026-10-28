@@ -93,7 +93,7 @@ TEST(Dm1MitInterfaceTest, ConvertsFeedbackAndSendsTwelveCalibratedFrames)
   EXPECT_FLOAT_EQ(transport.frames.front().position, -0.1F);
 }
 
-TEST(Dm1MitInterfaceTest, ValidatesCommandLimitsBeforeSending)
+TEST(Dm1MitInterfaceTest, BoundsJointTargetsWithoutDroppingOtherCommands)
 {
   MockTransport transport;
   dm1_hardware::Dm1MitInterface interface(transport, calibration());
@@ -106,10 +106,53 @@ TEST(Dm1MitInterfaceTest, ValidatesCommandLimitsBeforeSending)
     commands[leg].timestamp = 1.0F;
   }
   commands[0].position_desired[0] = 2.0F;
+  commands[0].position_desired[2] = -0.0791912079F;  // 实测回零时的膝关节目标。
+  commands[1].position_desired[2] = -0.0385455489F;  // 实测站立开始时的越界。
+  commands[2].position_desired[2] = 3.0F;
+  commands[3].position_desired[1] = 0.2F;
 
-  EXPECT_FALSE(interface.validateCommands(commands, 1.0));
-  EXPECT_TRUE(transport.frames.empty());
+  ASSERT_TRUE(interface.validateCommands(commands, 1.0));
+  ASSERT_TRUE(interface.send(commands, 1.0));
+  ASSERT_EQ(transport.frames.size(), kNumJoints);
+  EXPECT_FLOAT_EQ(transport.frames[0].position, -1.57F);  // 标定方向为 -1。
+  EXPECT_FLOAT_EQ(transport.frames[8].position, -0.03F);
+  EXPECT_FLOAT_EQ(transport.frames[9].position, 2.72F);
+  EXPECT_FLOAT_EQ(transport.frames[10].position, -0.03F);
+  EXPECT_FLOAT_EQ(transport.frames[7].position, 0.2F);
   EXPECT_EQ(transport.disable_count, 0);
+}
+
+TEST(Dm1MitInterfaceTest, UsesBoundedPositionForTorqueSaturation)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.05, false, 30.0F);
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+  auto commands = validCommands(1.0F);
+  commands[0].position_desired[2] = -0.0791912079F;
+  commands[0].kp[2] = 500.0F;
+  commands[0].kd[2] = 0.0F;
+  commands[0].torque_feedforward[2] = -20.0F;
+  ASSERT_TRUE(interface.send(commands, 1.0));
+  ASSERT_EQ(transport.frames.size(), kNumJoints);
+  const auto & frame = transport.frames[8];
+  EXPECT_FLOAT_EQ(frame.position, -0.03F);
+  EXPECT_NEAR(frame.kp * frame.position + frame.torque, -30.0F, 1.0e-4F);
+  EXPECT_NEAR(frame.kp, 500.0F * 30.0F / 35.0F, 1.0e-4F);
+}
+
+TEST(Dm1MitInterfaceTest, RejectsNonFinitePositionBeforeBounding)
+{
+  MockTransport transport;
+  dm1_hardware::Dm1MitInterface interface(transport, calibration());
+  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+  auto commands = validCommands(1.0F);
+  for (const float q : {std::numeric_limits<float>::quiet_NaN(),
+      std::numeric_limits<float>::infinity()}) {
+    commands[0].position_desired[2] = q;
+    EXPECT_FALSE(interface.send(commands, 1.0));
+    EXPECT_TRUE(transport.frames.empty());
+    ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+  }
 }
 
 // 超过当前上限时只截断该关节的 kp/kd/前馈力矩，整批 12 帧仍然发送。
@@ -248,8 +291,8 @@ TEST(Dm1MitInterfaceTest, HoldingLastCommandSkipsFeedbackFreshnessButKeepsBounds
   EXPECT_TRUE(interface.send(commands, 5.0, false));
   EXPECT_EQ(transport.frames.size(), kNumJoints);
 
-  // 保持通道不是免检通道：几何越界依旧拒绝。
-  commands[0].position_desired[0] = 2.0F;
+  // 保持通道仍执行协议检查，非有限目标不能进入限幅和发送。
+  commands[0].position_desired[0] = std::numeric_limits<float>::quiet_NaN();
   EXPECT_FALSE(interface.validateCommands(commands, 5.0, false));
 }
 

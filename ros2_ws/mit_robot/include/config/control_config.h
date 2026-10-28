@@ -27,7 +27,7 @@ inline constexpr double maximum_normal_force = 120; // 单脚最大法向力。
 inline constexpr bool use_wbc = true; // 行走使用 WBC。
 inline constexpr double minimum_standing_height = 0.28; // 站高下限。
 inline constexpr double maximum_standing_height = 0.42; // 站高上限。
-inline constexpr double standing_height = 0.30; // 正常站立、行走和单次踏步回站共用的默认机身高度目标。
+inline constexpr double standing_height = 0.28; // 正常站立、行走和单次踏步回站共用的默认机身高度目标，与 OpenDog comHeight 一致。
 
 // 操作档位：键盘、界面和硬件遥控使用同一组速度大小，具体方向由命令决定。
 namespace motion

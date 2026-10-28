@@ -57,8 +57,8 @@
       <camera name="tracking" mode="trackcom" pos="0 -1 0.8" xyaxes="1 0 0 0 1 1"/>
       <!-- IMU is mounted at the geometric center of the top cover. -->
       <site name="imu" pos="0 0 0"/>
-      <inertial pos="-0.001955 0.002743 -0.068608" mass="5.528134778326"
-        fullinertia="0.028868805821 0.065085611833 0.082712948320 0.000061788360 -0.000118762043 0.000218265376"/>
+      <inertial pos="-0.001955 0.002743 -0.068608" mass="6.889103"
+        fullinertia="0.035976 0.081109 0.103076 0.000077 -0.000148 0.000272"/>
       <geom class="visual" mesh="dm_base"/>
       <!-- Once LieDown reaches the grounded pose, this body contact is the
            primary horizontal brake.  The generic DM1 geom default uses
@@ -70,22 +70,22 @@
 
       <body name="FR_hip" pos="0.16175 -0.059997 -0.061498">
         <joint class="haa" name="FR_hip_joint"/>
-        <inertial pos="0.04756 0.010434 -0.000046" mass="0.566780616299" diaginertia="0.000323385833 0.000429308737 0.000357891022"/>
+        <inertial pos="0.04756 0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="FR_hip_mesh"/>
         <body name="FR_thigh" pos="0.049998 -0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
           <joint class="hfe" name="FR_thigh_joint" range="-1.367 2.603"/>
-          <inertial pos="-0.023554 -0.050542 0.001956" mass="0.784107130653" diaginertia="0.000711769812 0.003013988066 0.003143984356"/>
+          <inertial pos="-0.023554 -0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="FR_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 -0.07825 0"/>
           <body name="FR_calf" pos="-0.2 -0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
             <joint class="kfe" name="FR_calf_joint"/>
-            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.192776474180" diaginertia="0.000777570404 0.004265804196 0.003497863147"/>
+            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="FR_calf_mesh"/>
             <geom type="capsule" size="0.012" fromto="0 0 0 -0.17362 0 -0.14312"/>
             <geom name="FR_home_calf_contact" type="capsule" size="0.018"
               fromto="0 0 0 -0.17362 0 -0.14312"/>
             <body name="FR_foot" pos="-0.17362 0 -0.14312">
-              <inertial pos="-0.000269 0.0002 -0.000005" mass="0.024302084286" diaginertia="0.000006419570 0.000004012231 0.000006419570"/>
+              <inertial pos="-0.000269 0.0002 -0.000005" mass="0.030285" diaginertia="0.000008 0.000005 0.000008"/>
               <geom class="visual" mesh="FR_foot_mesh"/><geom name="FR" class="foot"/>
             </body>
           </body>
@@ -94,22 +94,22 @@
 
       <body name="FL_hip" pos="0.16175 0.059997 -0.061498">
         <joint class="haa" name="FL_hip_joint"/>
-        <inertial pos="0.04756 -0.010434 -0.000046" mass="0.566780616299" diaginertia="0.000323385833 0.000429308737 0.000357891022"/>
+        <inertial pos="0.04756 -0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="FL_hip_mesh"/>
         <body name="FL_thigh" pos="0.049998 0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
           <joint class="hfe" name="FL_thigh_joint" range="-1.367 2.603"/>
-          <inertial pos="-0.023554 0.050542 0.001956" mass="0.784107130653" diaginertia="0.000711769812 0.003013988066 0.003143984356"/>
+          <inertial pos="-0.023554 0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="FL_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 0.07825 0"/>
           <body name="FL_calf" pos="-0.2 0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
             <joint class="kfe" name="FL_calf_joint"/>
-            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.192776474180" diaginertia="0.000777570404 0.004265804196 0.003497863147"/>
+            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="FL_calf_mesh"/>
             <geom type="capsule" size="0.012" fromto="0 0 0 -0.17362 0 -0.14312"/>
             <geom name="FL_home_calf_contact" type="capsule" size="0.018"
               fromto="0 0 0 -0.17362 0 -0.14312"/>
             <body name="FL_foot" pos="-0.17362 0 -0.14312">
-              <inertial pos="-0.000269 -0.0002 -0.000005" mass="0.024302084286" diaginertia="0.000006419570 0.000004012231 0.000006419570"/>
+              <inertial pos="-0.000269 -0.0002 -0.000005" mass="0.030285" diaginertia="0.000008 0.000005 0.000008"/>
               <geom class="visual" mesh="FL_foot_mesh"/><geom name="FL" class="foot"/>
             </body>
           </body>
@@ -118,22 +118,22 @@
 
       <body name="RR_hip" pos="-0.16175 -0.059997 -0.061498">
         <joint class="haa" name="RR_hip_joint"/>
-        <inertial pos="-0.04756 0.010434 -0.000046" mass="0.566780616299" diaginertia="0.000323385833 0.000429308737 0.000357891022"/>
+        <inertial pos="-0.04756 0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="RR_hip_mesh"/>
         <body name="RR_thigh" pos="-0.049998 -0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
           <joint class="hfe" name="RR_thigh_joint" range="-1.367 2.603"/>
-          <inertial pos="-0.023554 -0.050542 0.001956" mass="0.784107130653" diaginertia="0.000711769812 0.003013988066 0.003143984356"/>
+          <inertial pos="-0.023554 -0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="RR_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 -0.07825 0"/>
           <body name="RR_calf" pos="-0.2 -0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
             <joint class="kfe" name="RR_calf_joint"/>
-            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.192776474180" diaginertia="0.000777570404 0.004265804196 0.003497863147"/>
+            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="RR_calf_mesh"/>
             <geom type="capsule" size="0.012" fromto="0 0 0 -0.17362 0 -0.14312"/>
             <geom name="RR_home_calf_contact" type="capsule" size="0.018"
               fromto="0 0 0 -0.17362 0 -0.14312"/>
             <body name="RR_foot" pos="-0.17362 0 -0.14312">
-              <inertial pos="-0.000269 0.0002 -0.000005" mass="0.024302084286" diaginertia="0.000006419570 0.000004012231 0.000006419570"/>
+              <inertial pos="-0.000269 0.0002 -0.000005" mass="0.030285" diaginertia="0.000008 0.000005 0.000008"/>
               <geom class="visual" mesh="RR_foot_mesh"/><geom name="RR" class="foot"/>
             </body>
           </body>
@@ -142,22 +142,22 @@
 
       <body name="RL_hip" pos="-0.16175 0.059997 -0.061498">
         <joint class="haa" name="RL_hip_joint"/>
-        <inertial pos="-0.04756 -0.010434 -0.000046" mass="0.566780616299" diaginertia="0.000323385833 0.000429308737 0.000357891022"/>
+        <inertial pos="-0.04756 -0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="RL_hip_mesh"/>
         <body name="RL_thigh" pos="-0.049998 0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
           <joint class="hfe" name="RL_thigh_joint" range="-1.367 2.603"/>
-          <inertial pos="-0.023554 0.050542 0.001956" mass="0.784107130653" diaginertia="0.000711769812 0.003013988066 0.003143984356"/>
+          <inertial pos="-0.023554 0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="RL_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 0.07825 0"/>
           <body name="RL_calf" pos="-0.2 0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
             <joint class="kfe" name="RL_calf_joint"/>
-            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.192776474180" diaginertia="0.000777570404 0.004265804196 0.003497863147"/>
+            <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="RL_calf_mesh"/>
             <geom type="capsule" size="0.012" fromto="0 0 0 -0.17362 0 -0.14312"/>
             <geom name="RL_home_calf_contact" type="capsule" size="0.018"
               fromto="0 0 0 -0.17362 0 -0.14312"/>
             <body name="RL_foot" pos="-0.17362 0 -0.14312">
-              <inertial pos="-0.000269 -0.0002 -0.000005" mass="0.024302084286" diaginertia="0.000006419570 0.000004012231 0.000006419570"/>
+              <inertial pos="-0.000269 -0.0002 -0.000005" mass="0.030285" diaginertia="0.000008 0.000005 0.000008"/>
               <geom class="visual" mesh="RL_foot_mesh"/><geom name="RL" class="foot"/>
             </body>
           </body>

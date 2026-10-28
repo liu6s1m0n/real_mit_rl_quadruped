@@ -138,7 +138,9 @@ TEST(OpenDogMuJoCo, SingleStepsAndMeasuresPolicyFreshness)
       if (time > 8.0 && time < 9.0) {EXPECT_EQ(timing.planned_mode, 15U);}
       first_diagonal_seen |= stage == 1 && timing.planned_mode == 6;
       second_diagonal_seen |= stage == 2 && timing.planned_mode == 9;
-      repeat_seen |= time > 12.1 && timing.planned_mode == 6;
+      // 原调度在预测时域末端追加单步；排除连续踏步遗留的前缀。
+      const double horizon = (timing.policy_age_ms + timing.horizon_remaining_ms) * 1e-3;
+      repeat_seen |= time > 11.1 + horizon && timing.planned_mode == 6;
       if (time > 12.7) {EXPECT_EQ(timing.planned_mode, 15U);}
       for (int leg = 0; leg < 4; ++leg) {
         const double height = data->xpos[3 * foot_ids[leg] + 2];

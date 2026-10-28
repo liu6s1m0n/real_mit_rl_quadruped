@@ -22,6 +22,8 @@
 #include "WBC/WBC_Ctrl/BodyOriTask.hpp"
 #include "model/floating_base_model_factory.hpp"
 #include "model/robots/dm1.hpp"
+#include "../fsm/fsm_test_support.hpp"
+#include "FSM/FSM_State_Locomotion.h"
 
 namespace
 {
@@ -638,6 +640,9 @@ void verifySingleDiagonalStep(int key, GaitType gait)
         runner.setControlMode(ControlMode::Locomotion);
       }
       const auto before = runner.currentStateName();
+      // 测试执行器经 qfrc_applied 施加电机力矩；给 SimLeg 的反馈槽同步该值，
+      // 避免把 ctrl=0 导致的 qfrc_actuator=0 误当成真实电机零力矩。
+      mju_copy(data->qfrc_actuator, data->qfrc_applied, model->nv);
       ASSERT_TRUE(runner.run());
       const auto & scheduled = runner.gaitScheduler().gait_data;
       if (scheduled.current_gait == gait) {
@@ -671,9 +676,13 @@ void verifySingleDiagonalStep(int key, GaitType gait)
       }
     }
     ASSERT_GE(first_swing_step, 0);
-    EXPECT_NEAR((last_swing_step - first_swing_step + 1) * 0.002, 0.15, 0.004);
+    EXPECT_NEAR((last_swing_step - first_swing_step + 1) * 0.002,
+      control_config::gait::single_step_swing_time, 0.004);
     ASSERT_GE(completion_step, last_swing_step);
-    EXPECT_LT(completion_step * 0.002, 0.45);
+    EXPECT_LT(completion_step * 0.002,
+      control_config::locomotion::entry_hold_duration +
+      control_config::gait::single_step_swing_time +
+      control_config::locomotion::touchdown_timeout_frames * 0.002 + 0.01);
     EXPECT_FALSE(arbiter.motionActive());
     EXPECT_EQ(runner.gaitScheduler().gait_data.current_gait, GaitType::STAND);
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
@@ -695,5 +704,50 @@ TEST(Dm1MpcWalkDiagnostic, TwoLegStandStepsOnceLandsAndCanRepeat)
 TEST(Dm1MpcWalkDiagnostic, TwoLegStandReverseStepsOnceLandsAndCanRepeat)
 {
   verifySingleDiagonalStep('4', GaitType::TWO_LEG_STAND_REVERSE);
+}
+
+TEST(Dm1SingleStep, WaitsForMeasuredTouchdownAfterScheduledSwingEnds)
+{
+  for (const auto gait : {GaitType::TWO_LEG_STAND, GaitType::TWO_LEG_STAND_REVERSE}) {
+    test_support::FsmContext context(0.002F);
+    for (auto & joint : context.joint_states) {
+      joint.valid = true;
+      ASSERT_TRUE(context.leg_controller.updateData(joint));
+    }
+    context.estimate.position_world.z() = 0.28F;
+    context.desired_state.body_position_world.z() = 0.28F;
+    context.desired_state.mode = ControlMode::Locomotion;
+    context.data().locomotion_gait = gait;
+    context.data().use_wbc = false;
+    context.data().measured_contact_valid.fill(true);
+    context.data().measured_contact_probability.fill(0.0F);
+    context.data().measured_normal_force.fill(0.0F);
+    FSM_State_Locomotion<float> locomotion(&context.data());
+    locomotion.onEnter();
+    bool swing_finished = false;
+    for (int frame = 0; frame < 400; ++frame) {
+      context.gait_scheduler.step();
+      context.data().gait_frame = context.gait_scheduler.gaitFrame(mpc::kDefaultMpcHorizon);
+      ASSERT_EQ(locomotion.checkTransition(), FSM_StateName::LOCOMOTION);
+      swing_finished = context.gait_scheduler.gait_data.current_gait == gait &&
+        context.gait_scheduler.gait_data.initial_phase >= 1.0F;
+      locomotion.run();
+      context.estimate.timestamp += 0.002F;
+      if (swing_finished) {break;}
+    }
+    ASSERT_TRUE(swing_finished);
+    // 计划接触已恢复，实测接触尚未到来时仍不得自动回站。
+    EXPECT_EQ(locomotion.checkTransition(), FSM_StateName::LOCOMOTION);
+    context.data().measured_contact_probability.fill(1.0F);
+    context.data().measured_normal_force.fill(context.quadruped.totalMass() * 9.81F / 4.0F);
+    for (unsigned int frame = 0;
+      frame < control_config::locomotion::touchdown_confirm_frames; ++frame)
+    {
+      ASSERT_EQ(locomotion.checkTransition(), FSM_StateName::LOCOMOTION);
+      locomotion.run();
+      context.estimate.timestamp += 0.002F;
+    }
+    EXPECT_EQ(locomotion.checkTransition(), FSM_StateName::BALANCE_STAND);
+  }
 }
 }  // namespace

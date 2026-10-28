@@ -31,6 +31,16 @@ public:
   };
   const Timing & timing() const noexcept;
 
+  // Loaded from OpenDog reference/task files, independent of MIT presets.
+  struct CommandSettings
+  {
+    float standing_height = 0.0F;
+    float joint_kp = 0.0F;
+    float joint_kd = 0.0F;
+    teleop::VelocityProfile velocity{0.18F, 0.36F, 0.30F, 0.20F, 0.30F};
+  };
+  const CommandSettings & commandSettings() const noexcept;
+
   bool configure() override;
   bool start() override;
   bool compute(const ControlInputSnapshot & input, ControlOutput & output) override;
