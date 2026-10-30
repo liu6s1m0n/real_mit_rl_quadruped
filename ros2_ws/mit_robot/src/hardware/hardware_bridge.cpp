@@ -224,6 +224,13 @@ int HardwareBridge::runKeyboardControl(
               << name << "_dq_published," << name << "_ff_published,"
               << name << "_kp_published," << name << "_kd_published";
     }
+    for (const auto * name : kJointNames) {
+      csv_log << ',' << name << "_fault_code," << name << "_mos_temperature_c,"
+              << name << "_rotor_temperature_c," << name << "_voltage_v,"
+              << name << "_voltage_valid," << name << "_feedback_sequence,"
+              << name << "_feedback_timestamp," << name << "_feedback_age_s,"
+              << name << "_health_valid";
+    }
     csv_log << ",publish_attempted,publish_ok,published_valid,published_age_s,tx_failed_frames,"
             << "imu_sequence,imu_timestamp,imu_qw,imu_qx,imu_qy,imu_qz,"
             << "imu_ax,imu_ay,imu_az,imu_gx,imu_gy,imu_gz,imu_gravity,"
@@ -485,6 +492,14 @@ int HardwareBridge::runKeyboardControl(
               csv_log << ',' << (last_published_s >= 0 ? value : std::nanf(""));
             }
           }
+        }
+        for (const auto & motor : sample.motors) {
+          const double feedback_age_s = now_s - motor.timestamp;
+          csv_log << ',' << motor.fault_code << ',' << motor.temperature_c
+                  << ',' << motor.rotor_temperature_c << ',' << motor.voltage_v
+                  << ',' << motor.voltage_valid << ',' << motor.sequence
+                  << ',' << motor.timestamp << ',' << feedback_age_s
+                  << ',' << motor.health_valid;
         }
         const auto & imu = sample.imu;
         csv_log << ',' << publish_attempted << ',' << publish_ok << ',' << (last_published_s >= 0)

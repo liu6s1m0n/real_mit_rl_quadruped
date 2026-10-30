@@ -1,3 +1,5 @@
+#include <pinocchio/fwd.hpp>
+
 #include <string>
 
 #include <gtest/gtest.h>
@@ -5,6 +7,7 @@
 #include <ocs2_oc/synchronized_module/ReferenceManager.h>
 
 #include "control/opendog_reference.hpp"
+#include "legged_interface/LeggedInterface.h"
 
 namespace
 {
@@ -99,7 +102,8 @@ TEST(OpenDogGaitCommand, SingleDiagonalStepsDoNotRepeatAndCanBeRequestedAgain)
   auto modes = schedule->getModeSchedule(0.0, 3.0);
   EXPECT_EQ(modes.modeAtTime(1.05), 15U);
   EXPECT_EQ(modes.modeAtTime(1.25), 6U);  // RF/LH support, LF/RH swing.
-  EXPECT_EQ(modes.modeAtTime(1.45), 15U);
+  EXPECT_EQ(modes.modeAtTime(1.45), 6U);  // The configured swing lasts 0.45 s.
+  EXPECT_EQ(modes.modeAtTime(1.60), 15U);
   for (int i = 1; i <= 10; ++i) {
     command.preSolverRun(i, i + 1.0, {}, reference);
     EXPECT_EQ(schedule->getModeSchedule(i, i + 2.0).modeAtTime(i + 1.25), 15U);
@@ -124,4 +128,59 @@ TEST(OpenDogGaitCommand, SingleDiagonalStepsDoNotRepeatAndCanBeRequestedAgain)
   command.setMotion(teleop::Motion::TwoLegStandReverse, 3);
   command.preSolverRun(0.0, 1.0, {}, reference);
   EXPECT_EQ(schedule->getModeSchedule(0.0, 3.0).modeAtTime(1.25), 9U);
+}
+
+TEST(OpenDogReference, StanceConstrainsVelocityWithoutPullingFeetToZeroHeight)
+{
+  legged::LeggedInterface interface(
+    config("opendog_task.info"), config("dm1_opendog.urdf"), config("opendog_reference.info"));
+  interface.setupOptimalControlProblem(
+    config("opendog_task.info"), config("dm1_opendog.urdf"), config("opendog_reference.info"), false);
+  auto manager = interface.getSwitchedModelReferenceManagerPtr();
+  auto state = interface.getInitialState();
+  state.head<6>().setZero();
+  const auto input = ocs2::vector_t::Zero(interface.getCentroidalModelInfo().inputDim).eval();
+  manager->preSolverRun(0.0, 1.0, state);
+  const auto & problem = interface.getOptimalControlProblem();
+  for (double height : {0.26, 0.28, 0.30}) {
+    state(8) = height;
+    for (const auto & foot : interface.modelSettings().contactNames3DoF) {
+      auto & constraint = problem.equalityConstraintPtr->get(foot + "_zeroVelocity");
+      ASSERT_TRUE(constraint.isActive(0.0));
+      EXPECT_NEAR(constraint.getValue(0.0, state, input, *problem.preComputationPtr).norm(),
+        0.0, 1e-9) << foot << " height=" << height;
+    }
+  }
+}
+
+TEST(OpenDogReference, BothDiagonalSwingsUseEstimatorFootCenterHeight)
+{
+  legged::LeggedInterface interface(
+    config("opendog_task.info"), config("dm1_opendog.urdf"), config("opendog_reference.info"));
+  interface.setupOptimalControlProblem(
+    config("opendog_task.info"), config("dm1_opendog.urdf"), config("opendog_reference.info"), false);
+  double radius = 0.0;
+  double clearance = 0.0;
+  ocs2::loadData::loadCppDataType(config("opendog_task.info"), "kalmanFilter.footRadius", radius);
+  ocs2::loadData::loadCppDataType(config("opendog_task.info"), "swing_trajectory_config.swingHeight", clearance);
+  auto manager = interface.getSwitchedModelReferenceManagerPtr();
+  const ocs2::ModeSchedule modes({0.1, 0.55, 1.1, 1.55}, {15, 6, 15, 9, 15});
+  manager->setModeSchedule(modes);
+  manager->preSolverRun(0.0, 2.0, interface.getInitialState());
+  auto planner = manager->getSwingTrajectoryPlanner();
+  for (double start : {0.1, 1.1}) {
+    const double middle = start + 0.225;
+    EXPECT_EQ(manager->getModeSchedule().modeAtTime(middle), modes.modeAtTime(middle));
+    const auto contacts = manager->getContactFlags(middle);
+    for (std::size_t leg = 0; leg < contacts.size(); ++leg) {
+      EXPECT_NEAR(planner->getZpositionConstraint(leg, start + 1e-8), radius, 1e-8);
+      EXPECT_NEAR(planner->getZpositionConstraint(leg, start + 0.45 - 1e-8), radius, 1e-8);
+      EXPECT_NEAR(planner->getZpositionConstraint(leg, middle),
+        radius + (contacts[leg] ? 0.0 : clearance), 1e-9);
+      EXPECT_NEAR(planner->getZvelocityConstraint(leg, middle), 0.0, 1e-9);
+      if (!contacts[leg]) {
+        EXPECT_GT(planner->getZvelocityConstraint(leg, start + 1e-8), 0.0);
+      }
+    }
+  }
 }

@@ -28,6 +28,19 @@ WbcBase::WbcBase(const PinocchioInterface& pinocchioInterface, CentroidalModelIn
 
 vector_t WbcBase::update(const vector_t& stateDesired, const vector_t& inputDesired, const vector_t& rbdStateMeasured, size_t mode,
                          scalar_t /*period*/) {
+  // A mode change can replace the MPC contact-force plan in one cycle.  The
+  // base-acceleration task differentiates inputDesired, so carrying the old
+  // force plan across that boundary would create a false impulse proportional
+  // to 1 / control_period.  Warm-start the new mode from its first plan; this
+  // changes only the WBC internal reference and never cancels an operator
+  // request or suppresses output.
+  if (!have_input_last_ || !have_last_mode_ || mode != last_mode_ ||
+    inputLast_.size() != inputDesired.size()) {
+    inputLast_ = inputDesired;
+    have_input_last_ = true;
+  }
+  last_mode_ = mode;
+  have_last_mode_ = true;
   contactFlag_ = modeNumber2StanceLeg(mode);
   numContacts_ = 0;
   for (bool flag : contactFlag_) {

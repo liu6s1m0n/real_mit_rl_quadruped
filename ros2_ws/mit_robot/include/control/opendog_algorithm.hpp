@@ -26,7 +26,12 @@ public:
     double mpc_ms = 0.0;
     double policy_age_ms = 0.0;
     double horizon_remaining_ms = 0.0;
+    std::size_t active_mode = 15;
     std::size_t planned_mode = 15;
+    bool command_finite = true;
+    double max_position_jump = 0.0;
+    double max_velocity_jump = 0.0;
+    double max_torque_jump = 0.0;
     bool initial_policy = false;
   };
   const Timing & timing() const noexcept;

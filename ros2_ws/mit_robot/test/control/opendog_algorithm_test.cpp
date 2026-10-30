@@ -83,3 +83,54 @@ TEST(OpenDogAlgorithm, SolvesDm1StandingWithoutHardware)
   }
   rclcpp::shutdown();
 }
+
+TEST(OpenDogAlgorithm, AlignsStartupGravityWithoutScalingDynamicAcceleration)
+{
+  rclcpp::init(0, nullptr);
+  {
+    OpenDogAlgorithm nominal(MYMIT_OPENDOG_TEST_CONFIG);
+    OpenDogAlgorithm calibrated(MYMIT_OPENDOG_TEST_CONFIG);
+    ASSERT_TRUE(nominal.configure());
+    ASSERT_TRUE(calibrated.configure());
+    ASSERT_TRUE(nominal.start());
+    ASSERT_TRUE(calibrated.start());
+    ControlInputSnapshot input;
+    input.imu.valid = true;
+    input.imu.orientation_world_from_body =
+      Eigen::AngleAxisf(0.3F, Vec3<float>::UnitZ()) *
+      Eigen::AngleAxisf(-0.03F, Vec3<float>::UnitY()) *
+      Eigen::AngleAxisf(-0.05F, Vec3<float>::UnitX());
+    input.desired.valid = true;
+    input.desired.mode = ControlMode::BalanceStand;
+    input.desired.body_position_world.z() = 0.28F;
+    for (auto & joint : input.joints) {
+      joint.position << 0.0F, -0.282961F, 0.739729F;
+    }
+    ControlOutput nominal_output, calibrated_output;
+    for (int frame = 1; frame <= 400; ++frame) {
+      input.timestamp = 0.002 * frame;
+      const bool have_baseline = frame <= 300;
+      const Vec3<float> motion = frame > 200 && frame <= 300 ?
+        Vec3<float>(0.2F, -0.1F, 0.4F) : Vec3<float>::Zero().eval();
+      input.imu.acceleration_body = input.imu.orientation_world_from_body.conjugate() *
+        (motion + Vec3<float>(0.0F, 0.0F, 9.81F));
+      ASSERT_TRUE(nominal.compute(input, nominal_output));
+      auto measured = input;
+      measured.imu.gravity_valid = have_baseline;
+      measured.imu.gravity_magnitude = 10.08F;
+      measured.imu.acceleration_body = input.imu.orientation_world_from_body.conjugate() *
+        (motion + Vec3<float>(0.0F, 0.0F, have_baseline ? 10.08F : 9.81F));
+      ASSERT_TRUE(calibrated.compute(measured, calibrated_output));
+      const auto & actual = calibrated_output.estimate;
+      EXPECT_LT((actual.acceleration_world - motion).norm(), 1e-5F);
+      EXPECT_LT((actual.velocity_world - nominal_output.estimate.velocity_world).norm(), 1e-5F);
+      EXPECT_LT((actual.position_world - nominal_output.estimate.position_world).norm(), 1e-5F);
+      EXPECT_EQ(actual.gravity_valid, have_baseline);
+      EXPECT_FLOAT_EQ(actual.gravity_magnitude, have_baseline ? 10.08F : 9.81F);
+      EXPECT_TRUE(actual.acceleration_body.isApprox(measured.imu.acceleration_body));
+    }
+    nominal.stop();
+    calibrated.stop();
+  }
+  rclcpp::shutdown();
+}

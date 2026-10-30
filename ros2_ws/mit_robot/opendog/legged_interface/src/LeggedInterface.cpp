@@ -40,6 +40,27 @@
 #include <boost/filesystem/path.hpp>
 
 namespace legged {
+namespace {
+// Keep the upstream gait handling, but plan the URDF foot frame (ball center)
+// at the same flat-ground height used by the state estimator.
+class FootCenterReferenceManager final : public SwitchedModelReferenceManager {
+ public:
+  FootCenterReferenceManager(std::shared_ptr<GaitSchedule> gaitSchedule,
+                             std::shared_ptr<SwingTrajectoryPlanner> swingPlanner, scalar_t footRadius)
+      : SwitchedModelReferenceManager(std::move(gaitSchedule), std::move(swingPlanner)), footRadius_(footRadius) {}
+
+ protected:
+  void modifyReferences(scalar_t initTime, scalar_t finalTime, const vector_t& initState,
+                        TargetTrajectories& targetTrajectories, ModeSchedule& modeSchedule) override {
+    SwitchedModelReferenceManager::modifyReferences(initTime, finalTime, initState, targetTrajectories, modeSchedule);
+    getSwingTrajectoryPlanner()->update(modeSchedule, footRadius_);
+  }
+
+ private:
+  const scalar_t footRadius_;
+};
+}  // namespace
+
 LeggedInterface::LeggedInterface(const std::string& taskFile, const std::string& urdfFile, const std::string& referenceFile,
                                  bool useHardFrictionConeConstraint)
     : useHardFrictionConeConstraint_(useHardFrictionConeConstraint) {
@@ -164,8 +185,10 @@ void LeggedInterface::setupReferenceManager(const std::string& taskFile, const s
                                             bool verbose) {
   auto swingTrajectoryPlanner =
       std::make_unique<SwingTrajectoryPlanner>(loadSwingTrajectorySettings(taskFile, "swing_trajectory_config", verbose), 4);
+  scalar_t footRadius = 0.0;
+  loadData::loadCppDataType(taskFile, "kalmanFilter.footRadius", footRadius);
   referenceManagerPtr_ =
-      std::make_shared<SwitchedModelReferenceManager>(loadGaitSchedule(referenceFile, verbose), std::move(swingTrajectoryPlanner));
+      std::make_shared<FootCenterReferenceManager>(loadGaitSchedule(referenceFile, verbose), std::move(swingTrajectoryPlanner), footRadius);
 }
 
 /******************************************************************************************************/
@@ -323,18 +346,13 @@ std::unique_ptr<EndEffectorKinematics<scalar_t>> LeggedInterface::getEeKinematic
 /******************************************************************************************************/
 std::unique_ptr<StateInputConstraint> LeggedInterface::getZeroVelocityConstraint(const EndEffectorKinematics<scalar_t>& eeKinematics,
                                                                                  size_t contactPointIndex) {
-  auto eeZeroVelConConfig = [](scalar_t positionErrorGain) {
-    EndEffectorLinearConstraint::Config config;
-    config.b.setZero(3);
-    config.Av.setIdentity(3, 3);
-    if (!numerics::almost_eq(positionErrorGain, 0.0)) {
-      config.Ax.setZero(3, 3);
-      config.Ax(2, 2) = positionErrorGain;
-    }
-    return config;
-  };
+  // Stance constrains velocity only; absolute foot height is not an error.
+  // positionErrorGain remains available for swing height tracking.
+  EndEffectorLinearConstraint::Config config;
+  config.b.setZero(3);
+  config.Av.setIdentity(3, 3);
   return std::unique_ptr<StateInputConstraint>(new ZeroVelocityConstraintCppAd(*referenceManagerPtr_, eeKinematics, contactPointIndex,
-                                                                               eeZeroVelConConfig(modelSettings_.positionErrorGain)));
+                                                                               std::move(config)));
 }
 
 /******************************************************************************************************/

@@ -49,6 +49,9 @@ class WbcBase {
   CentroidalModelPinocchioMapping mapping_;
 
   vector_t qMeasured_, vMeasured_, inputLast_;
+  bool have_input_last_ = false;
+  size_t last_mode_ = ModeNumber::STANCE;
+  bool have_last_mode_ = false;
   matrix_t j_, dj_;
   contact_flag_t contactFlag_{};
   size_t numContacts_{};

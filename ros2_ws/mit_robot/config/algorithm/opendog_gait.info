@@ -259,10 +259,10 @@ pawup
 single_step_lf_rh
 {
   modeSequence { [0] STANCE [1] RF_LH [2] STANCE }
-  switchingTimes { [0] 0.0 [1] 0.1 [2] 0.4 [3] 0.5 }
+  switchingTimes { [0] 0.0 [1] 0.1 [2] 0.55 [3] 0.65 }
 }
 single_step_rf_lh
 {
   modeSequence { [0] STANCE [1] LF_RH [2] STANCE }
-  switchingTimes { [0] 0.0 [1] 0.1 [2] 0.4 [3] 0.5 }
+  switchingTimes { [0] 0.0 [1] 0.1 [2] 0.55 [3] 0.65 }
 }

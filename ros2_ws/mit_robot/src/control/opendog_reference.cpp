@@ -112,7 +112,13 @@ OpenDogGaitCommand::OpenDogGaitCommand(
 
 void OpenDogGaitCommand::setMode(ControlMode mode)
 {
-  requested_trot_.store(mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic);
+  const bool trot = mode == ControlMode::Locomotion || mode == ControlMode::WalkClassic;
+  requested_trot_.store(trot);
+  if (!trot) {
+    // Match the original trot command lifecycle: leaving Locomotion clears a
+    // pending one-shot extension, so it cannot replay on the next entry.
+    requested_motion_.store(0);
+  }
 }
 
 void OpenDogGaitCommand::setMotion(teleop::Motion motion, std::uint64_t sequence)
