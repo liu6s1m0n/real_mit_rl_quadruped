@@ -26,7 +26,7 @@ struct RobotSelection
   const char * scene_path;    ///< DM1 MuJoCo 场景。
   const char * render_gpu;    ///< OpenGL 渲染设备策略：auto 或 nvidia。
   HardwareSimulationOptions hardware_simulation;
-  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::OpenDog;
   std::string algorithm_config_directory = "config/algorithm";
 };
 
@@ -37,7 +37,7 @@ RobotSelection selectRobot(int argc, char ** argv)
   const char * render_gpu = "auto";
   HardwareSimulationOptions hardware_simulation;
   hardware_simulation.calibration_path = MYMIT_ROBOT_DM1_CALIBRATION_PATH;
-  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::OpenDog;
 #ifdef MYMIT_ROBOT_ALGORITHM_CONFIG_DIR
   std::string algorithm_config_directory = MYMIT_ROBOT_ALGORITHM_CONFIG_DIR;
 #else
@@ -182,7 +182,7 @@ int main(int argc, char ** argv)
   if (argc == 2 && std::strcmp(argv[1], "--help") == 0) {
     std::printf(
       "Usage: mymit_robot_user [--hardware-sim] [--render-gpu auto|nvidia]\n"
-      "  --algorithm current_mit|opendog  select one controller (default current_mit)\n"
+      "  --algorithm current_mit|opendog  select one controller (default opendog)\n"
       "  --algorithm-config DIR           OpenDog config/algorithm directory\n"
       "Hardware simulation (all actual hardware algorithms, simulated devices):\n"
       "  --calibration FILE              same calibration format as hardware_main\n"

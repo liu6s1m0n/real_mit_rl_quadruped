@@ -88,6 +88,8 @@ ocs2::TargetTrajectories OpenDogReference::update(
       horizon_ * desired.body_velocity_world.head<2>().cast<double>();
     pose(3) = observation.state(9) + horizon_ * desired.body_angular_velocity.z();
     auto target = poseToTrajectory(pose, observation, observation.time + horizon_);
+    // Use the caller's ramped height at both ends of the locomotion reference.
+    target.stateTrajectory.front()(8) = pose(2);
     for (auto & state : target.stateTrajectory) {
       state.head<3>() = desired.body_velocity_world.cast<double>();
     }
@@ -134,6 +136,8 @@ void OpenDogGaitCommand::reset() noexcept
   requested_motion_.store(0);
   applied_trot_ = false;
   applied_motion_ = 0;
+  all_legs_loaded_.store(true);
+  pending_step_stance_time_ = -1.0;
   // Called after the solver thread has joined. Restore its schedule and template.
   schedule_->insertModeSequenceTemplate(stance_, 0.0, stance_.switchingTimes.back());
   schedule_->setModeSchedule({{stance_.switchingTimes.back()}, {15, 15}});
@@ -145,8 +149,29 @@ void OpenDogGaitCommand::preSolverRun(
 {
   const bool trot = requested_trot_.load();
   const auto motion = trot ? requested_motion_.load() : 0;
-  if (trot == applied_trot_ && motion == applied_motion_) {return;}
   const auto horizon = final_time - init_time;
+  if (pending_step_stance_time_ >= 0.0 && final_time >= pending_step_stance_time_ &&
+    all_legs_loaded_.load()) {
+    auto modes = schedule_->getModeSchedule(init_time - horizon, final_time + horizon);
+    const auto event = std::lower_bound(
+      modes.eventTimes.begin(), modes.eventTimes.end(), pending_step_stance_time_);
+    if (event != modes.eventTimes.end() &&
+      std::abs(*event - pending_step_stance_time_) < 1.0e-9) {
+      const auto index = static_cast<std::size_t>(
+        std::distance(modes.eventTimes.begin(), event));
+      if (index < modes.modeSequence.size()) {
+        // The step has a timed event and a later tail event. Once all four
+        // legs are confirmed loaded, release both events together so the
+        // schedule cannot fall back into the diagonal support mode.
+        for (std::size_t mode = index; mode < modes.modeSequence.size(); ++mode) {
+          modes.modeSequence[mode] = ocs2::legged_robot::ModeNumber::STANCE;
+        }
+        schedule_->setModeSchedule(modes);
+        pending_step_stance_time_ = -1.0;
+      }
+    }
+  }
+  if (trot == applied_trot_ && motion == applied_motion_) {return;}
   const auto diagonal = motion & 3U;
   if (diagonal == 0) {
     schedule_->insertModeSequenceTemplate(trot ? trot_ : stance_, final_time, horizon);
@@ -162,11 +187,16 @@ void OpenDogGaitCommand::preSolverRun(
     const auto & step = single_step_[diagonal - 1];
     for (std::size_t i = 0; i < step.modeSequence.size(); ++i) {
       modes.eventTimes.push_back(final_time + step.switchingTimes[i]);
-      modes.modeSequence.push_back(step.modeSequence[i]);
+      const bool final_stance = i + 1 == step.modeSequence.size();
+      modes.modeSequence.push_back(final_stance && !all_legs_loaded_.load() ?
+        step.modeSequence[step.modeSequence.size() - 2] : step.modeSequence[i]);
     }
     modes.eventTimes.push_back(final_time + step.switchingTimes.back());
-    modes.modeSequence.push_back(ocs2::legged_robot::ModeNumber::STANCE);
+    modes.modeSequence.push_back(
+      all_legs_loaded_.load() ? static_cast<std::size_t>(
+        ocs2::legged_robot::ModeNumber::STANCE) : step.modeSequence[step.modeSequence.size() - 2]);
     schedule_->setModeSchedule(modes);
+    pending_step_stance_time_ = final_time + step.switchingTimes[step.modeSequence.size() - 1];
   }
   applied_trot_ = trot;
   applied_motion_ = motion;

@@ -2,7 +2,7 @@
 # Mechanical geometry, joint zero, directions and limits remain those of the
 # current DM1 model; this file only selects the algorithm and its source data.
 algorithm:
-  active_backend: current_mit
+  active_backend: opendog
 
 opendog:
   urdf_file: "dm1_opendog.urdf"

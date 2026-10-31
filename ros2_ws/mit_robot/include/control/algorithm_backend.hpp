@@ -27,10 +27,21 @@ struct ControlOutput
 {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
+  struct OpenDogDiagnostics
+  {
+    bool valid = false;
+    std::size_t active_mode = 15;
+    std::size_t planned_mode = 15;
+    std::array<bool, kNumLegs> contact{};
+    std::array<std::array<float, 3>, kNumLegs> force_des{};
+    std::array<std::array<float, 3>, kNumLegs> force_wbc{};
+  };
+
   std::array<JointCommand<float>, kNumLegs> commands{};
   StateEstimate<float> estimate{};
   AlgorithmBackendId backend = AlgorithmBackendId::CurrentMit;
   bool valid = false;
+  OpenDogDiagnostics opendog{};
 };
 
 class AlgorithmBackend

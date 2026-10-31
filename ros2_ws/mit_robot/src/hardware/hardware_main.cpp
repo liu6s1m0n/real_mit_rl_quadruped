@@ -80,7 +80,7 @@ struct Arguments
   bool keyboard_control = false;
   bool stand_up = false;
   bool set_zero = false;
-  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::CurrentMit;
+  AlgorithmBackendId algorithm_backend = AlgorithmBackendId::OpenDog;
   std::string algorithm_config_directory = kDefaultAlgorithmConfigDirectory;
   bool algorithm_explicit = false;
   bool imu_only = false;

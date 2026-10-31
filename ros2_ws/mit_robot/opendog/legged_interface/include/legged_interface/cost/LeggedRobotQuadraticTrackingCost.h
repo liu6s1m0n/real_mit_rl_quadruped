@@ -57,9 +57,28 @@ class LeggedRobotStateInputQuadraticCost final : public QuadraticStateInputCost 
   std::pair<vector_t, vector_t> getStateInputDeviation(scalar_t time, const vector_t& state, const vector_t& input,
                                                        const TargetTrajectories& targetTrajectories) const override {
     const auto contactFlags = referenceManagerPtr_->getContactFlags(time);
-    const vector_t xNominal = targetTrajectories.getDesiredState(time);
+    auto xNominal = targetTrajectories.getDesiredState(time);
+    // The foot-height constraint alone permits the optimizer to lower the
+    // thigh and compensate with the calf.  During swing, bias the joint
+    // reference toward a raised knee and an assisting calf while keeping
+    // stance legs on the original reference.
+    constexpr scalar_t kSwingHfeReferenceOffset = 0.45;
+    constexpr scalar_t kSwingKfeReferenceOffset = -0.25;
+    constexpr scalar_t kSwingHfeWeightScale = 4.0;
+    constexpr scalar_t kSwingKfeWeightScale = 1.5;
+    const Eigen::Index jointStateStart = xNominal.size() -
+      static_cast<Eigen::Index>(info_.actuatedDofNum);
+    vector_t stateDeviation = state - xNominal;
+    for (std::size_t leg = 0; leg < contactFlags.size(); ++leg) {
+      if (contactFlags[leg]) {continue;}
+      const Eigen::Index joint = jointStateStart + static_cast<Eigen::Index>(3 * leg);
+      xNominal(joint + 1) += kSwingHfeReferenceOffset;
+      xNominal(joint + 2) += kSwingKfeReferenceOffset;
+      stateDeviation(joint + 1) = kSwingHfeWeightScale * (state(joint + 1) - xNominal(joint + 1));
+      stateDeviation(joint + 2) = kSwingKfeWeightScale * (state(joint + 2) - xNominal(joint + 2));
+    }
     const vector_t uNominal = weightCompensatingInput(info_, contactFlags);
-    return {state - xNominal, input - uNominal};
+    return {stateDeviation, input - uNominal};
   }
 
   const CentroidalModelInfo info_;

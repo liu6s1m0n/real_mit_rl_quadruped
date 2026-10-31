@@ -67,7 +67,7 @@ TEST(OpenDogReference, StandUpTrajectoryRetainsItsInitialTime)
   auto target = reference.update(desired, state);
   EXPECT_DOUBLE_EQ(target.timeTrajectory.back(), 5.2);
   EXPECT_DOUBLE_EQ(target.stateTrajectory.front()(8), 0.12);
-  EXPECT_DOUBLE_EQ(target.stateTrajectory.back()(8), 0.28);
+  EXPECT_DOUBLE_EQ(target.stateTrajectory.back()(8), 0.32);
   state.time = 2.5;
   EXPECT_DOUBLE_EQ(reference.update(desired, state).timeTrajectory.back(), 5.2);
 }

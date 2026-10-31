@@ -211,6 +211,16 @@ int HardwareBridge::runKeyboardControl(
   }
   if (csv_log.is_open()) {
     csv_log << "t_s,fsm,body_roll,body_pitch,body_yaw,body_z";
+    csv_log << ",opendog_diag_valid,opendog_active_mode,opendog_planned_mode";
+    for (const auto * leg : {"FR", "FL", "RR", "RL"}) {
+      csv_log << ',' << "opendog_" << leg << "_contact"
+              << ',' << "opendog_" << leg << "_force_des_x"
+              << ',' << "opendog_" << leg << "_force_des_y"
+              << ',' << "opendog_" << leg << "_force_des_z"
+              << ',' << "opendog_" << leg << "_force_wbc_x"
+              << ',' << "opendog_" << leg << "_force_wbc_y"
+              << ',' << "opendog_" << leg << "_force_wbc_z";
+    }
     for (const auto * leg : {"FR", "FL", "RR", "RL"}) {
       csv_log << ',' << leg << "_foot_body_x," << leg << "_foot_body_y," <<
         leg << "_foot_body_z," << leg << "_foot_world_x," <<
@@ -444,6 +454,18 @@ int HardwareBridge::runKeyboardControl(
         const auto & estimate = algorithm_output.estimate;
         csv_log << ',' << estimate.rpy.x() << ',' << estimate.rpy.y()
                 << ',' << estimate.rpy.z() << ',' << estimate.position_world.z();
+        const auto & opendog = algorithm_output.opendog;
+        csv_log << ',' << opendog.valid << ',' << opendog.active_mode
+                << ',' << opendog.planned_mode;
+        for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+          csv_log << ',' << opendog.contact[leg];
+          for (std::size_t axis = 0; axis < 3; ++axis) {
+            csv_log << ',' << opendog.force_des[leg][axis];
+          }
+          for (std::size_t axis = 0; axis < 3; ++axis) {
+            csv_log << ',' << opendog.force_wbc[leg][axis];
+          }
+        }
         float model_body_z = 0.0F;
         for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
           const auto leg_id = static_cast<LegId>(leg);

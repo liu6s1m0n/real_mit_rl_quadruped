@@ -62,9 +62,9 @@ TEST(OpenDogAlgorithm, SolvesDm1StandingWithoutHardware)
         const auto & command = output.commands[leg];
         EXPECT_EQ(command.leg, static_cast<LegId>(leg));
         EXPECT_TRUE(command.enabled);
-        EXPECT_FLOAT_EQ(command.kp[0], 20.0F);
-        EXPECT_FLOAT_EQ(command.kp[1], 20.0F);
-        EXPECT_FLOAT_EQ(command.kp[2], 20.0F);
+        EXPECT_FLOAT_EQ(command.kp[0], 4.0F);
+        EXPECT_FLOAT_EQ(command.kp[1], 4.0F);
+        EXPECT_FLOAT_EQ(command.kp[2], 4.0F);
         EXPECT_TRUE(command.kd.isConstant(5.0F));
         EXPECT_TRUE(command.position_desired.allFinite());
         EXPECT_TRUE(command.velocity_desired.allFinite());

@@ -264,7 +264,7 @@ TEST(HardwareBridgeTest, OpenDogKeyboardUsesSharedHardwareOutput)
     EXPECT_EQ(hardware.enable_count, 1);
     // DM1's configured OpenDog gain applies uniformly to all twelve joints.
     for (std::size_t joint = 0; joint < kNumJoints; ++joint) {
-      EXPECT_NEAR(hardware.last_kp[joint], 20.0F, 1e-5F);
+      EXPECT_NEAR(hardware.last_kp[joint], 4.0F, 1e-5F);
     }
   }
   rclcpp::shutdown();
@@ -308,7 +308,7 @@ TEST(HardwareRunnerIsolation, OpenDogStandUpCancelsBackwardAndUsesOwnSettings)
     }
   } config;
   config.replace(
-    "opendog_reference.info", "comHeight                           0.28",
+    "opendog_reference.info", "comHeight                           0.32",
     "comHeight                           0.31");
   config.replace("opendog_task.info", "backward         0.30", "backward         0.07");
   struct RosContext
