@@ -25,7 +25,7 @@ TEST(OpenDogAlgorithm, SolvesDm1StandingWithoutHardware)
     input.imu.acceleration_body << 0.0F, 0.0F, 9.81F;
     input.desired.valid = true;
     input.desired.mode = ControlMode::BalanceStand;
-    input.desired.body_position_world.z() = 0.28F;
+    input.desired.body_position_world.z() = 0.32F;
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       input.joints[leg].leg = static_cast<LegId>(leg);
       input.joints[leg].position << 0.0F, -0.282961F, 0.739729F;
@@ -62,9 +62,9 @@ TEST(OpenDogAlgorithm, SolvesDm1StandingWithoutHardware)
         const auto & command = output.commands[leg];
         EXPECT_EQ(command.leg, static_cast<LegId>(leg));
         EXPECT_TRUE(command.enabled);
-        EXPECT_FLOAT_EQ(command.kp[0], 4.0F);
-        EXPECT_FLOAT_EQ(command.kp[1], 4.0F);
-        EXPECT_FLOAT_EQ(command.kp[2], 4.0F);
+        EXPECT_FLOAT_EQ(command.kp[0], 12.0F);
+        EXPECT_FLOAT_EQ(command.kp[1], 12.0F);
+        EXPECT_FLOAT_EQ(command.kp[2], 12.0F);
         EXPECT_TRUE(command.kd.isConstant(5.0F));
         EXPECT_TRUE(command.position_desired.allFinite());
         EXPECT_TRUE(command.velocity_desired.allFinite());
@@ -102,7 +102,7 @@ TEST(OpenDogAlgorithm, AlignsStartupGravityWithoutScalingDynamicAcceleration)
       Eigen::AngleAxisf(-0.05F, Vec3<float>::UnitX());
     input.desired.valid = true;
     input.desired.mode = ControlMode::BalanceStand;
-    input.desired.body_position_world.z() = 0.28F;
+    input.desired.body_position_world.z() = 0.32F;
     for (auto & joint : input.joints) {
       joint.position << 0.0F, -0.282961F, 0.739729F;
     }

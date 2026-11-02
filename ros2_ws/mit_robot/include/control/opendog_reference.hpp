@@ -54,6 +54,8 @@ public:
     std::shared_ptr<ocs2::legged_robot::GaitSchedule> schedule);
   void setMode(ControlMode mode);
   void setMotion(teleop::Motion motion, std::uint64_t sequence);
+  // 单次踏步只有在当前四足支撑数据满足公共触地参数时才允许插入。
+  void setSingleStepReady(bool ready) noexcept {single_step_ready_.store(ready);}
   void reset() noexcept;
   void preSolverRun(
     double init_time, double final_time, const ocs2::vector_t & state,
@@ -69,5 +71,6 @@ private:
   std::atomic<std::uint64_t> requested_motion_{0};
   std::uint64_t applied_motion_ = 0;
   std::atomic<bool> requested_trot_{false};
+  std::atomic<bool> single_step_ready_{true};
   bool applied_trot_ = false;
 };

@@ -115,7 +115,7 @@ struct OpenDogAlgorithm::Impl
   double initial_period;
   float joint_kp = 4.0F;
   float joint_kd = 5.0F;
-  float rear_calf_kp = 4.0F;
+  std::array<float, kNumLegs> calf_kp{{4.0F, 4.0F, 4.0F, 4.0F}};
   ocs2::SystemObservation observation;
   ocs2::vector_t measured_rbd_state;
   double time = 0.0;
@@ -203,7 +203,12 @@ bool OpenDogAlgorithm::configure()
   ocs2::loadData::loadCppDataType(task, "hardware_output.kd", impl_->joint_kd);
   boost::property_tree::ptree output_settings;
   boost::property_tree::read_info(task, output_settings);
-  impl_->rear_calf_kp = output_settings.get<float>("hardware_output.rear_calf_kp", impl_->joint_kp);
+  constexpr std::array<const char *, kNumLegs> calf_kp_keys{
+    "hardware_output.FR_calf_kp", "hardware_output.FL_calf_kp",
+    "hardware_output.RR_calf_kp", "hardware_output.RL_calf_kp"};
+  for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+    impl_->calf_kp[leg] = output_settings.get<float>(calf_kp_keys[leg], impl_->joint_kp);
+  }
   ocs2::loadData::loadCppDataType(reference, "comHeight", impl_->command_settings.standing_height);
   auto & velocity = impl_->command_settings.velocity;
   velocity.forward = output_settings.get<float>("hardware_command.forward", velocity.forward);
@@ -213,8 +218,10 @@ bool OpenDogAlgorithm::configure()
   velocity.yaw = output_settings.get<float>("hardware_command.yaw_rate", velocity.yaw);
   impl_->command_settings.joint_kp = impl_->joint_kp;
   impl_->command_settings.joint_kd = impl_->joint_kd;
-  std::printf("[OpenDog][OUTPUT] kp=%.3f kd=%.3f rear_calf_kp=%.3f\n",
-    impl_->joint_kp, impl_->joint_kd, impl_->rear_calf_kp);
+  std::printf(
+    "[OpenDog][OUTPUT] kp=%.3f kd=%.3f calf_kp=[%.3f %.3f %.3f %.3f]\n",
+    impl_->joint_kp, impl_->joint_kd, impl_->calf_kp[0], impl_->calf_kp[1],
+    impl_->calf_kp[2], impl_->calf_kp[3]);
   impl_->legged_interface->getSwitchedModelReferenceManagerPtr()->attachRosNode(impl_->node);
   impl_->executor = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
   impl_->executor->add_node(impl_->node);
@@ -257,6 +264,19 @@ bool OpenDogAlgorithm::compute(
   const auto compute_start = std::chrono::steady_clock::now();
   impl_->timing.initial_policy = !impl_->initialized;
   const auto & info = impl_->legged_interface->getCentroidalModelInfo();
+  bool has_valid_contact_measurement = false;
+  bool all_legs_loaded = true;
+  const float nominal_support = static_cast<float>(info.robotMass * control_config::gravity / kNumLegs);
+  for (const auto & contact : input.contacts) {
+    if (!contact.valid) {continue;}
+    has_valid_contact_measurement = true;
+    all_legs_loaded = all_legs_loaded && contact.contact &&
+      contact.contact_probability >= control_config::locomotion::touchdown_probability &&
+      contact.normal_force >= control_config::locomotion::touchdown_support_ratio * nominal_support;
+  }
+  // 没有有效接触测量时沿用原始 OpenDog 行为；有测量时复用公共触地参数，
+  // 只限制单次踏步的计划插入，不改变站立或连续行走路径。
+  impl_->gait_command->setSingleStepReady(!has_valid_contact_measurement || all_legs_loaded);
   ocs2::vector_t joint_position(info.actuatedDofNum);
   ocs2::vector_t joint_velocity(info.actuatedDofNum);
   for (std::size_t current_leg = 0; current_leg < kNumLegs; ++current_leg) {
@@ -378,11 +398,7 @@ bool OpenDogAlgorithm::compute(
     command.timestamp = static_cast<float>(input.timestamp);
     command.sequence = impl_->command_sequence;
     command.kp.setConstant(impl_->joint_kp);
-    if (current_leg == static_cast<std::size_t>(LegId::RR) ||
-      current_leg == static_cast<std::size_t>(LegId::RL))
-    {
-      command.kp[2] = impl_->rear_calf_kp;
-    }
+    command.kp[2] = impl_->calf_kp[current_leg];
     command.kd.setConstant(impl_->joint_kd);
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t opendog_index = opendog_leg * kJointsPerLeg + joint;

@@ -130,6 +130,24 @@ TEST(OpenDogGaitCommand, SingleDiagonalStepsDoNotRepeatAndCanBeRequestedAgain)
   EXPECT_EQ(schedule->getModeSchedule(0.0, 3.0).modeAtTime(1.25), 9U);
 }
 
+TEST(OpenDogGaitCommand, SingleDiagonalStepWaitsForSharedSupportCondition)
+{
+  auto schedule = std::make_shared<ocs2::legged_robot::GaitSchedule>(
+    ocs2::ModeSchedule({0.5}, {15, 15}),
+    ocs2::legged_robot::loadModeSequenceTemplate(config("opendog_gait.info"), "stance", false), 0.1);
+  OpenDogGaitCommand command(config("opendog_gait.info"), schedule);
+  ocs2::ReferenceManager reference;
+  command.setMode(ControlMode::Locomotion);
+  command.setSingleStepReady(false);
+  command.setMotion(teleop::Motion::TwoLegStand, 1);
+  command.preSolverRun(0.0, 1.0, {}, reference);
+  EXPECT_EQ(schedule->getModeSchedule(0.0, 2.0).modeAtTime(1.25), 15U);
+
+  command.setSingleStepReady(true);
+  command.preSolverRun(1.0, 2.0, {}, reference);
+  EXPECT_EQ(schedule->getModeSchedule(1.0, 4.0).modeAtTime(2.25), 6U);
+}
+
 TEST(OpenDogReference, StanceConstrainsVelocityWithoutPullingFeetToZeroHeight)
 {
   legged::LeggedInterface interface(

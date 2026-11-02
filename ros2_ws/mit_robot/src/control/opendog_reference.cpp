@@ -127,6 +127,7 @@ void OpenDogGaitCommand::reset() noexcept
 {
   requested_trot_.store(false);
   requested_motion_.store(0);
+  single_step_ready_.store(true);
   applied_trot_ = false;
   applied_motion_ = 0;
   // Called after the solver thread has joined. Restore its schedule and template.
@@ -146,6 +147,8 @@ void OpenDogGaitCommand::preSolverRun(
   if (diagonal == 0) {
     schedule_->insertModeSequenceTemplate(trot ? trot_ : stance_, final_time, horizon);
   } else {
+    // 单步请求只等待当前支撑条件，不在条件不满足时自动回退或取消请求。
+    if (!single_step_ready_.load()) {return;}
     // 保留当前预测窗口的前缀，只追加一次有限时长的对角踏步。
     // 踏步结束后明确回到支撑态，避免按键保持时重复循环。
     schedule_->insertModeSequenceTemplate(stance_, final_time, final_time + horizon);

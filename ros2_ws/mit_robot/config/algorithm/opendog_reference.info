@@ -1,7 +1,7 @@
 targetDisplacementVelocity          0.5;
 targetRotationVelocity              1.57;
 
-comHeight                           0.32
+comHeight                           0.28    ; 与 DM1 模型名义站高和最低站高约束保持一致
 standUpDuration                     3.2
 
 defaultJointState
