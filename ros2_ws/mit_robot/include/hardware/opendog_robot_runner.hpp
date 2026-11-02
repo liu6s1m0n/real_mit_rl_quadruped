@@ -28,6 +28,7 @@ public:
 
 private:
   void holdCurrentPose(ControlMode mode);
+  void startProneDown();
   bool computeJointInitialization(const ControlInputSnapshot & input, ControlOutput & output);
   OpenDogAlgorithm algorithm_;
   DesiredState<float> desired_;
@@ -40,4 +41,9 @@ private:
   bool initialization_started_ = false;
   bool initialization_complete_ = false;
   bool stand_up_pending_ = false;
+  // P 趴下：复用回零插值，前馈从站立时最后一帧 WBC 力矩逐步卸载到 0。
+  // 注意：`{}` 不会把 Eigen 向量清零，构造函数和 reset() 里显式 setZero。
+  std::array<Vec3<float>, kNumLegs> prone_feedforward_;
+  float initialization_duration_ = 1.2F;
+  bool prone_down_active_ = false;
 };

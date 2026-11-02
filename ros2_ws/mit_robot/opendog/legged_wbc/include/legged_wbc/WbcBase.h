@@ -24,6 +24,9 @@ class WbcBase {
 
   virtual void loadTasksSetting(const std::string& taskFile, bool verbose);
 
+  // 清空上一周期的期望输入（用于差分关节加速度），再次站立时不沿用上一次站立的数据。
+  void reset() { inputLast_.setZero(info_.inputDim); }
+
   virtual vector_t update(const vector_t& stateDesired, const vector_t& inputDesired, const vector_t& rbdStateMeasured, size_t mode,
                           scalar_t period);
 

@@ -26,6 +26,9 @@ class KalmanFilterEstimate : public StateEstimateBase {
 
   void loadSettings(const std::string& taskFile, bool verbose);
 
+  // 清空滤波状态（位置/速度/足端/协方差），用于再次使能后重新站立，避免沿用上一次站立的高度。
+  void reset();
+
  protected:
   void updateFromTopic();
 

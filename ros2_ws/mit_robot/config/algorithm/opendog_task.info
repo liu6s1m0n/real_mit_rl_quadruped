@@ -8,8 +8,8 @@ hardware_output
   kd                  5.0
   FR_calf_kp          17.0    ; 右前 KFE 独立位置增益
   FL_calf_kp          17.0    ; 左前 KFE 独立位置增益
-  RR_calf_kp          18.0    ; 右后 KFE 独立位置增益，回退过高增益
-  RL_calf_kp          18.0    ; 左后 KFE 独立位置增益，回退过高增益
+  RR_calf_kp          18.0    ; 右后 KFE 独立位置增益，回退过高增益（11/02 试过 30，姿态无改善）
+  RL_calf_kp          18.0    ; 左后 KFE 独立位置增益，回退过高增益（11/02 试过 30，姿态无改善）
 }
 
 legged_robot_interface
@@ -24,7 +24,7 @@ model_settings
 
   verboseCppAd                  true      ; 是否打印CppAD信息
   recompileLibrariesCppAd       false     ; 是否重新编译CppAD库
-  modelFolderCppAd              /tmp/legged_control/dm1_opendog_mjcf_mass14705035 ; CppAD库缓存目录
+  modelFolderCppAd              /tmp/legged_control/dm1_opendog_mjcf_mass14705035_com2 ; CppAD库缓存目录（base 质心修正后新目录，旧目录为 ..._mass14705035）
 }
 
 swing_trajectory_config

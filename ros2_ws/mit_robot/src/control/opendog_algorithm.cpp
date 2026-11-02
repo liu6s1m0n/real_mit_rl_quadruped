@@ -450,6 +450,11 @@ void OpenDogAlgorithm::reset() noexcept
 {
 #if defined(MYMIT_ENABLE_OPENDOG)
   stop();
+  // 再次使能（Shift+U）后会重新站立：状态估计器和 WBC 也必须回到初始状态。
+  // 否则估计器仍保留上一次站立结束时约 0.27 m 的机身高度，而机器人实际趴在地上，
+  // 第一帧 MPC/WBC 会给出约 30 Nm 的力矩尖峰和约 0.2 rad 的期望关节跳变（11/02 实测）。
+  if (impl_->state_estimate) {impl_->state_estimate->reset();}
+  if (impl_->wbc) {impl_->wbc->reset();}
   impl_->time = 0.0;
   impl_->observation.state.setZero();
   impl_->observation.input.setZero();

@@ -14,6 +14,7 @@ stand_joint_position_rear_rad: [0, -0.282961, 0.739729]
 nominal_body_height_m: 0.28
 # 按用户要求恢复 f3c1696 父提交的整机模型 14.705035 kg；实测整机仍为 11.8 kg。
 body_mass_kg: 6.889103
+# 2026-11-02：base 质心 x/y 改为 (-0.026751, 0.008577)，按站立实测压力中心修正一半；质量不变。
 motor:
   name: DM-J6248P-2EC
   continuous_torque_nm: 30
@@ -35,5 +36,5 @@ control:
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, prone_down]
 mjcf:
   file: src/dm1_description/dm1/dm1.xml
-  sha256: c6ea83e830b2df14fe2ffa976b054652533486b66c1ac386c8481b74b756cecd
+  sha256: c0d1ce2fe5ce6380660761324ac4bd01a55096a5edeb7b8962a7f1639b07fa94
   fixed_installation_rotations_baked_in: true

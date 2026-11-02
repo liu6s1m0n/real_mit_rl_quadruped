@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -43,6 +44,40 @@ Eigen::Quaternionf rpyDegreesToQuaternion(const Vec3<float> & rpy_degrees)
     Eigen::AngleAxisf(roll, Vec3<float>::UnitX());
   result.normalize();
   return result;
+}
+
+// DM1 IMU 安装偏差默认值（传感器相对机体，单位度）。
+// 来源：2026-11-01 22:18 / 22:19 与 2026-11-02 09:25 三次站立数据，
+// 用加速度计重力方向对齐四足足端拟合的地面法向（假设地面水平），
+// 三次拟合残差约 0.1°。修正前 IMU 读数机身水平，实际后低约 1.8°。
+// 可用环境变量临时覆盖（无需重新编译）：
+//   DM1_IMU_MOUNT_ROLL_DEG / DM1_IMU_MOUNT_PITCH_DEG / DM1_IMU_MOUNT_YAW_DEG
+// 全部设为 0 即恢复旧行为（不做安装补偿）。
+constexpr float kDefaultImuMountRollDeg = -1.32F;
+constexpr float kDefaultImuMountPitchDeg = 1.84F;
+constexpr float kDefaultImuMountYawDeg = 0.0F;
+constexpr float kMaximumImuMountDeg = 10.0F;
+// 下游估计器使用的标准重力；加速度计输出统一归一化到这个模长。
+constexpr float kNominalGravity = 9.81F;
+// 归一化系数的合理范围；超出说明启动基准异常，不做归一化。
+constexpr float kMinimumAccelerationScale = 0.90F;
+constexpr float kMaximumAccelerationScale = 1.10F;
+
+float mountAngleFromEnvironment(const char * name, float default_value)
+{
+  const char * text = std::getenv(name);
+  if (text == nullptr || *text == '\0') {return default_value;}
+  char * end = nullptr;
+  const float value = std::strtof(text, &end);
+  if (end == text || !std::isfinite(value) || std::fabs(value) > kMaximumImuMountDeg) {
+    imu_log::print(
+      imu_log::Level::Warning,
+      "[DM IMU] 忽略无效的 %s='%s'（需为 |值|<=%.0f 的度数），使用默认 %.3f°。\n",
+      name, text, static_cast<double>(kMaximumImuMountDeg),
+      static_cast<double>(default_value));
+    return default_value;
+  }
+  return value;
 }
 
 }  // namespace
@@ -237,6 +272,17 @@ bool HardwareImu::update(const HardwareImuMeasurement & measurement)
 HardwareImu::HardwareImu(std::string serial_device, int baudrate)
 : serial_device_(std::move(serial_device)), baudrate_(baudrate)
 {
+  mount_rpy_degrees_ = Vec3<float>(
+    mountAngleFromEnvironment("DM1_IMU_MOUNT_ROLL_DEG", kDefaultImuMountRollDeg),
+    mountAngleFromEnvironment("DM1_IMU_MOUNT_PITCH_DEG", kDefaultImuMountPitchDeg),
+    mountAngleFromEnvironment("DM1_IMU_MOUNT_YAW_DEG", kDefaultImuMountYawDeg));
+  mount_body_from_sensor_ = rpyDegreesToQuaternion(mount_rpy_degrees_);
+  imu_log::print(
+    imu_log::Level::Info,
+    "[DM IMU] 安装偏差补偿 mount_rpy_deg=(%.3f, %.3f, %.3f)（传感器相对机体）\n",
+    static_cast<double>(mount_rpy_degrees_.x()),
+    static_cast<double>(mount_rpy_degrees_.y()),
+    static_cast<double>(mount_rpy_degrees_.z()));
   if (!serial_device_.empty()) {
     driver_ = std::make_unique<ImuDriver>(serial_device_, baudrate_);
   }
@@ -267,6 +313,7 @@ void HardwareImu::close() noexcept
   startup_gravity_body_.setZero();
   startup_rpy_degrees_.setZero();
   startup_gravity_magnitude_ = 9.81F;
+  acceleration_scale_ = 1.0F;
   startup_heading_orientation_ = Eigen::Quaternionf::Identity();
 }
 
@@ -401,21 +448,42 @@ bool HardwareImu::calibrateStartupBaseline()
     return false;
   }
 
-  startup_gravity_body_ = average_acceleration;
+  // 基准重力和启动姿态都转换到机体系，与 readAt() 的输出保持同一坐标语义。
+  startup_gravity_body_ = mount_body_from_sensor_ * average_acceleration;
   startup_gravity_magnitude_ = gravity_magnitude;
+  // 2026-11-02 静止测试：|g| 约 10.08 m/s^2，比 9.81 偏大约 2.8%，
+  // 会在卡尔曼滤波里形成约 0.27 m/s^2 的持续向上虚假加速度，这里按启动模长归一化。
+  const float acceleration_scale = kNominalGravity / gravity_magnitude;
+  if (acceleration_scale >= kMinimumAccelerationScale &&
+    acceleration_scale <= kMaximumAccelerationScale)
+  {
+    acceleration_scale_ = acceleration_scale;
+  } else {
+    acceleration_scale_ = 1.0F;
+    imu_log::print(
+      imu_log::Level::Warning,
+      "[DM IMU] 启动 |g|=%.3f m/s^2 超出合理范围，跳过加速度归一化（系数保持 1.0）。\n",
+      static_cast<double>(gravity_magnitude));
+  }
   startup_rpy_degrees_ = average_rpy_degrees;
   // 加速度仍然是设备世界系中的重力向量，不能把启动 roll/pitch 一起减掉；
   // 只消除启动 yaw，既保持初始航向为零，又让姿态和重力方向使用同一坐标系。
-  const Vec3<float> startup_heading_rpy(0.0F, 0.0F, startup_rpy_degrees_.z());
+  const Eigen::Matrix3f startup_world_from_body = (
+    rpyDegreesToQuaternion(startup_rpy_degrees_) *
+    mount_body_from_sensor_.conjugate()).toRotationMatrix();
+  const float startup_body_yaw_degrees = std::atan2(
+    startup_world_from_body(1, 0), startup_world_from_body(0, 0)) * kRadiansToDegrees;
+  const Vec3<float> startup_heading_rpy(0.0F, 0.0F, startup_body_yaw_degrees);
   startup_heading_orientation_ = rpyDegreesToQuaternion(startup_heading_rpy);
   startup_baseline_valid_ = true;
   imu_log::print(
     imu_log::Level::Info,
     "[DM IMU] startup baseline accepted: gravity_body=(%.3f, %.3f, %.3f) "
-    "|g|=%.3f m/s^2 rpy0_deg=(%.3f, %.3f, %.3f) from %zu samples\n",
+    "|g|=%.3f m/s^2 rpy0_deg=(%.3f, %.3f, %.3f) from %zu samples; "
+    "acc_scale=%.4f\n",
     startup_gravity_body_.x(), startup_gravity_body_.y(), startup_gravity_body_.z(),
     startup_gravity_magnitude_, startup_rpy_degrees_.x(), startup_rpy_degrees_.y(),
-    startup_rpy_degrees_.z(), sample_count);
+    startup_rpy_degrees_.z(), sample_count, static_cast<double>(acceleration_scale_));
   return true;
 }
 
@@ -473,14 +541,20 @@ bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
   sample = ImuData<float>{};
   // 只去除启动航向：R_input = R_yaw0^-1 * R_current。
   // 保留 roll/pitch，避免与未变换的机体系重力加速度产生坐标语义冲突。
+  // 安装偏差补偿：R_wb = R_ws * R_bs^T；角速度和加速度从传感器系转到机体系。
   sample.orientation_world_from_body =
-    startup_heading_orientation_.conjugate() * current_orientation;
-  sample.angular_velocity_body <<
+    startup_heading_orientation_.conjugate() * current_orientation *
+    mount_body_from_sensor_.conjugate();
+  sample.orientation_world_from_body.normalize();
+  const Vec3<float> angular_velocity_sensor(
     raw_sample.angular_velocity[0], raw_sample.angular_velocity[1],
-    raw_sample.angular_velocity[2];
-  sample.acceleration_body <<
+    raw_sample.angular_velocity[2]);
+  const Vec3<float> acceleration_sensor(
     raw_sample.acceleration[0], raw_sample.acceleration[1],
-    raw_sample.acceleration[2];
+    raw_sample.acceleration[2]);
+  sample.angular_velocity_body = mount_body_from_sensor_ * angular_velocity_sensor;
+  sample.acceleration_body =
+    acceleration_scale_ * (mount_body_from_sensor_ * acceleration_sensor);
   sample.timestamp = timestamp;
   sample.sequence = raw_sample.sequence;
   sample.orientation_valid = true;

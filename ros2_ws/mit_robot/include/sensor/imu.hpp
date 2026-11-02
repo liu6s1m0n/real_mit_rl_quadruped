@@ -171,6 +171,12 @@ public:
   /** @brief 返回启动阶段测得的重力加速度模长，单位 m/s^2。 */
   float startupGravityMagnitude() const noexcept {return startup_gravity_magnitude_;}
 
+  /** @brief 返回加速度计归一化系数（9.81 / 启动 |g|），未标定时为 1。 */
+  float accelerationScale() const noexcept {return acceleration_scale_;}
+
+  /** @brief 返回当前使用的 IMU 安装偏差（传感器相对机体的 roll/pitch/yaw），单位为度。 */
+  Vec3<float> mountRpyDegrees() const noexcept {return mount_rpy_degrees_;}
+
   /**
    * @brief 注入硬件驱动读取的一帧 IMU 数据。
    * @return 数值有效并已保存时返回 true；无效帧会清空缓存并返回 false。
@@ -197,6 +203,13 @@ private:
   // 仅消除启动航向角；保留启动 roll/pitch，使原始重力向量与姿态处于同一世界系。
   Eigen::Quaternionf startup_heading_orientation_ = Eigen::Quaternionf::Identity();
   bool startup_baseline_valid_ = false;
+  // IMU 安装偏差：传感器坐标系相对机体坐标系的旋转 R_body_sensor。
+  // 串口路径输出前统一转换：R_wb = R_ws * R_bs^T，a_b = R_bs * a_s，w_b = R_bs * w_s。
+  Vec3<float> mount_rpy_degrees_ = Vec3<float>::Zero();
+  Eigen::Quaternionf mount_body_from_sensor_ = Eigen::Quaternionf::Identity();
+  // 加速度计模长归一化系数：9.81 / 启动静止时测得的 |g|。
+  // 下游估计器（LinearKalmanFilter）固定用 9.81 抵消重力，模长偏差会变成持续的虚假加速度。
+  float acceleration_scale_ = 1.0F;
 };
 
 /**

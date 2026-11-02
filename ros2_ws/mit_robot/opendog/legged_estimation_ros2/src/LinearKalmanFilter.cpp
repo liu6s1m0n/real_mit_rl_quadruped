@@ -51,6 +51,17 @@ KalmanFilterEstimate::KalmanFilterEstimate(PinocchioInterface pinocchioInterface
   sub_ = nh->create_subscription<nav_msgs::msg::Odometry>("/tracking_camera/odom/sample", 10, std::bind(&KalmanFilterEstimate::callback, this, std::placeholders::_1));
 }
 
+void KalmanFilterEstimate::reset() {
+  // 与构造函数的初始状态一致：位置、速度、足端估计清零，协方差恢复为初始的大不确定度，
+  // 下一次 update() 会立即用腿部运动学重新收敛到当前（趴地）高度。
+  xHat_.setZero(numState_);
+  ps_.setZero(dimContacts_);
+  vs_.setZero(dimContacts_);
+  p_ = 100. * matrix_t::Identity(numState_, numState_);
+  feetHeights_.setZero(numContacts_);
+  topicUpdated_ = false;
+}
+
 vector_t KalmanFilterEstimate::update(const rclcpp::Time& time, const rclcpp::Duration& period) {
   scalar_t dt = period.seconds();
   a_.block(0, 3, 3, 3) = dt * matrix3_t::Identity();
