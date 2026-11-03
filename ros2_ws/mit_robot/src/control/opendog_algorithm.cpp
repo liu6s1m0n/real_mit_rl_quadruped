@@ -168,37 +168,45 @@ bool OpenDogAlgorithm::configure()
     !std::filesystem::exists(urdf) || !std::filesystem::exists(gait)) {return false;}
 
   impl_->node = rclcpp::Node::make_shared("mymit_opendog_algorithm");
+  //读 URDF 建 Pinocchio 模型，组装最优控制问题（代价、约束、动力学）
   impl_->legged_interface = std::make_shared<legged::LeggedInterface>(task, urdf, reference);
   impl_->legged_interface->setupOptimalControlProblem(task, urdf, reference, false);
-
+  
   ocs2::CentroidalModelPinocchioMapping mapping(
     impl_->legged_interface->getCentroidalModelInfo());
   impl_->ee_kinematics = std::make_shared<ocs2::PinocchioEndEffectorKinematics>(
     impl_->legged_interface->getPinocchioInterface(), mapping,
     impl_->legged_interface->modelSettings().contactNames3DoF);
+  //状态估计器、WBC、MPC、参考轨迹和步态命令
   impl_->state_estimate = std::make_shared<legged::KalmanFilterEstimate>(
     impl_->legged_interface->getPinocchioInterface(),
     impl_->legged_interface->getCentroidalModelInfo(), *impl_->ee_kinematics,
     impl_->node);
   impl_->state_estimate->loadSettings(task, false);
+  //wbc
   impl_->wbc = std::make_shared<legged::WeightedWbc>(
     impl_->legged_interface->getPinocchioInterface(),
     impl_->legged_interface->getCentroidalModelInfo(), *impl_->ee_kinematics);
   impl_->wbc->loadTasksSetting(task, false);
+  //状态切换
   impl_->rbd_conversions = std::make_shared<ocs2::CentroidalModelRbdConversions>(
     impl_->legged_interface->getPinocchioInterface(),
     impl_->legged_interface->getCentroidalModelInfo());
+  //mpc求解器
   impl_->mpc = std::make_unique<ocs2::SqpMpc>(
     impl_->legged_interface->mpcSettings(), impl_->legged_interface->sqpSettings(),
     impl_->legged_interface->getOptimalControlProblem(),
     impl_->legged_interface->getInitializer());
   impl_->mpc->getSolverPtr()->setReferenceManager(
     impl_->legged_interface->getReferenceManagerPtr());
+  //把速度指令变成目标轨迹
   impl_->reference = std::make_unique<OpenDogReference>(reference, task);
+  //切换步态，并挂到MPC求解器上，方便在MPC中使用
   impl_->gait_command = std::make_shared<OpenDogGaitCommand>(
     gait,
     impl_->legged_interface->getSwitchedModelReferenceManagerPtr()->getGaitSchedule());
   impl_->mpc->getSolverPtr()->addSynchronizedModule(impl_->gait_command);
+  //电机PD增益
   ocs2::loadData::loadCppDataType(task, "hardware_output.kp", impl_->joint_kp);
   ocs2::loadData::loadCppDataType(task, "hardware_output.kd", impl_->joint_kd);
   boost::property_tree::ptree output_settings;

@@ -263,7 +263,9 @@ ros2 run mymit_robot hardware_main \
 
 电机零位就是 OpenDog 机械零位，模型关节角与 OpenDog URDF 完全一致（无安装零偏）：
 髋水平；大腿电机接口对准螺丝（大腿水平朝后）；小腿向后伸直顶到限位。写零时机器人
-必须悬空摆成这个姿态，再执行 `--set-zero`；之后放下趴好正常启动。
+必须悬空（DM1 脚着地时大腿无法与躯干平行）摆成这个姿态并固定，再执行 `--set-zero`；
+`--set-zero` 不检查姿态，直接写零。之后放下趴好正常启动。参考图和步骤见
+`ros2_ws/mit_robot/docs/OPENDOG_ZERO_CALIBRATION.md`。
 普通启动、`--enable-output` 和键盘解锁都绝不会写入电机参数；需要无论当前偏差大小
 执行明确零位维护时，使用 `--set-zero`。该模式仍不会使能输出，也不能与
 `--enable-output` 或 `--stand-up` 同时使用。
@@ -288,7 +290,6 @@ ros2 run mymit_robot hardware_main \
 | `motor ID must be in [1,255]` | 标定文件中的电机 ID 仍为 0 或超出范围。检查 `config/dm1_hardware_calibration.txt`，每个 ID 必须是 1 到 255。 |
 | `Startup check rejected` | 普通完整模式启动检查失败。机器人必须保持静止、水平、机械零位正确，并收到 12 路健康电机反馈。 |
 | `Startup rejected: robot initial position error` | 至少一个电机相对趴卧姿态的偏差达到接受窗口（默认 `0.05 rad`）；程序不会自动写零，需先把机器人摆回趴卧姿态。只有在悬空摆好 OpenDog 零位时才执行 `--set-zero`。 |
-| `Startup zero rejected` | `--set-zero` 维护模式要求机器人静止、水平并收到 12 路健康电机反馈。 |
 | `DM1 hardware bridge is read-only at startup` | 普通启动不会写零；确认机械状态后如需维护操作，显式使用 `--set-zero`。 |
 
 ### 重新构建和环境刷新

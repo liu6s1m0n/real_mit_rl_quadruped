@@ -79,7 +79,7 @@ TEST(Dm1ModelLoad, JointRangesMatchTheControllerContract)
   const auto model = loadDm1();
   const auto controller_model = robots::dm1::makeModel<double>();
   constexpr std::array<double, kJointsPerLeg> expected_lower{-1.57, -1.57, -2.25};
-  constexpr std::array<double, kJointsPerLeg> expected_upper{1.57, 2.4, 0.5};
+  constexpr std::array<double, kJointsPerLeg> expected_upper{1.57, 2.4, 0.0};
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & joints = controller_model.leg(static_cast<LegId>(leg)).joints;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {

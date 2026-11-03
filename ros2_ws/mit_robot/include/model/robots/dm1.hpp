@@ -32,7 +32,7 @@ JointModelParameters<T> makeJointParameters(bool /*is_rear*/)
   result.zero_offset << T(0), T(0), T(0);
   // 关节限位直接取 OpenDog const.xacro。
   result.lower_limit << T(-1.57), T(-1.57), T(-2.25);
-  result.upper_limit << T(1.57), T(2.4), T(0.5);
+  result.upper_limit << T(1.57), T(2.4), T(0.0);
   result.velocity_limit << T(6.28318530718), T(6.28318530718), T(6.28318530718);
   result.torque_limit << T(97), T(97), T(97);
   result.damping.setConstant(T(1));

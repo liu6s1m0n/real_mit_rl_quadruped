@@ -10,7 +10,7 @@ prone_home_position_rad: [0, -0.203, -2.22, 0, -0.203, -2.22, 0, -0.203, -2.22, 
 kinematic_joint_offset_rad: [0, 0, 0]
 # 每腿 [hip, thigh, calf]，按 leg_order 重复四次；与 dm1.hpp 和 MJCF joint range 同步。
 joint_lower_limit_rad: [-1.57, -1.57, -2.25, -1.57, -1.57, -2.25, -1.57, -1.57, -2.25, -1.57, -1.57, -2.25]
-joint_upper_limit_rad: [1.57, 2.4, 0.5, 1.57, 2.4, 0.5, 1.57, 2.4, 0.5, 1.57, 2.4, 0.5]
+joint_upper_limit_rad: [1.57, 2.4, 0.0, 1.57, 2.4, 0.0, 1.57, 2.4, 0.0, 1.57, 2.4, 0.0]
 # 0.28 m 站姿：侧视连杆中心线对水平倾角约 27.85 度；这不是电机转角相等。
 stand_joint_position_front_rad: [0, -0.485961, -1.480271]
 stand_joint_position_rear_rad: [0, -0.485961, -1.480271]
@@ -39,5 +39,5 @@ control:
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, prone_down]
 mjcf:
   file: src/dm1_description/dm1/dm1.xml
-  sha256: 12388d0c8e30642894377c0ffd0ffae878f747c3a3d6ba0ba571130948bb384e
+  sha256: 57e4259ad6e33593e9201d4c0d8b2a01de920c3a3696577db1b3e9ce59fd0062
   fixed_installation_rotations_baked_in: true

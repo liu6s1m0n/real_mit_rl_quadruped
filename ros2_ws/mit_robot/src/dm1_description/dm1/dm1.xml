@@ -23,7 +23,7 @@
       <default class="kfe">
         <!-- 2026-11-02：零位改为 OpenDog 机械零位，body 不再带安装旋转；
              q=0 为小腿伸直顶限位，趴卧为 (0, -0.203, -2.22)。 -->
-        <joint axis="0 1 0" range="-2.25 0.5"/>
+        <joint axis="0 1 0" range="-2.25 0"/>
         <motor forcerange="-97 97"/>
       </default>
       <default class="visual">

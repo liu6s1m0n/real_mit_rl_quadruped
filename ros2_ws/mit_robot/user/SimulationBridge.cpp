@@ -576,19 +576,33 @@ void runOpenDogPhysics(
       }
       input.desired = desired;
       input.timestamp = static_cast<float>(data->time);
+      // 控制器在快照之后不再访问 mjData。WBC/NMPC 计算期间释放渲染锁，
+      // 否则计算耗时接近仿真步长时渲染线程拿不到锁，窗口会卡死。
+      // 计算期间若发生复位/暂停，快照已失效，丢弃本帧输出，不把旧力矩施加到新状态。
+      const double input_simulation_time = data->time;
+      lock.unlock();
       const bool control_valid = algorithm.compute(input, output);
-      if (control_valid) {
-        consecutive_failures = 0;
-        if (!controller_ready) {
-          controller_ready = true;
-          std::printf("OpenDog MuJoCo WBC+NMPC is producing valid commands\n");
+      lock.lock();
+      const bool frame_still_current = !simulation.exitrequest.load() &&
+        simulation.run != 0 &&
+        std::abs(data->time - input_simulation_time) <= 0.5 * model->opt.timestep;
+      if (frame_still_current) {
+        if (control_valid) {
+          consecutive_failures = 0;
+          if (!controller_ready) {
+            controller_ready = true;
+            std::printf("OpenDog MuJoCo WBC+NMPC is producing valid commands\n");
+          }
+        } else if (++consecutive_failures % 500 == 0) {
+          std::fprintf(stderr, "OpenDog rejected %zu consecutive simulation frames\n", consecutive_failures);
         }
-      } else if (++consecutive_failures % 500 == 0) {
-        std::fprintf(stderr, "OpenDog rejected %zu consecutive simulation frames\n", consecutive_failures);
+        actuator_writer.write(output, data,
+          arbiter.state() == teleop::MotorOutputState::Enabled && control_valid);
+        mj_step(model, data);
+      } else {
+        actuator_writer.write(output, data, false);
+        mj_forward(model, data);
       }
-      actuator_writer.write(output, data,
-        arbiter.state() == teleop::MotorOutputState::Enabled && control_valid);
-      mj_step(model, data);
     } else if (simulation_running) {
       actuator_writer.write(output, data, false);
       mj_step(model, data);

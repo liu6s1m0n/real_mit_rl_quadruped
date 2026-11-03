@@ -589,7 +589,7 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
       model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
       Vec3<float>(0.0F, -0.485961F, -1.480271F)));
     EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -2.25F);
-    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 0.5F);
+    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 0.0F);
   }
 }
 

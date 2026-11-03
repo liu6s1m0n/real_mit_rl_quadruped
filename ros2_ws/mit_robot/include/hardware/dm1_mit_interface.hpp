@@ -518,7 +518,7 @@ private:
 
   // 每条腿三个关节的模型位置上限，单位为 rad。
   static constexpr std::array<float, kJointsPerLeg> kUpperLimit{
-    1.57F, 2.4F, 0.5F};
+    1.57F, 2.4F, 0.0F};
 
   // 关节速度绝对值上限，单位为 rad/s。
   // 电机额定 40 rpm，峰值/空载 60 rpm；指令速度只是前馈目标，电机内部还有

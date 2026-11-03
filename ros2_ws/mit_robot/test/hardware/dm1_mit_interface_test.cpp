@@ -116,7 +116,7 @@ TEST(Dm1MitInterfaceTest, BoundsJointTargetsWithoutDroppingOtherCommands)
   ASSERT_EQ(transport.frames.size(), kNumJoints);
   EXPECT_FLOAT_EQ(transport.frames[0].position, -1.57F);  // 标定方向为 -1。
   EXPECT_FLOAT_EQ(transport.frames[8].position, -2.25F);
-  EXPECT_FLOAT_EQ(transport.frames[9].position, 0.5F);
+  EXPECT_FLOAT_EQ(transport.frames[9].position, 0.0F);  // 小腿上限 = 零位机械限位。
   EXPECT_FLOAT_EQ(transport.frames[10].position, -2.25F);
   EXPECT_FLOAT_EQ(transport.frames[7].position, 0.2F);
   EXPECT_EQ(transport.disable_count, 0);

@@ -562,7 +562,7 @@ TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTarge
         const char * legs[] = {"FR", "FL", "RR", "RL"};
         const char * joints[] = {"hip", "thigh", "calf"};
         const double lower[] = {-1.57, -1.57, -2.25};
-        const double upper[] = {1.57, 2.4, 0.5};
+        const double upper[] = {1.57, 2.4, 0.0};
         for (const auto * leg : legs) {
           for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
             const std::string name = std::string(leg) + "_" + joints[joint];
