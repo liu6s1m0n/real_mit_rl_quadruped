@@ -73,7 +73,7 @@ void FSM_State_LieDown<T>::onEnter()
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & feedback = this->_data->leg_controller->datas[leg];
     entry_joint_positions_[leg] = feedback.valid && feedback.q.allFinite() ?
-      feedback.q : this->_data->control_parameters->motor_zero_position;
+      feedback.q : this->_data->control_parameters->prone_home_position;
     fold_start_joint_positions_[leg] = entry_joint_positions_[leg];
   }
 }
@@ -183,7 +183,7 @@ void FSM_State_LieDown<T>::runJointFolding()
   const auto & parameters = *this->_data->control_parameters;
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     auto & command = controller.commands[leg];
-    const Vec3<T> target = parameters.motor_zero_position;
+    const Vec3<T> target = parameters.prone_home_position;
     const Vec3<T> travel = target - fold_start_joint_positions_[leg];
     // Keep every non-active joint at the captured posture. The first explicit
     // fold stage changes only the calf; the thigh and hip are held.
@@ -243,7 +243,7 @@ void FSM_State_LieDown<T>::runProneHold()
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     auto & command = controller.commands[leg];
     // The final pose must be identical to the MuJoCo initialization keyframe.
-    command.position_desired = parameters.motor_zero_position;
+    command.position_desired = parameters.prone_home_position;
     command.velocity_desired.setZero();
     command.kp_joint = parameters.stand_up_joint_kp;
     command.kd_joint = parameters.stand_up_joint_kd;

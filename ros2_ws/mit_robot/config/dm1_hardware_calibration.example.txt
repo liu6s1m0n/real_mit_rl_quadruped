@@ -1,7 +1,11 @@
 # COPY THIS FILE, MEASURE EVERY VALUE, THEN PASS THE COPY TO --calibration.
 # DO NOT USE THESE PLACEHOLDER MOTOR IDs ON A POWERED ROBOT.
 # Format: JOINT_NAME BUS CAN_ID MASTER_ID DIRECTION(+1|-1) MOTOR_ZERO_RAD
-# Startup auto-zero requires MOTOR_ZERO_RAD=0. Mechanical prone is the firmware zero.
+# MOTOR_ZERO_RAD must stay 0: the firmware zero IS the model zero.
+# Firmware zero = OpenDog mechanical zero (write it with --set-zero while the robot hangs):
+#   hip level; thigh motor connector aligned with the thigh screw (thigh horizontal, pointing back);
+#   calf straightened backwards against its hard stop.
+# Normal startup expects the prone pose (0, -0.203, -2.22) rad, not the zero pose.
 FR_hip    can0 4 0x14  1 0.0
 FR_thigh  can0 5 0x15 -1 0.0
 FR_calf   can0 6 0x16 -1 0.0

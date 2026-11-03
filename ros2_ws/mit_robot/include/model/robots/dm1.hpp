@@ -25,24 +25,23 @@ template<typename T>
 JointModelParameters<T> makeJointParameters(bool /*is_rear*/)
 {
   JointModelParameters<T> result;
-  // q 是电机/策略坐标；机械动力学模型通过 zero_offset 还原安装零位。
-  // DM1 机械趴姿为 12 个电机角全零；控制器通过 zero_offset 还原机械角。
-  // 这些零偏和执行边界与 Isaac 训练 DM1 配置保持一致；固定安装旋转
-  // 由 MJCF body quaternion 表达，解析运动学只保留训练侧的关节偏置。
-  const T thigh_zero_offset = T(-0.203);
-  result.zero_offset << T(0), thigh_zero_offset, T(-2.22);
-  // 电机坐标边界使用与 MIT 校验相同的规范值，避免零偏浮点运算造成整帧拒绝。
-  result.lower_limit << T(-1.57), T(-1.367), T(-0.03);
-  result.upper_limit << T(1.57), T(2.603), T(2.72);
+  // 2026-11-02：模型零位改为 OpenDog 机械零位，q = 电机角 = 机械角，
+  // 与 legged_damiao_description/dmgo 的 URDF 关节角完全一致，不再有安装零偏。
+  // OpenDog 零位：髋水平；大腿电机接口对准螺丝（大腿水平朝后）；
+  // 小腿向后伸直顶到限位。旧坐标 q_old = q + (0, 0.203, 2.22)。
+  result.zero_offset << T(0), T(0), T(0);
+  // 关节限位直接取 OpenDog const.xacro。
+  result.lower_limit << T(-1.57), T(-1.57), T(-2.25);
+  result.upper_limit << T(1.57), T(2.4), T(0.5);
   result.velocity_limit << T(6.28318530718), T(6.28318530718), T(6.28318530718);
   result.torque_limit << T(97), T(97), T(97);
   result.damping.setConstant(T(1));
   result.friction_loss.setConstant(T(0.1));
   result.armature.setConstant(T(0.01));
   // 0.28 m 调试站姿：侧视大小腿中心线对水平的倾角均约 27.85 度。
-  // 安装零偏和小腿连杆方向不同，因此电机读数不相等。
+  // 小腿连杆方向与关节轴不同，因此大腿、小腿读数不相等。
   result.home_position <<
-    T(0), T(-0.282961), T(0.739729);
+    T(0), T(-0.485961), T(-1.480271);
   result.joint_axes.col(0) = Vec3<T>::UnitX();
   result.joint_axes.col(1) = Vec3<T>::UnitY();
   result.joint_axes.col(2) = Vec3<T>::UnitY();

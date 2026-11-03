@@ -47,7 +47,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "algorithm",
-            default_value="current_mit",
+            default_value="opendog",
             description="Controller backend: current_mit or opendog",
         ),
         DeclareLaunchArgument(

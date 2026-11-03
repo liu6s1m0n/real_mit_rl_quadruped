@@ -227,7 +227,7 @@ TEST(OpenDogMuJoCo, UnfoldsBothRearKneesFromProneHome)
     std::cout << std::endl;
     EXPECT_GT(data->qpos[2], 0.25);
     for (std::size_t leg : {2U, 3U}) {
-      EXPECT_GT(legs[leg]->read().position[2], 0.59F) << "rear leg=" << leg;
+      EXPECT_GT(legs[leg]->read().position[2], -1.63F) << "rear leg=" << leg;
     }
     algorithm.stop();
   }

@@ -257,8 +257,13 @@ ros2 run mymit_robot hardware_main \
   --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt
 ```
 
-完整模式现在会等待真实的 12 路健康反馈，并检查静止、水平和机械零位。默认策略是：
-所有关节偏差必须小于 `--zero-tolerance`（默认 `0.05 rad`），超出窗口直接拒绝启动。
+完整模式现在会等待真实的 12 路健康反馈，并检查静止、水平和趴卧姿态。默认策略是：
+所有关节相对趴卧姿态 `(0, -0.203, -2.22)` rad 的偏差必须小于 `--zero-tolerance`
+（默认 `0.05 rad`），超出窗口直接拒绝启动。
+
+电机零位就是 OpenDog 机械零位，模型关节角与 OpenDog URDF 完全一致（无安装零偏）：
+髋水平；大腿电机接口对准螺丝（大腿水平朝后）；小腿向后伸直顶到限位。写零时机器人
+必须悬空摆成这个姿态，再执行 `--set-zero`；之后放下趴好正常启动。
 普通启动、`--enable-output` 和键盘解锁都绝不会写入电机参数；需要无论当前偏差大小
 执行明确零位维护时，使用 `--set-zero`。该模式仍不会使能输出，也不能与
 `--enable-output` 或 `--stand-up` 同时使用。
@@ -282,7 +287,7 @@ ros2 run mymit_robot hardware_main \
 | `cannot open calibration file` | 完整模式的标定文件路径错误或文件不存在。使用标定文件的绝对路径；首次可先使用 `--imu-only` 验证 IMU。 |
 | `motor ID must be in [1,255]` | 标定文件中的电机 ID 仍为 0 或超出范围。检查 `config/dm1_hardware_calibration.txt`，每个 ID 必须是 1 到 255。 |
 | `Startup check rejected` | 普通完整模式启动检查失败。机器人必须保持静止、水平、机械零位正确，并收到 12 路健康电机反馈。 |
-| `Startup rejected: robot initial position error` | 至少一个电机偏差达到零位接受窗口（默认 `0.05 rad`）；程序不会自动写零，需先把机器人摆回正确初始位置，或显式执行 `--set-zero`。 |
+| `Startup rejected: robot initial position error` | 至少一个电机相对趴卧姿态的偏差达到接受窗口（默认 `0.05 rad`）；程序不会自动写零，需先把机器人摆回趴卧姿态。只有在悬空摆好 OpenDog 零位时才执行 `--set-zero`。 |
 | `Startup zero rejected` | `--set-zero` 维护模式要求机器人静止、水平并收到 12 路健康电机反馈。 |
 | `DM1 hardware bridge is read-only at startup` | 普通启动不会写零；确认机械状态后如需维护操作，显式使用 `--set-zero`。 |
 
@@ -311,7 +316,7 @@ source install/setup.bash
 
 ## 运行仿真
 
-启动 DM1 仿真（默认自动选择 OpenGL，机器人从趴地零位原地初始化）：
+启动 DM1 仿真（默认自动选择 OpenGL，机器人从趴卧姿态原地初始化）：
 
 ```bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto

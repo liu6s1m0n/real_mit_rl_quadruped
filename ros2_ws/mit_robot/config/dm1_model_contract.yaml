@@ -3,14 +3,17 @@ contract_version: 1
 joint_order: [FR_hip, FR_thigh, FR_calf, FL_hip, FL_thigh, FL_calf, RR_hip, RR_thigh, RR_calf, RL_hip, RL_thigh, RL_calf]
 leg_order: [FR, FL, RR, RL]
 joint_order_per_leg: [hip, thigh, calf]
-motor_zero_position_rad: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-kinematic_joint_offset_rad: [0, -0.203, -2.22]
+# 2026-11-02：电机零位 = OpenDog 机械零位（髋水平、大腿电机接口对准螺丝、小腿伸直顶限位），
+# q = 电机角 = OpenDog URDF 关节角；旧坐标 q_old = q + [0, 0.203, 2.22]。
+# 趴卧（启动/趴下保持）姿态：
+prone_home_position_rad: [0, -0.203, -2.22, 0, -0.203, -2.22, 0, -0.203, -2.22, 0, -0.203, -2.22]
+kinematic_joint_offset_rad: [0, 0, 0]
 # 每腿 [hip, thigh, calf]，按 leg_order 重复四次；与 dm1.hpp 和 MJCF joint range 同步。
-joint_lower_limit_rad: [-1.57, -1.367, -0.03, -1.57, -1.367, -0.03, -1.57, -1.367, -0.03, -1.57, -1.367, -0.03]
-joint_upper_limit_rad: [1.57, 2.603, 2.72, 1.57, 2.603, 2.72, 1.57, 2.603, 2.72, 1.57, 2.603, 2.72]
+joint_lower_limit_rad: [-1.57, -1.57, -2.25, -1.57, -1.57, -2.25, -1.57, -1.57, -2.25, -1.57, -1.57, -2.25]
+joint_upper_limit_rad: [1.57, 2.4, 0.5, 1.57, 2.4, 0.5, 1.57, 2.4, 0.5, 1.57, 2.4, 0.5]
 # 0.28 m 站姿：侧视连杆中心线对水平倾角约 27.85 度；这不是电机转角相等。
-stand_joint_position_front_rad: [0, -0.282961, 0.739729]
-stand_joint_position_rear_rad: [0, -0.282961, 0.739729]
+stand_joint_position_front_rad: [0, -0.485961, -1.480271]
+stand_joint_position_rear_rad: [0, -0.485961, -1.480271]
 nominal_body_height_m: 0.28
 # 按用户要求恢复 f3c1696 父提交的整机模型 14.705035 kg；实测整机仍为 11.8 kg。
 body_mass_kg: 6.889103
@@ -36,5 +39,5 @@ control:
   modes: [passive, joint_pd, balance_stand, locomotion, stand_up, recovery_stand, walk_classic, prone_down]
 mjcf:
   file: src/dm1_description/dm1/dm1.xml
-  sha256: c0d1ce2fe5ce6380660761324ac4bd01a55096a5edeb7b8962a7f1639b07fa94
+  sha256: 12388d0c8e30642894377c0ffd0ffae878f747c3a3d6ba0ba571130948bb384e
   fixed_installation_rotations_baked_in: true

@@ -39,7 +39,7 @@ source install/setup.bash
 ros2 run mymit_robot mymit_robot_user --render-gpu auto
 ```
 
-选择 OpenDog WBC+NMPC 仿真；当前 MIT 算法仍是默认值：
+选择 OpenDog WBC+NMPC 仿真；当前 OpenDog 算法为默认值：
 
 ```bash
 ros2 run mymit_robot mymit_robot_user \
@@ -80,7 +80,6 @@ ros2 launch mymit_robot dm1_control.launch.py \
 本轮支撑链路复核将 `phaseTransitionStanceTime` 从 0.20 s 调至 0.04 s，
 `swingHeight` 从 0.08 m 调至 0.04 m。前者同时影响原有步态支撑过渡和本工程的
 模式切换输出混合；后者影响连续与单次踏步。底层 PD 保持 20/5。
-详细依据和仿真接触力对照见 `docs/SUPPORT_FORCE_AUDIT_20261029.md`。
 实机电机失能保护是否改善仍待新一轮验证。
 
 `[OpenDog][TIMING]` 每秒观测控制计算、WBC、最近一次 MPC 求解耗时、策略观测年龄
@@ -225,9 +224,7 @@ ctest --test-dir build/mymit_robot \
   --output-on-failure
 ```
 
-原有 `test_dm1_hardware_path_comparison` 只比较理想传感器下的 RobotRunner；
-它不覆盖原始驱动和设备时序。新的完整测试覆盖真实串口标定/协议、
-站起/原地小跑/停止、FL 小腿无输出和间歇写入失败。
+该测试覆盖真实串口标定/协议、站起/原地小跑/停止、FL 小腿无输出和间歇写入失败。
 
 ### 使用 ROS 2 launch 启动控制仿真
 
@@ -413,9 +410,9 @@ ros2 run mymit_robot hardware_main \
   --enable-output
 ```
 
-启动零位策略：
+启动姿态策略（电机零位 = OpenDog 机械零位，启动姿态 = 趴卧 `(0, -0.203, -2.22)` rad）：
 
-- 偏差 `<0.05 rad`（或 `--zero-tolerance` 指定的窗口）：允许继续，不写零；
+- 各关节相对趴卧姿态偏差 `<0.05 rad`（或 `--zero-tolerance` 指定的窗口）：允许继续，不写零；
 - 偏差 `>=` 接受窗口：报初始位置错误，拒绝使能；
 - 任何写零操作都必须显式使用 `--set-zero`。
 
@@ -491,9 +488,15 @@ ros2 run mymit_robot hardware_main \
   --set-zero
 ```
 
-`--set-zero` 会在静止、水平且收到 12 路健康反馈后写入并验证全部电机零位，
-但不会使能控制输出，完成后自动退出。机器人必须已经摆在确认过的参考姿态，
-不能把任意当前姿态当作零位写入。
+`--set-zero` 直接写入全部电机零位，不会使能控制输出，完成后自动退出。
+写零前必须把机器人悬空并摆成 OpenDog 机械零位，不能把任意当前姿态当作零位写入：
+
+- 髋（hip）：水平；
+- 大腿（thigh）：电机接口与大腿上的螺丝对齐，大腿水平朝后；
+- 小腿（calf）：向后伸直并顶到机械限位。
+
+该姿态对应模型角全 0。写零后把机器人放下趴好，再正常启动；启动检查比较的是趴卧姿态
+`(0, -0.203, -2.22)` rad。
 
 ## 6. 模式对照
 

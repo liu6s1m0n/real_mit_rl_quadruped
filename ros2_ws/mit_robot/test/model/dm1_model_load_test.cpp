@@ -78,8 +78,8 @@ TEST(Dm1ModelLoad, JointRangesMatchTheControllerContract)
 {
   const auto model = loadDm1();
   const auto controller_model = robots::dm1::makeModel<double>();
-  constexpr std::array<double, kJointsPerLeg> expected_lower{-1.57, -1.367, -0.03};
-  constexpr std::array<double, kJointsPerLeg> expected_upper{1.57, 2.603, 2.72};
+  constexpr std::array<double, kJointsPerLeg> expected_lower{-1.57, -1.57, -2.25};
+  constexpr std::array<double, kJointsPerLeg> expected_upper{1.57, 2.4, 0.5};
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     const auto & joints = controller_model.leg(static_cast<LegId>(leg)).joints;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
@@ -129,7 +129,7 @@ TEST(Dm1ModelLoad, HomeKeyframeIsGroundedPronePose)
 
   EXPECT_NEAR(data->qpos[2], 0.120, 1.0e-4);
   constexpr std::array<const char *, kNumLegs> legs{"FR", "FL", "RR", "RL"};
-  constexpr std::array<double, kJointsPerLeg> expected_joint_angles{0.0, 0.0, 0.0};
+  constexpr std::array<double, kJointsPerLeg> expected_joint_angles{0.0, -0.203, -2.22};
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const int joint_id = namedId(

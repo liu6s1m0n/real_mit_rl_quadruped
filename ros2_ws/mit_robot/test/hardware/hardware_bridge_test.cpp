@@ -67,7 +67,8 @@ public:
       motor.bus = static_cast<std::uint8_t>(index / 6);
       motor.can_id = static_cast<std::uint16_t>(index % 6 + 1);
       motor.position = zeroed ? 0.0F :
-        (seen_positions[index] ? last_positions[index] : startup_offset);
+        (seen_positions[index] ? last_positions[index] :
+        rest_positions[index] + startup_offset);
       motor.velocity = read_count == transient_sample ? transient_velocity : 0.0F;
       motor.sequence =
         (repeat_sequence || (zeroed && repeat_after_zero)) ? 1U :
@@ -211,6 +212,14 @@ public:
   bool communication_fault = false;
   bool stale_motor_feedback = false;
   float startup_offset = 0.1F;
+  // 启动时机器人趴卧：方向 +1、零位 0 时原始读数就是趴卧角 (0, -0.203, -2.22)。
+  std::array<float, kNumJoints> rest_positions = [] {
+      std::array<float, kNumJoints> result{};
+      for (std::size_t index = 0; index < result.size(); ++index) {
+        result[index] = std::array<float, 3>{0.0F, -0.203F, -2.22F}[index % 3];
+      }
+      return result;
+    }();
   std::array<float, kNumJoints> first_positions{};
   std::array<float, kNumJoints> last_positions{};
   std::array<float, kNumJoints> last_kp{};
@@ -244,7 +253,7 @@ TEST(HardwareBridgeTest, OpenDogKeyboardUsesSharedHardwareOutput)
     hardware.stop_after_read_count = 40;
     for (std::size_t joint = 0; joint < kNumJoints; ++joint) {
       hardware.seen_positions[joint] = true;
-      hardware.last_positions[joint] = std::array<float, 3>{0.0F, -0.282961F, 0.739729F}[joint % 3];
+      hardware.last_positions[joint] = std::array<float, 3>{0.0F, -0.485961F, -1.480271F}[joint % 3];
     }
     HardwareBridge::Options options;
     options.keyboard_control = true;
@@ -362,7 +371,7 @@ TEST(HardwareRunnerIsolation, OpenDogStandUpCancelsBackwardAndUsesOwnSettings)
   input.desired.mode = ControlMode::Passive;
   input.desired.body_position_world.z() = 42.0F;
   for (auto & joint : input.joints) {
-    joint.position << 0.0F, -0.282961F, 0.739729F;
+    joint.position << 0.0F, -0.485961F, -1.480271F;
   }
   ControlOutput output;
   ASSERT_TRUE(runner.compute(input, output));
@@ -373,7 +382,7 @@ TEST(HardwareRunnerIsolation, OpenDogStandUpCancelsBackwardAndUsesOwnSettings)
   runner.stop();
 }
 
-TEST(HardwareRunnerIsolation, OpenDogStartupReturnsAllTwelveJointTargetsToZero)
+TEST(HardwareRunnerIsolation, OpenDogStartupReturnsAllTwelveJointTargetsToProneHome)
 {
   struct RosContext
   {
@@ -384,12 +393,14 @@ TEST(HardwareRunnerIsolation, OpenDogStartupReturnsAllTwelveJointTargetsToZero)
   ASSERT_TRUE(runner.configure());
   ASSERT_TRUE(runner.start());
   runner.reset();
-  // First measured pose from the user's 2026-10-28 failed hardware run.
+  // First measured pose from the user's 2026-10-28 failed hardware run,
+  // converted to the OpenDog zero (old q minus (0, 0.203, 2.22)).
+  const Vec3<float> prone(0.0F, -0.203F, -2.22F);
   const std::array<Vec3<float>, kNumLegs> positions{
-    Vec3<float>(-0.219163895F, 0.101049423F, -0.024734497F),
-    Vec3<float>(0.334978104F, -0.086477280F, 0.010162354F),
-    Vec3<float>(-0.118689537F, -0.035088539F, 0.063850403F),
-    Vec3<float>(0.312352180F, -0.164324760F, 0.196538925F)};
+    Vec3<float>(-0.219163895F, -0.101950577F, -2.244734497F),
+    Vec3<float>(0.334978104F, -0.289477280F, -2.209837646F),
+    Vec3<float>(-0.118689537F, -0.238088539F, -2.156149597F),
+    Vec3<float>(0.312352180F, -0.367324760F, -2.023461075F)};
   ControlInputSnapshot input;
   input.imu.valid = true;
   input.imu.orientation_world_from_body.setIdentity();
@@ -407,7 +418,8 @@ TEST(HardwareRunnerIsolation, OpenDogStartupReturnsAllTwelveJointTargetsToZero)
   input.timestamp += 0.6F;
   ASSERT_TRUE(runner.compute(input, output));
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-    EXPECT_TRUE(output.commands[leg].position_desired.isApprox(0.5F * positions[leg], 1e-5F));
+    EXPECT_TRUE(output.commands[leg].position_desired.isApprox(
+      0.5F * (positions[leg] + prone), 1e-5F));
   }
   input.timestamp += 0.7F;
   ASSERT_TRUE(runner.compute(input, output));
@@ -417,7 +429,7 @@ TEST(HardwareRunnerIsolation, OpenDogStartupReturnsAllTwelveJointTargetsToZero)
   EXPECT_STREQ(runner.stateLabel(), "OPENDOG_JOINT_PD");
   EXPECT_FALSE(output.estimate.valid);  // No fabricated base-height estimate.
   for (const auto & command : output.commands) {
-    EXPECT_TRUE(command.position_desired.isZero());
+    EXPECT_TRUE(command.position_desired.isApprox(prone, 1e-6F));
     EXPECT_TRUE(command.velocity_desired.isZero());
     EXPECT_TRUE(command.torque_feedforward.isZero());
     EXPECT_TRUE(command.enabled);
@@ -433,7 +445,7 @@ TEST(HardwareRunnerIsolation, OpenDogStartupReturnsAllTwelveJointTargetsToZero)
   ASSERT_TRUE(runner.compute(input, output));
   EXPECT_STREQ(runner.stateLabel(), "OPENDOG_STAND_UP");
   for (const auto & command : output.commands) {
-    EXPECT_TRUE(command.position_desired.isZero());
+    EXPECT_TRUE(command.position_desired.isApprox(prone, 1e-6F));
   }
   runner.stop();
 }
@@ -500,6 +512,7 @@ TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTarge
     if (!rejected) {
       for (std::size_t joint = 0; joint < kNumJoints; ++joint) {
         motor_calibration[joint].direction = joint % 2 ? -1 : 1;
+        hardware.rest_positions[joint] *= static_cast<float>(motor_calibration[joint].direction);
       }
     } else {
       // 有限关节目标现在会限幅；用超出线协议范围的标定检验真正拒绝发布。
@@ -548,8 +561,8 @@ TEST(HardwareBridgeTest, CsvTracksPublishedFramesAndNeverInventsUnpublishedTarge
         EXPECT_TRUE(valid);
         const char * legs[] = {"FR", "FL", "RR", "RL"};
         const char * joints[] = {"hip", "thigh", "calf"};
-        const double lower[] = {-1.57, -1.367, -0.03};
-        const double upper[] = {1.57, 2.603, 2.72};
+        const double lower[] = {-1.57, -1.57, -2.25};
+        const double upper[] = {1.57, 2.4, 0.5};
         for (const auto * leg : legs) {
           for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
             const std::string name = std::string(leg) + "_" + joints[joint];

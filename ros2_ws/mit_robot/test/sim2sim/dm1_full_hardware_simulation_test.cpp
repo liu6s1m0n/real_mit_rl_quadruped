@@ -328,8 +328,8 @@ TEST(Dm1FullHardwareSimulation, OpenDogUnfoldsBothRearKneesThroughRawDrivers)
     EXPECT_GE(zero_error, 0.0);
     EXPECT_LT(zero_error, double(control_config::hardware::startup_zero_tolerance));
     EXPECT_GT(height, 0.25);
-    EXPECT_GT(calf[2], 0.59);
-    EXPECT_GT(calf[3], 0.59);
+    EXPECT_GT(calf[2], -1.63);
+    EXPECT_GT(calf[3], -1.63);
   }
   rclcpp::shutdown();
 }

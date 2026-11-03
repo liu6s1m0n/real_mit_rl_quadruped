@@ -47,11 +47,11 @@ void FSM_State_StandUp<T>::onEnter()
       const LegId leg_id = static_cast<LegId>(leg);
       computeLegJacobianAndPosition(
         *this->_data->quadruped,
-        this->_data->control_parameters->motor_zero_position,
+        this->_data->control_parameters->prone_home_position,
         static_cast<Mat3<T> *>(nullptr), &initial_foot_positions_[leg], leg_id);
     }
     initial_joint_positions_[leg] = feedback.valid && feedback.q.allFinite() ?
-      feedback.q : this->_data->control_parameters->motor_zero_position;
+      feedback.q : this->_data->control_parameters->prone_home_position;
   }
   this->_data->gait_scheduler->requestGait(GaitType::STAND);
 }

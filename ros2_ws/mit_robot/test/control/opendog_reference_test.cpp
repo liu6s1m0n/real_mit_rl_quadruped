@@ -51,8 +51,8 @@ TEST(OpenDogReference, KeepsOriginalVelocityTrajectoryFieldOrder)
   EXPECT_DOUBLE_EQ(target.stateTrajectory.back()(3), 0.0);
   for (int leg = 0; leg < 4; ++leg) {
     EXPECT_DOUBLE_EQ(target.stateTrajectory.back()(12 + 3 * leg), 0.0);
-    EXPECT_NEAR(target.stateTrajectory.back()(13 + 3 * leg), -0.282961, 1e-9);
-    EXPECT_NEAR(target.stateTrajectory.back()(14 + 3 * leg), 0.739729, 1e-9);
+    EXPECT_NEAR(target.stateTrajectory.back()(13 + 3 * leg), -0.485961, 1e-9);
+    EXPECT_NEAR(target.stateTrajectory.back()(14 + 3 * leg), -1.480271, 1e-9);
   }
 }
 

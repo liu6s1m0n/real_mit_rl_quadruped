@@ -759,7 +759,8 @@ int main(int argc, char ** argv)
     if (arguments.set_zero) {
       imu_log::print(
         imu_log::Level::Warning,
-        "DM1 维护模式: --set-zero 将写入所有电机零位参数；输出保持关闭。\n");
+        "DM1 维护模式: --set-zero 将写入所有电机零位参数；输出保持关闭。"
+        "机器人必须悬空并摆成 OpenDog 零位：髋水平、大腿电机接口对准螺丝、小腿伸直顶限位。\n");
     } else if (arguments.keyboard_control) {
       imu_log::print(
         imu_log::Level::Warning,
@@ -769,7 +770,7 @@ int main(int argc, char ** argv)
     } else if (arguments.enable_output) {
       imu_log::print(
         imu_log::Level::Warning,
-        "DM1 控制启动: 将先验证 IMU/反馈静止状态；使能后执行平滑回零，"
+        "DM1 控制启动: 将先验证 IMU/反馈静止状态和趴卧姿态 (0,-0.203,-2.22)；使能后平滑保持趴卧，"
         "启动过程不会修改电机参数。\n");
     } else {
       imu_log::print(

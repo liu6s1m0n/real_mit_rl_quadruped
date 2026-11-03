@@ -153,7 +153,7 @@ TEST(Dm1Contract, StandingJointBoundsClampKneeSupportAndVerticalCalf)
   Vec3<double> home = rear.joints.home_position;
   ASSERT_TRUE(robots::dm1::clampStanceJointTarget(home));
   EXPECT_TRUE(home.isApprox(rear.joints.home_position, 1e-12));
-  Vec3<double> unsafe(0.0, -1.23, 2.1);
+  Vec3<double> unsafe(0.0, -1.433, -0.12);
   ASSERT_TRUE(robots::dm1::clampStanceJointTarget(unsafe));
   EXPECT_DOUBLE_EQ(unsafe[1], robots::dm1::kStanceThighLower);
   EXPECT_DOUBLE_EQ(unsafe[2], robots::dm1::kStanceCalfUpper);
@@ -162,7 +162,7 @@ TEST(Dm1Contract, StandingJointBoundsClampKneeSupportAndVerticalCalf)
       Vec3<double>::UnitY()) * rear.thigh_to_calf).z();
   EXPECT_GE(knee_z - robots::dm1::kKneeEnvelopeRadius,
     robots::dm1::kMinimumKneeClearance);
-  Vec3<double> vertical_calf(0.0, 0.203, 1.338803755111750);
+  Vec3<double> vertical_calf(0.0, 0.0, -0.881196244888250);
   ASSERT_TRUE(robots::dm1::clampStanceJointTarget(vertical_calf));
   EXPECT_LE(vertical_calf[1], robots::dm1::kStanceThighUpper);
   EXPECT_LE(vertical_calf[2], robots::dm1::kStanceCalfUpper);
@@ -226,7 +226,7 @@ TEST(Dm1Contract, StandingPosePreservesHeightAndEqualLinkInclinations)
     const double calf_inclination = std::atan2(std::abs(calf.z()), std::abs(calf.x()));
     EXPECT_NEAR(thigh_inclination, calf_inclination, 2e-6);
     EXPECT_NEAR(thigh_inclination, 0.4859610000000000, 2e-6);
-    EXPECT_GT(q[1], -0.597);
+    EXPECT_GT(q[1], -0.8);
   }
 }
 
@@ -587,9 +587,9 @@ TEST(Dm1Contract, HasSingleModelAndCanonicalJointOrder)
     EXPECT_EQ(static_cast<std::size_t>(model.leg(static_cast<LegId>(leg)).leg), leg);
     EXPECT_TRUE(
       model.leg(static_cast<LegId>(leg)).joints.home_position.isApprox(
-      Vec3<float>(0.0F, -0.282961F, 0.739729F)));
-    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -0.03F);
-    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 2.72F);
+      Vec3<float>(0.0F, -0.485961F, -1.480271F)));
+    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.lower_limit[2], -2.25F);
+    EXPECT_FLOAT_EQ(model.leg(static_cast<LegId>(leg)).joints.upper_limit[2], 0.5F);
   }
 }
 

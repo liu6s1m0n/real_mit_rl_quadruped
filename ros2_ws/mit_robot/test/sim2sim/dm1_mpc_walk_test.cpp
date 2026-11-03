@@ -493,7 +493,7 @@ TEST(Dm1MpcWalkGate, FoldedCalfCannotEnterLocomotion)
 
   const int joint = mj_name2id(model.get(), mjOBJ_JOINT, "FR_calf_joint");
   ASSERT_GE(joint, 0);
-  data->qpos[model->jnt_qposadr[joint]] = 0.075;
+  data->qpos[model->jnt_qposadr[joint]] = -2.145;
   data->qvel[model->jnt_dofadr[joint]] = 0.0;
   mj_forward(model.get(), data.get());
   ASSERT_TRUE(runner.run());

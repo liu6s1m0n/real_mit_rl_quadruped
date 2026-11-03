@@ -21,9 +21,9 @@
         <motor forcerange="-97 97"/>
       </default>
       <default class="kfe">
-        <!-- 与 Isaac 训练 MJCF 相同：固定安装旋转放在 body quat 中，
-             策略/电机 q=0 对应机械趴姿。 -->
-        <joint axis="0 1 0" range="-0.03 2.72"/>
+        <!-- 2026-11-02：零位改为 OpenDog 机械零位，body 不再带安装旋转；
+             q=0 为小腿伸直顶限位，趴卧为 (0, -0.203, -2.22)。 -->
+        <joint axis="0 1 0" range="-2.25 0.5"/>
         <motor forcerange="-97 97"/>
       </default>
       <default class="visual">
@@ -72,12 +72,12 @@
         <joint class="haa" name="FR_hip_joint"/>
         <inertial pos="0.04756 0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="FR_hip_mesh"/>
-        <body name="FR_thigh" pos="0.049998 -0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
-          <joint class="hfe" name="FR_thigh_joint" range="-1.367 2.603"/>
+        <body name="FR_thigh" pos="0.049998 -0.019503 0">
+          <joint class="hfe" name="FR_thigh_joint" range="-1.57 2.4"/>
           <inertial pos="-0.023554 -0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="FR_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 -0.07825 0"/>
-          <body name="FR_calf" pos="-0.2 -0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
+          <body name="FR_calf" pos="-0.2 -0.07825 0">
             <joint class="kfe" name="FR_calf_joint"/>
             <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="FR_calf_mesh"/>
@@ -96,12 +96,12 @@
         <joint class="haa" name="FL_hip_joint"/>
         <inertial pos="0.04756 -0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="FL_hip_mesh"/>
-        <body name="FL_thigh" pos="0.049998 0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
-          <joint class="hfe" name="FL_thigh_joint" range="-1.367 2.603"/>
+        <body name="FL_thigh" pos="0.049998 0.019503 0">
+          <joint class="hfe" name="FL_thigh_joint" range="-1.57 2.4"/>
           <inertial pos="-0.023554 0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="FL_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 0.07825 0"/>
-          <body name="FL_calf" pos="-0.2 0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
+          <body name="FL_calf" pos="-0.2 0.07825 0">
             <joint class="kfe" name="FL_calf_joint"/>
             <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="FL_calf_mesh"/>
@@ -120,12 +120,12 @@
         <joint class="haa" name="RR_hip_joint"/>
         <inertial pos="-0.04756 0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="RR_hip_mesh"/>
-        <body name="RR_thigh" pos="-0.049998 -0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
-          <joint class="hfe" name="RR_thigh_joint" range="-1.367 2.603"/>
+        <body name="RR_thigh" pos="-0.049998 -0.019503 0">
+          <joint class="hfe" name="RR_thigh_joint" range="-1.57 2.4"/>
           <inertial pos="-0.023554 -0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="RR_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 -0.07825 0"/>
-          <body name="RR_calf" pos="-0.2 -0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
+          <body name="RR_calf" pos="-0.2 -0.07825 0">
             <joint class="kfe" name="RR_calf_joint"/>
             <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="RR_calf_mesh"/>
@@ -144,12 +144,12 @@
         <joint class="haa" name="RL_hip_joint"/>
         <inertial pos="-0.04756 -0.010434 -0.000046" mass="0.706316" diaginertia="0.000403 0.000535 0.000446"/>
         <geom class="visual" mesh="RL_hip_mesh"/>
-        <body name="RL_thigh" pos="-0.049998 0.019503 0" quat="0.994853295830 0 -0.101325810022 0">
-          <joint class="hfe" name="RL_thigh_joint" range="-1.367 2.603"/>
+        <body name="RL_thigh" pos="-0.049998 0.019503 0">
+          <joint class="hfe" name="RL_thigh_joint" range="-1.57 2.4"/>
           <inertial pos="-0.023554 0.050542 0.001956" mass="0.977146" diaginertia="0.000887 0.003756 0.003918"/>
           <geom class="visual" mesh="RL_thigh_mesh" material="dm_orange"/>
           <geom type="capsule" size="0.018" fromto="0 0 0 -0.2 0.07825 0"/>
-          <body name="RL_calf" pos="-0.2 0.07825 0" quat="0.444661516742 0 -0.895698685680 0">
+          <body name="RL_calf" pos="-0.2 0.07825 0">
             <joint class="kfe" name="RL_calf_joint"/>
             <inertial pos="-0.010235 0.000248 -0.054204" mass="0.240236" diaginertia="0.000969 0.005316 0.004359"/>
             <geom class="visual" mesh="RL_calf_mesh"/>
@@ -190,9 +190,9 @@
   </sensor>
   <keyframe>
     <!-- 启动 home 直接是趴地零位：机身贴近地面，小腿接触代理防止初始下坠。
-         q 为 DM1 电机/策略坐标；趴卧位的四腿关节均为零。点击 Stand up
+         q 为 DM1 电机坐标（= OpenDog 关节角）；趴卧位四腿均为 (0, -0.203, -2.22)。点击 Stand up
          后由专用收腿轨迹切换到 BalanceStand，再允许 MPC 行走。 -->
-    <key name="home" qpos="0 0 0.120 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+    <key name="home" qpos="0 0 0.120 1 0 0 0 0 -0.203 -2.22 0 -0.203 -2.22 0 -0.203 -2.22 0 -0.203 -2.22"
       ctrl="0 0 0 0 0 0 0 0 0 0 0 0"/>
   </keyframe>
 </mujoco>

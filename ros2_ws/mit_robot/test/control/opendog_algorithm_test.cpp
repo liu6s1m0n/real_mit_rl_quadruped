@@ -28,7 +28,7 @@ TEST(OpenDogAlgorithm, SolvesDm1StandingWithoutHardware)
     input.desired.body_position_world.z() = 0.32F;
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       input.joints[leg].leg = static_cast<LegId>(leg);
-      input.joints[leg].position << 0.0F, -0.282961F, 0.739729F;
+      input.joints[leg].position << 0.0F, -0.485961F, -1.480271F;
     }
     ControlOutput output;
     input.timestamp = 0.002F;
@@ -104,7 +104,7 @@ TEST(OpenDogAlgorithm, AlignsStartupGravityWithoutScalingDynamicAcceleration)
     input.desired.mode = ControlMode::BalanceStand;
     input.desired.body_position_world.z() = 0.32F;
     for (auto & joint : input.joints) {
-      joint.position << 0.0F, -0.282961F, 0.739729F;
+      joint.position << 0.0F, -0.485961F, -1.480271F;
     }
     ControlOutput nominal_output, calibrated_output;
     for (int frame = 1; frame <= 400; ++frame) {

@@ -483,7 +483,7 @@ void RobotRunner::prepareJointInitialization()
     const Vec3<float> target = motion_start_hold_active_ ?
       motion_start_hold_positions_[leg] :
       (control_parameters_.start_in_prone_home ?
-      control_parameters_.motor_zero_position :
+      control_parameters_.prone_home_position :
       quadruped_.leg(kLegOrder[leg]).joints.home_position);
     const Vec3<float> travel = target - initial_joint_positions_[leg];
     auto & command = leg_controller_.commands[leg];

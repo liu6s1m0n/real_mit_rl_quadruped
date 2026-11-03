@@ -36,7 +36,7 @@ public:
       const LegId leg_id = static_cast<LegId>(leg);
       controller.commands[leg].position_desired =
         this->_data->control_parameters->start_in_prone_home ?
-        this->_data->control_parameters->motor_zero_position :
+        this->_data->control_parameters->prone_home_position :
         this->_data->quadruped->leg(leg_id).joints.home_position;
       controller.commands[leg].kp_joint =
         this->_data->control_parameters->start_in_prone_home ?

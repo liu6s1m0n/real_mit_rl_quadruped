@@ -24,7 +24,7 @@ model_settings
 
   verboseCppAd                  true      ; 是否打印CppAD信息
   recompileLibrariesCppAd       false     ; 是否重新编译CppAD库
-  modelFolderCppAd              /tmp/legged_control/dm1_opendog_mjcf_mass14705035_com2 ; CppAD库缓存目录（base 质心修正后新目录，旧目录为 ..._mass14705035）
+  modelFolderCppAd              /tmp/legged_control/dm1_opendog_zero20261102 ; CppAD库缓存目录。2026-11-02 零位改为 OpenDog 零位后 URDF 变了，必须换新目录重新生成；旧目录 ..._mass14705035_com2 是旧零位的库，不能再用
 }
 
 swing_trajectory_config
@@ -173,17 +173,17 @@ initialState
 
    ;; 腿部关节位置：[左前，左后，右前，右后] ;;
    (12,0) 0.0   ; 左前HAA关节
-   (13,0)  -0.282961   ; 左前HFE关节
-   (14,0) 0.739729   ; 左前KFE关节
+   (13,0)  -0.485961   ; 左前HFE关节
+   (14,0) -1.480271   ; 左前KFE关节
    (15,0) 0.0   ; 左后HAA关节
-   (16,0)  -0.282961   ; 左后HFE关节
-   (17,0) 0.739729   ; 左后KFE关节
+   (16,0)  -0.485961   ; 左后HFE关节
+   (17,0) -1.480271   ; 左后KFE关节
    (18,0)  0.0   ; 右前HAA关节
-   (19,0)  -0.282961   ; 右前HFE关节
-   (20,0) 0.739729   ; 右前KFE关节
+   (19,0)  -0.485961   ; 右前HFE关节
+   (20,0) -1.480271   ; 右前KFE关节
    (21,0)  0.0   ; 右后HAA关节
-   (22,0)  -0.282961   ; 右后HFE关节
-   (23,0) 0.739729   ; 右后KFE关节
+   (22,0)  -0.485961   ; 右后HFE关节
+   (23,0) -1.480271   ; 右后KFE关节
 }
 
 ; Q：状态误差权重矩阵

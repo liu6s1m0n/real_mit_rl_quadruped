@@ -7,17 +7,17 @@ standUpDuration                     3.2
 defaultJointState
 {
    (0,0)   0.0        ; LF_HAA
-   (1,0)  -0.282961   ; LF_HFE
-   (2,0)   0.739729   ; LF_KFE
+   (1,0)  -0.485961   ; LF_HFE
+   (2,0)  -1.480271   ; LF_KFE
    (3,0)   0.0        ; LH_HAA
-   (4,0)  -0.282961   ; LH_HFE
-   (5,0)   0.739729   ; LH_KFE
+   (4,0)  -0.485961   ; LH_HFE
+   (5,0)  -1.480271   ; LH_KFE
    (6,0)   0.0        ; RF_HAA
-   (7,0)  -0.282961   ; RF_HFE
-   (8,0)   0.739729   ; RF_KFE
+   (7,0)  -0.485961   ; RF_HFE
+   (8,0)  -1.480271   ; RF_KFE
    (9,0)   0.0        ; RH_HAA
-   (10,0) -0.282961   ; RH_HFE
-   (11,0)  0.739729   ; RH_KFE
+   (10,0) -0.485961   ; RH_HFE
+   (11,0) -1.480271   ; RH_KFE
 }
 
 initialModeSchedule

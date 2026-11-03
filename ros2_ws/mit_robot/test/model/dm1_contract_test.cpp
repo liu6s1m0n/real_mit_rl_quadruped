@@ -136,7 +136,7 @@ TEST(Dm1ContractFile, LimitsAndStandPoseMatchController)
   const auto upper =
     contract["joint_upper_limit_rad"].as<std::vector<double>>();
   const auto zero =
-    contract["motor_zero_position_rad"].as<std::vector<double>>();
+    contract["prone_home_position_rad"].as<std::vector<double>>();
   const auto offset =
     contract["kinematic_joint_offset_rad"].as<std::vector<double>>();
   ASSERT_EQ(lower.size(), kNumJoints);
@@ -153,7 +153,7 @@ TEST(Dm1ContractFile, LimitsAndStandPoseMatchController)
 
       EXPECT_NEAR(lower[index], joints.lower_limit[eigen_joint], 1.0e-12);
       EXPECT_NEAR(upper[index], joints.upper_limit[eigen_joint], 1.0e-12);
-      EXPECT_NEAR(zero[index], parameters.motor_zero_position[eigen_joint], 1.0e-12);
+      EXPECT_NEAR(zero[index], parameters.prone_home_position[eigen_joint], 1.0e-12);
       EXPECT_NEAR(offset[joint], joints.zero_offset[eigen_joint], 1.0e-12);
 
       const int joint_id = mj_name2id(

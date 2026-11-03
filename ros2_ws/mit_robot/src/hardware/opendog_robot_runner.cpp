@@ -3,14 +3,25 @@
 #include <algorithm>
 
 #include "common/console_log.hpp"
+#include "config/control_config.h"
 
 namespace
 {
 // DM1 hardware startup duration from RobotControlParameters; copied here so
 // OpenDog startup does not depend on the MIT controller or its configuration.
 constexpr float kJointInitializationDuration = 1.2F;
-// P 趴下：从站立姿态平滑折叠到零位（机械趴地姿态）的时长。
+// P 趴下：从站立姿态平滑折叠到趴卧姿态的时长。
 constexpr float kProneDownDuration = 3.0F;
+
+// 启动回零/趴下的关节目标：趴卧姿态。电机零位是 OpenDog 机械零位（小腿伸直），
+// 不能作为着地目标。
+Vec3<float> proneJointTarget()
+{
+  return Vec3<float>(
+    static_cast<float>(control_config::pose::prone_hip),
+    static_cast<float>(control_config::pose::prone_thigh),
+    static_cast<float>(control_config::pose::prone_calf));
+}
 
 // Eigen 的 Vec3 默认构造不会清零，`= {}` 得到的是未初始化内存；必须显式 setZero。
 void zeroFeedforward(std::array<Vec3<float>, kNumLegs> & feedforward)
@@ -55,7 +66,7 @@ void OpenDogRobotRunner::reset() noexcept
 
 void OpenDogRobotRunner::startProneDown()
 {
-  // 复用回零插值：从当前实测关节角平滑回到零位；前馈从最后一帧 WBC 输出线性卸载，
+  // 复用回零插值：从当前实测关节角平滑回到趴卧姿态；前馈从最后一帧 WBC 输出线性卸载，
   // 开始时仍承重，结束时为 0。完成后复位算法，再按 1 可重新站立。
   initialization_active_ = true;
   initialization_started_ = false;
@@ -66,7 +77,7 @@ void OpenDogRobotRunner::startProneDown()
   desired_.mode = ControlMode::ProneDown;
   imu_log::print(
     imu_log::Level::Info,
-    "[OpenDog][PRONE] 开始趴下：%.1f s 内从当前姿态平滑折叠到零位，前馈力矩逐步卸载。\n",
+    "[OpenDog][PRONE] 开始趴下：%.1f s 内从当前姿态平滑折叠到趴卧姿态，前馈力矩逐步卸载。\n",
     static_cast<double>(kProneDownDuration));
 }
 
@@ -163,7 +174,7 @@ bool OpenDogRobotRunner::computeJointInitialization(
   const ControlInputSnapshot & input, ControlOutput & output)
 {
   // Ported from RobotRunner::prepareJointInitialization(): capture measured q,
-  // cubic smoothstep to motor zero, zero feedforward. No optimizer in this path.
+  // cubic smoothstep to the prone pose, zero feedforward. No optimizer in this path.
   if (!initialization_started_) {
     for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
       initial_joint_positions_[leg] = input.joints[leg].position;
@@ -184,11 +195,13 @@ bool OpenDogRobotRunner::computeJointInitialization(
   output.estimate.timestamp = input.timestamp;
   const auto & settings = algorithm_.commandSettings();
   ++output_sequence_;
+  const Vec3<float> prone = proneJointTarget();
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     auto & command = output.commands[leg];
     command.leg = static_cast<LegId>(leg);
-    command.position_desired = (1.0F - blend) * initial_joint_positions_[leg];
-    command.velocity_desired = -blend_rate * initial_joint_positions_[leg];
+    const Vec3<float> travel = prone - initial_joint_positions_[leg];
+    command.position_desired = initial_joint_positions_[leg] + blend * travel;
+    command.velocity_desired = blend_rate * travel;
     // 启动回零时 prone_feedforward_ 为 0，行为不变；趴下时从站立前馈卸载到 0。
     command.torque_feedforward = (1.0F - blend) * prone_feedforward_[leg];
     command.kp.setConstant(settings.joint_kp);
@@ -207,11 +220,11 @@ bool OpenDogRobotRunner::computeJointInitialization(
       initialization_duration_ = kJointInitializationDuration;
       desired_.mode = ControlMode::JointPd;
       imu_log::print(
-        imu_log::Level::Info, "[OpenDog][PRONE] 趴下完成，已回到零位；可按 1 重新站立。\n");
+        imu_log::Level::Info, "[OpenDog][PRONE] 趴下完成，已回到趴卧姿态；可按 1 重新站立。\n");
     } else {
       imu_log::print(
         imu_log::Level::Info,
-        "[OpenDog][INIT] 回零轨迹完成：12 路期望位置/速度为零；实际位置仍以反馈为准。\n");
+        "[OpenDog][INIT] 趴卧初始化完成：期望位置为趴卧姿态 (0,-0.203,-2.22)；实际位置仍以反馈为准。\n");
     }
     if (stand_up_pending_) {requestStandUp();}
   }

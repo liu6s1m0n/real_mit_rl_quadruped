@@ -106,18 +106,18 @@ TEST(Dm1MitInterfaceTest, BoundsJointTargetsWithoutDroppingOtherCommands)
     commands[leg].timestamp = 1.0F;
   }
   commands[0].position_desired[0] = 2.0F;
-  commands[0].position_desired[2] = -0.0791912079F;  // 实测回零时的膝关节目标。
-  commands[1].position_desired[2] = -0.0385455489F;  // 实测站立开始时的越界。
-  commands[2].position_desired[2] = 3.0F;
+  commands[0].position_desired[2] = -2.2991912079F;  // 实测回零时的膝关节目标（旧坐标 -0.079）。
+  commands[1].position_desired[2] = -2.2585455489F;  // 实测站立开始时的越界（旧坐标 -0.039）。
+  commands[2].position_desired[2] = 0.78F;
   commands[3].position_desired[1] = 0.2F;
 
   ASSERT_TRUE(interface.validateCommands(commands, 1.0));
   ASSERT_TRUE(interface.send(commands, 1.0));
   ASSERT_EQ(transport.frames.size(), kNumJoints);
   EXPECT_FLOAT_EQ(transport.frames[0].position, -1.57F);  // 标定方向为 -1。
-  EXPECT_FLOAT_EQ(transport.frames[8].position, -0.03F);
-  EXPECT_FLOAT_EQ(transport.frames[9].position, 2.72F);
-  EXPECT_FLOAT_EQ(transport.frames[10].position, -0.03F);
+  EXPECT_FLOAT_EQ(transport.frames[8].position, -2.25F);
+  EXPECT_FLOAT_EQ(transport.frames[9].position, 0.5F);
+  EXPECT_FLOAT_EQ(transport.frames[10].position, -2.25F);
   EXPECT_FLOAT_EQ(transport.frames[7].position, 0.2F);
   EXPECT_EQ(transport.disable_count, 0);
 }
@@ -126,17 +126,21 @@ TEST(Dm1MitInterfaceTest, UsesBoundedPositionForTorqueSaturation)
 {
   MockTransport transport;
   dm1_hardware::Dm1MitInterface interface(transport, calibration(), 0.05, false, 30.0F);
-  ASSERT_TRUE(interface.updateFeedback(feedback(1.0), 1.0));
+  // FR 小腿停在趴卧角 -2.22（方向 +1、零位 0，原始读数即模型角）。
+  constexpr float kProneCalf = -2.22F;
+  auto prone_feedback = feedback(1.0);
+  prone_feedback[2].position = kProneCalf;
+  ASSERT_TRUE(interface.updateFeedback(prone_feedback, 1.0));
   auto commands = validCommands(1.0F);
-  commands[0].position_desired[2] = -0.0791912079F;
+  commands[0].position_desired[2] = -2.2991912079F;  // 旧坐标 -0.079，越过折叠限位。
   commands[0].kp[2] = 500.0F;
   commands[0].kd[2] = 0.0F;
   commands[0].torque_feedforward[2] = -20.0F;
   ASSERT_TRUE(interface.send(commands, 1.0));
   ASSERT_EQ(transport.frames.size(), kNumJoints);
   const auto & frame = transport.frames[8];
-  EXPECT_FLOAT_EQ(frame.position, -0.03F);
-  EXPECT_NEAR(frame.kp * frame.position + frame.torque, -30.0F, 1.0e-4F);
+  EXPECT_FLOAT_EQ(frame.position, -2.25F);
+  EXPECT_NEAR(frame.kp * (frame.position - kProneCalf) + frame.torque, -30.0F, 1.0e-3F);
   EXPECT_NEAR(frame.kp, 500.0F * 30.0F / 35.0F, 1.0e-4F);
 }
 

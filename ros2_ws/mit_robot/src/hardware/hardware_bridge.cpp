@@ -39,6 +39,17 @@ constexpr auto kStartupSequenceTimeout = std::chrono::milliseconds(
 // 状态估计/控制与独立 MIT 发送保持 500 Hz；未使能反馈轮询为 125 Hz。
 constexpr std::uint32_t kMotorFrameDivider = control_config::hardware::motor_frame_divider;
 
+// 启动检查的目标是趴卧姿态，不是电机零位（电机零位 = OpenDog 机械零位，只用于悬空写零）。
+// 标定数组按 FR/FL/RR/RL × hip/thigh/calf 排列，index % 3 就是腿内关节号。
+float proneJointPosition(std::size_t index) noexcept
+{
+  constexpr std::array<float, kJointsPerLeg> prone{
+    static_cast<float>(control_config::pose::prone_hip),
+    static_cast<float>(control_config::pose::prone_thigh),
+    static_cast<float>(control_config::pose::prone_calf)};
+  return prone[index % kJointsPerLeg];
+}
+
 void reportMotorFaults(const dm1_hardware::HardwareSample & sample)
 {
   static robot_log::Throttle log(1000);
@@ -611,7 +622,8 @@ bool HardwareBridge::motorPositionsWithin(
     if (index >= kNumJoints || seen[index] || !std::isfinite(motor.position) ||
       std::abs(
         calibration_[index].direction *
-        (motor.position - calibration_[index].zero_position)) >= tolerance_rad)
+        (motor.position - calibration_[index].zero_position) -
+        proneJointPosition(index)) >= tolerance_rad)
     {
       return false;
     }
@@ -648,16 +660,17 @@ void HardwareBridge::reportInvalidMotorPositions(
 
     const float model_position = calibration.direction *
       (feedback->position - calibration.zero_position);
-    const float position_error = std::abs(model_position);
+    const float position_error = std::abs(model_position - proneJointPosition(index));
     if (!std::isfinite(model_position) || !std::isfinite(position_error) ||
       position_error >= tolerance_rad)
     {
       imu_log::print(
         imu_log::Level::Error,
-        "电机位置不合理：%s（总线 %u，CAN ID %u）当前误差为 %+.4f rad，"
-        "允许范围为 ±%.3f rad；请人工调整后重试。\n",
+        "电机位置不合理：%s（总线 %u，CAN ID %u）当前 %+.4f rad，趴卧目标 %+.4f rad，"
+        "误差 %+.4f rad，允许范围为 ±%.3f rad；请把机器人摆成趴卧姿态后重试。\n",
         kJointNames[index], static_cast<unsigned int>(calibration.address.bus),
         static_cast<unsigned int>(calibration.address.can_id), model_position,
+        proneJointPosition(index), model_position - proneJointPosition(index),
         tolerance_rad);
     }
   }
@@ -723,7 +736,8 @@ bool HardwareBridge::performStartupZeroCalibration(
   if (options_.set_zero) {
     imu_log::print(
       imu_log::Level::Warning,
-      "DM1 零位维护：跳过反馈/姿态/位置检查，直接写入全部电机零位。\n");
+      "DM1 零位维护：跳过反馈/姿态/位置检查，直接写入全部电机零位。"
+      "必须先悬空并摆成 OpenDog 零位：髋水平、大腿电机接口对准螺丝、小腿伸直顶限位。\n");
     for (const auto & item : calibration_) {
       if (stop_requested.load()) {return false;}
       const auto & address = item.address;

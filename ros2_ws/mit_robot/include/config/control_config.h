@@ -103,7 +103,7 @@ inline constexpr double centrifugal_gain = 0.5; // 按机身高度、平移速�
 inline constexpr double entry_hold_duration = 0.2; // 进入行走后先保持四脚支撑多久，再执行请求的步态；增大后踏步启动更晚。
 inline constexpr std::size_t stand_handoff_frames = 50; // 正常退出行走回站立时，融合末帧行走命令与站立命令的帧数；用于减小切换突变。
 inline constexpr double entry_height_margin = 0.005; // 允许机身低于名义站高多少仍可进入行走；越大越容易放行尚未完全站高的状态。
-inline constexpr double entry_minimum_calf_angle = 0.30; // 允许进入行走的小腿关节角下限；用于拦截仍在收腿/折叠的姿态。
+inline constexpr double entry_minimum_calf_angle = -1.92; // 允许进入行走的小腿关节角下限；用于拦截仍在收腿/折叠的姿态。
 inline constexpr double touchdown_maximum_vertical_speed = 0.20; // 单次踏步落地确认时允许的足端竖直速度绝对值上限；越小越要求脚先稳定下来。
 inline constexpr double touchdown_probability = 0.5; // 单次踏步在有效实测接触数据下，认定落地所需的接触概率下限；无有效实测时跳过力确认。
 inline constexpr double touchdown_support_ratio = 0.10; // 单次踏步确认落地所需实测支撑力，占四脚均分体重时单脚支撑力的比例。
@@ -215,13 +215,23 @@ inline constexpr double maximum_roll_pitch = 1.4; // 通用 FSM 姿态安全检�
 inline constexpr double foot_xy_limit_sine = 0.8660254037844386; // 按最大腿长换算足端前后/横向允许范围的比例；越大允许足伸得越远，仅在启用足端检查时使用。
 inline constexpr double foot_z_minimum_length_divisor = 4; // 足端安全检查中最短向下伸展长度的除数；增大后允许脚更靠近机身。
 inline constexpr double standup_maximum_roll_pitch = 0.20; // 判断是否已经站稳、可以继续动作时允许的侧倾/俯仰；不是 FSM 的极限倾倒角。
-inline constexpr double stance_thigh_lower = -0.34; // 额外软件站姿限位中的大腿关节目标下界；仅在站姿限位启用时裁剪 WBC 参考。
-inline constexpr double stance_thigh_upper = -0.10; // 额外软件站姿限位中的大腿关节目标上界；与下界共同限制站立支撑构型。
-inline constexpr double stance_calf_lower = -0.03; // 额外软件站姿限位中的小腿关节目标下界；区别于机械关节限位。
-inline constexpr double stance_calf_upper = 1.20; // 额外软件站姿限位中的小腿关节目标上界；与下界共同约束站立时的小腿角度和支撑腿形。
+inline constexpr double stance_thigh_lower = -0.543; // 额外软件站姿限位中的大腿关节目标下界；仅在站姿限位启用时裁剪 WBC 参考。
+inline constexpr double stance_thigh_upper = -0.303; // 额外软件站姿限位中的大腿关节目标上界；与下界共同限制站立支撑构型。
+inline constexpr double stance_calf_lower = -2.25; // 额外软件站姿限位中的小腿关节目标下界；区别于机械关节限位。
+inline constexpr double stance_calf_upper = -1.02; // 额外软件站姿限位中的小腿关节目标上界；与下界共同约束站立时的小腿角度和支撑腿形。
 inline constexpr double stance_limit_maximum_target_height = 0.33; // 只有目标站高不大于此值才启用额外站姿角度限制；更高站姿沿用模型关节范围。
 inline constexpr double stance_limit_activation_height = 0.28; // 实测站高达到此值后才锁存启用站姿角度限制，避免起身尚未完成就强行裁剪关节目标。
 inline constexpr double maximum_hardware_control_time_step = 0.02; // 硬件 Runner 接受的控制周期上限；用于拒绝过慢的控制周期设置。
+}
+
+// DM1 关节姿态（模型坐标 = 电机坐标 = OpenDog URDF 关节角，单位 rad）。
+// 电机固件零位 = OpenDog 机械零位：髋水平；大腿电机接口对准螺丝（大腿水平朝后）；
+// 小腿向后伸直顶到限位。该姿态脚在身体后方，只用于悬空写零，不是启动姿态。
+namespace pose
+{
+inline constexpr double prone_hip = 0.0; // 趴卧（启动/趴下保持）髋关节角。
+inline constexpr double prone_thigh = -0.203; // 趴卧大腿角；相对 OpenDog 零位向下 0.203 rad。
+inline constexpr double prone_calf = -2.22; // 趴卧小腿角；小腿向前折叠，离折叠限位 -2.25 约 0.03 rad。
 }
 
 // 硬件链路的软件默认值：启动检查、反馈时效、调度告警与重连策略。
@@ -229,7 +239,7 @@ namespace hardware
 {
 inline constexpr float torque_limit = 88; // 硬件发送链和仿真执行端默认的每关节力矩上限；与 LegController 限幅同时存在，启动参数可显式覆盖。
 inline constexpr double feedback_timeout = 0.10; // MIT 接口判定电机反馈是否过期的时限；增大允许使用更旧的数据，不会增加反馈更新频率。
-inline constexpr float startup_zero_tolerance = 0.05F; // 普通启动时关节位置相对标定零位的允许偏差；只检查就绪条件，不会写入电机零位。
+inline constexpr float startup_zero_tolerance = 0.05F; // 普通启动时关节位置相对趴卧姿态（pose::prone_*）的允许偏差；只检查就绪条件，不会写入电机零位。
 inline constexpr float startup_stationary_velocity = 0.05F; // 启动检查允许的关节速度绝对值；减小后更严格地要求电机静止。
 inline constexpr int startup_stable_samples = 3; // 普通启动检查要求连续通过的稳定样本数；增大后确认更慢、更不容易被短暂稳定误触发。
 inline constexpr int maximum_consecutive_overruns = 3; // 连续控制周期超时达到多少次时触发超时处理/告警；当前处理会丢弃过期周期，不自动失能。
@@ -297,8 +307,10 @@ struct RobotControlParameters
   // 初始化与趴卧保持共用同一 PD。
   Vec3<T> prone_home_joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于初始化和趴卧保持。
   Vec3<T> prone_home_joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于初始化和趴卧保持。
-  bool start_in_prone_home = true; // 是否按机械趴卧零位启动并保持；开启时要先完成显式起身，才允许普通站立/行走。
-  Vec3<T> motor_zero_position = Vec3<T>::Zero(); // 趴卧启动/保持时使用的电机坐标关节目标；这是控制目标，不是改写硬件零点或标定。
+  bool start_in_prone_home = true; // 是否按趴卧姿态启动并保持；开启时要先完成显式起身，才允许普通站立/行走。
+  Vec3<T> prone_home_position = Vec3<T>(
+    T(control_config::pose::prone_hip), T(control_config::pose::prone_thigh),
+    T(control_config::pose::prone_calf)); // 趴卧启动/保持的关节目标；电机零位是 OpenDog 零位，趴卧不再是全零。
 
   Vec3<T> balance_body_position_kp = Vec3<T>(T(120), T(120), T(220)); // 站立、行走和趴下共用的机身位置 WBC 比例增益；z 轴优先保持高度。
   Vec3<T> balance_body_position_kd = Vec3<T>(T(12), T(12), T(22)); // 站立、行走和趴下共用的机身速度误差阻尼；z 轴抑制升降振荡。
@@ -315,7 +327,7 @@ struct RobotControlParameters
   // 正常起身：从趴卧展开与非趴卧足端起身走不同分支；恢复动作只共用关节 PD。
   T stand_up_duration = T(2.4); // 正常趴卧起身时髋/小腿展开时长的基准；增大后起身更慢，大腿时长还要除以下面的比例。
   T stand_up_thigh_speed_scale = T(0.75); // 起身大腿的相对速度比例；大腿时长 = stand_up_duration / 此值，越小大腿展开越慢。
-  Vec3<T> stand_up_prepare_position = Vec3<T>(T(0), T(0.1), T(-2.15)); // 正常趴卧起身展开阶段的三关节目标姿态；改变它会改变起身过程中的腿形。
+  Vec3<T> stand_up_prepare_position = Vec3<T>(T(0), T(0.1), T(-2.15)); // 正常趴卧起身展开阶段的三关节目标姿态（OpenDog 机械角，数值与改零前相同）；改变它会改变起身过程中的腿形。
   Vec3<T> stand_up_joint_kp = Vec3<T>::Constant(T(control_config::motor_joint_kp)); // 承接统一电机关节位置刚度，用于正常起身关节展开和恢复站立。
   Vec3<T> stand_up_joint_kd = Vec3<T>::Constant(T(control_config::motor_joint_kd)); // 承接统一电机关节速度阻尼，用于正常起身关节展开和恢复站立。
   Vec3<T> stand_up_cartesian_kp = Vec3<T>(T(190), T(190), T(260)); // 非趴卧起身路径的足端位置反馈增益；用于把脚推向起身目标，不作用于趴卧关节展开分支。
