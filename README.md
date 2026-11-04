@@ -1,39 +1,25 @@
 # MY_ROBOT
 
-MY_ROBOT 是一个面向四足机器人运动控制与仿真研究的 ROS 2 工程。项目以 C++ 为主要开发语言，结合 MuJoCo 构建机器人仿真环境，并集成状态估计、步态规划、有限状态机、模型预测控制（MPC）和全身控制（WBC）等模块。
+面向达妙 DM1 四足机器人的 ROS 2 工程，C++ 实现，控制算法为 OpenDog WBC+NMPC：
+Kalman 状态估计、OCS2 SQP 非线性模型预测控制（NMPC）和加权全身控制（WBC）。
+同一套算法既跑 MuJoCo 仿真，也通过达妙 MIT 电机协议驱动真机。
 
-常用启动命令见：[DM1 硬件与仿真运行指令](ros2_ws/mit_robot/docs/RUN_COMMANDS.md)。
+- 完整运行指令、按键表和安全顺序：[RUN_COMMANDS.md](ros2_ws/dm1_robot/docs/RUN_COMMANDS.md)
+- 架构与 OpenDog 源码依据：[hardware_algorithm_separation.md](ros2_ws/dm1_robot/docs/hardware_algorithm_separation.md)
+- 电机零位标定：[OPENDOG_ZERO_CALIBRATION.md](ros2_ws/dm1_robot/docs/OPENDOG_ZERO_CALIBRATION.md)
 
-仓库当前以 DM1 为唯一机器人模型，用于控制算法开发、MuJoCo 验证和真实 DM1
-执行器接入。
-
-## 主要功能
-
-- 基于 MuJoCo 的四足机器人动力学仿真与可视化
-- DM1 唯一模型契约：MuJoCo、控制核心和硬件共用关节顺序与限幅
-- 腿部控制、足端轨迹规划与步态调度
-- 姿态、位置、速度及接触状态估计
-- 基于有限状态机的机器人行为管理与安全检查
-- MPC 与 WBC 运动控制框架
-- ROS 2 自定义消息、服务和启动文件
-- 覆盖模型、传感器、估计器、控制器及系统集成的自动化测试
-
-## 控制框架
-
-工程中的主要控制流程如下：
+## 控制流程
 
 ```text
-MuJoCo 仿真 / 传感器数据
+MuJoCo 仿真 / 真机 IMU + 电机反馈
           ↓
-      状态估计
+  Kalman 状态估计（OpenDog）
           ↓
-      控制状态机
+  SQP-MPC（OCS2，后台线程求解）
           ↓
-      MPC / WBC
+      WeightedWbc
           ↓
-      腿部控制器
-          ↓
-     四足机器人模型
+  关节 q/dq/τ + Kp/Kd → 达妙 MIT 电机协议 / MuJoCo 执行器
 ```
 
 ## 工程结构
@@ -41,358 +27,97 @@ MuJoCo 仿真 / 传感器数据
 ```text
 MY_ROBOT/
 ├── ros2_ws/
-│   └── mit_robot/
-│       ├── include/       # 控制、模型、估计与工具类头文件
-│       ├── src/           # 核心算法及机器人模型资源
-│       ├── user/          # 仿真程序、运行器与 ROS 2 服务
-│       ├── msg/           # ROS 2 自定义消息
-│       ├── srv/           # ROS 2 自定义服务
-│       └── test/          # 单元测试与集成测试
+│   └── dm1_robot/                 # ROS 2 包 dm1_robot
+│       ├── config/
+│       │   ├── opendog/           # OpenDog 算法配置：URDF、task/reference/gait
+│       │   └── hardware/          # 电机标定文件
+│       ├── description/           # MuJoCo 模型 dm1.xml、scene.xml 与 STL 网格
+│       ├── launch/                # ROS 2 启动文件
+│       ├── include/  src/         # 两者按同样的模块分类：
+│       │   ├── common/            #   公共类型、参数配置、日志（仅头文件）
+│       │   ├── control/           #   OpenDog 算法接入与真机 runner
+│       │   ├── hardware/          #   硬件桥、达妙电机 MIT 协议、CAN/IMU 驱动
+│       │   ├── sensor/            #   IMU 与关节反馈数据源
+│       │   ├── teleop/            #   键盘遥操作与电机输出仲裁
+│       │   ├── simulation/        #   MuJoCo 仿真桥与设备替身
+│       │   └── app/               #   程序入口 hardware_main.cpp、sim_main.cpp（仅 src）
+│       ├── third_party/
+│       │   ├── opendog/           # OpenDog WBC、OCP 接口、估计器和 SQP-MPC 源码
+│       │   ├── dmbot_serial/      # 达妙 CAN 协议
+│       │   ├── dm_imu/            # 达妙 IMU CRC
+│       │   └── legacy/            # ROS 1 遗留包，仅作参考，不参与构建
+│       ├── test/                  # 按模块划分的单元与集成测试
+│       ├── scripts/               # CAN 配置与数据采集脚本
+│       └── docs/                  # 运行指令、零位标定、架构说明
 └── README.md
 ```
 
 ## 环境依赖
 
-建议在 Linux 环境下使用，主要依赖包括：
+- Linux + ROS 2 Humble，C++17 编译器，CMake 与 colcon
+- MuJoCo（`/usr/local` 下的 3.x，含 Simulate UI）、Eigen3、OpenGL 与 GLFW
+- OpenDog 的 OCS2 安装：默认 `/home/simon/open-dog/ros2_ws/install` 和
+  `/home/simon/open-dog/.ros2_overlay`（CMake 变量 `DM1_OPENDOG_PREFIX` /
+  `DM1_OPENDOG_OVERLAY` 可改）；找不到时 CMake 直接报错
 
-- ROS 2（当前工程面向 Humble 环境）
-- C++17 编译器
-- CMake 与 colcon
-- MuJoCo
-- Eigen3
-- OpenGL 与 GLFW
-
-此外，机器人描述与可视化功能会使用 Xacro、RViz2、robot_state_publisher 及 ros2_control 等 ROS 2 组件。
-
-## DM IMU
-
-真实硬件 IMU 由 `ros2_ws/mit_robot/src/sensor/imu.cpp` 中的 `HardwareImu`
-直接读取和处理，不再启动独立的 ROS 2 IMU 接收节点，也不发布 `/imu/data`。
-程序只从串口接收，不向 IMU 发送配置命令；IMU 需要预先配置为持续输出三段
-57 字节数据帧。
-
-### 启动前准备
-
-先连接 IMU，然后确认系统分配的串口设备名：
+## 构建与测试
 
 ```bash
-ls -l /dev/ttyACM* /dev/ttyUSB*
+cd /home/simon/real_mitrl_dog/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select dm1_robot --symlink-install
+source install/setup.bash
+
+colcon test --packages-select dm1_robot
+colcon test-result --verbose
 ```
 
-工程默认从 `/dev/serial/by-id` 自动选择名称包含 `DM-IMU` 的设备，串口参数为
-921600 波特率、8 数据位、无校验、1 停止位（8N1）。也可以通过 `--imu DEVICE`
-显式指定 `/dev/ttyACM*`、`/dev/ttyUSB*` 或其他稳定设备路径。
+修改代码后重新执行 `colcon build` 和 `source install/setup.bash`；怀疑运行的是旧程序时
+再执行一次 `hash -r`。
 
-当前用户需要属于 `dialout` 组。该配置只需执行一次：
+## 运行仿真
+
+```bash
+ros2 run dm1_robot sim_main --render-gpu auto
+# 或
+ros2 launch dm1_robot dm1_control.launch.py
+```
+
+机器人从趴卧姿态原地开始。先点击 `Enable motors`（或 `Shift+U`），再点击
+`Stand up`（或 `1`），站稳后用方向按钮或 `W/S/A/D/Q/E` 运动。方向命令会锁存，
+按 `Space` 或点击 `Stop` 显式停止。
+
+加 `--hardware-sim` 时，MuJoCo 只充当 CAN 电机和 IMU 串口的设备替身，控制部分运行的
+是与真机完全相同的 `HardwareBridge` 程序，适合实机前联调。仅查看模型（不带控制器）
+用 `ros2 launch dm1_robot dm1_display.launch.py`。
+
+## 真机准备
+
+### IMU 串口
+
+真实 IMU 由 `HardwareImu` 直接读取串口（不启动单独的 ROS IMU 节点），只接收、
+不向 IMU 发送配置命令；IMU 需预先配置为持续输出 57 字节数据帧。串口参数为
+921600 波特率 8N1。默认从 `/dev/serial/by-id` 自动选择名称含 `DM-IMU` 的设备，
+也可用 `--imu DEVICE` 显式指定。
+
+当前用户需要属于 `dialout` 组（只需执行一次，之后注销重新登录，或在当前终端
+`newgrp dialout`）：
 
 ```bash
 sudo usermod -aG dialout "$USER"
 ```
 
-执行后需要注销并重新登录；也可以只对当前终端临时生效：
+### CAN（双路 USB2CANFD，gs_usb 固件）
+
+刷入 `gs_usb` 固件后直接提供 `can0`/`can1` SocketCAN 接口，不使用 `slcand`。
+设备参数：FDCAN 模式，仲裁域 1 Mbps（采样点 75%），数据域 5 Mbps（采样点 87.5%）。
+DM 电机使用 8 字节经典 CAN 帧，实际只用到仲裁域 1 Mbps。
 
 ```bash
-newgrp dialout
-id
+sudo /home/simon/real_mitrl_dog/ros2_ws/dm1_robot/scripts/setup_dm1_can.sh can0 can1
 ```
 
-`id` 输出中应包含 `dialout`。设备每次插拔后不需要再次执行
-`usermod`，但要重新确认设备名是否发生变化。
-
-### 三种硬件启动指令
-
-以下命令都应在新的终端中执行。先进入工作空间并加载 ROS 2 环境：
-
-```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-```
-
-#### 1. 只打开 IMU
-
-该模式不打开 CAN，不连接电机，也不会发送任何电机命令：
-
-```bash
-ros2 run mymit_robot hardware_main \
-  --imu-only \
-  --imu /dev/ttyACM0
-```
-
-如果 IMU 使用稳定的 `/dev/serial/by-id/...` 路径，也可以将
-`/dev/ttyACM0` 替换为该路径。按 `Ctrl+C` 退出。
-
-#### 2. 只打开并使能一个电机
-
-先配置目标电机所在的 SocketCAN 总线。你当前测试的电机是 `can0`、物理
-CAN ID `0x01`，对应标定文件中的关节索引 `3`（`FL_hip`）：
-
-```bash
-sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh can0
-```
-
-然后启动单电机使能测试：
-
-```bash
-ros2 run mymit_robot hardware_main \
-  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
-  --single-motor 3 can0 0x01 \
-  --enable-output
-```
-
-该命令只打开 `can0`，只操作目标电机，不会发送 MIT 位置、速度、增益或
-力矩控制帧。终端会打印使能帧发送结果；按 `Ctrl+C` 后会打印失能帧发送结果。
-这里的 `3`、`can0` 和 `0x01` 必须与标定文件中的同一行对应。
-
-如果测试的是 `can1`，先执行：
-
-```bash
-sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh can1
-```
-
-再把启动命令中的 `can0` 替换为 `can1`，并填写对应的关节索引和物理 CAN ID。
-
-#### 3. 打开全部硬件
-
-先配置两路 CAN：
-
-```bash
-sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh can0 can1
-```
-
-随后启动 IMU 和 12 路电机的完整硬件程序。下面的命令会允许电机输出，使用前
-必须固定机器人并准备好物理急停：
-
-```bash
-ros2 run mymit_robot hardware_main \
-  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
-  --imu /dev/ttyACM0 \
-  --enable-output
-```
-
-首次联调建议先删除最后一行的 `--enable-output`，以只读方式确认 IMU 和 12 路
-反馈均正常；不带该参数时不会使能电机：
-
-```bash
-ros2 run mymit_robot hardware_main \
-  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
-  --imu /dev/ttyACM0
-```
-
-### 仅测试 IMU 接收（推荐首次使用）
-
-该模式不需要标定文件，也不会打开电机 CAN，更不会发送任何电机命令：
-
-```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select mymit_robot --symlink-install
-source install/setup.bash
-
-ros2 run mymit_robot hardware_main \
-  --imu-only
-```
-
-也可以使用等价的 ROS 2 launch 命令；`port` 参数会传递给同一个
-`hardware_main --imu-only` 程序，不会启动独立的 IMU 节点：
-
-```bash
-ros2 launch mymit_robot dm1_imu.launch.py
-```
-
-看到以下日志，说明串口已经打开并启动接收线程：
-
-```text
-[DM IMU] receiver started: /dev/serial/by-id/...DM-IMU..., 921600 baud
-```
-
-启动时程序会先等待一段静止的有效 IMU 数据，计算启动基准：平均 RPY（度）、
-机体系重力加速度向量和重力模长。成功时会看到类似：
-
-```text
-[DM IMU] startup baseline accepted: gravity_body=(...) |g|=... m/s^2 rpy0_deg=(...)
-```
-
-程序默认从 `/dev/serial/by-id` 自动选择名称包含 `DM-IMU` 的设备，因此重启或
-USB 枚举顺序变化后不依赖 `/dev/ttyACM0`。随后应周期性看到
-`status=UPDATING`、持续增长的 `seq` 和加速度、角速度、欧拉角数据。按
-`Ctrl+C` 退出。启动期间请保持 IMU 静止；若 3 秒内收不到足够稳定的帧，程序会拒绝启动。
-
-### 持续触发一个电机反馈（诊断用）
-
-部分达妙电机不会主动周期性上报状态，而是在收到 MIT 控制帧后返回一帧反馈。
-可以在只读电机模式下，明确指定一个总线和电机 CAN ID，定时发送零增益 MIT 帧。
-你当前接入的电机为 `can0` 总线、CAN ID `0x01`：
-
-规划中的电机参数为 MIT 模式、物理 CAN ID `0x01`～`0x06`，对应 Master ID
-`0x11`～`0x16`。控制、使能、失能和写零帧使用物理 CAN ID 作为 CAN 仲裁 ID；反馈帧
-使用 Master ID，并在 D0 低 4 位携带物理电机 ID。
-
-```bash
-ros2 run mymit_robot hardware_main \
-  --motor-only \
-  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt \
-  --poll-feedback can0 0x01
-```
-
-该选项按电机模式的周期持续发送 `kp=0, kd=0, tau=0` 的 MIT 帧，不发送使能或位置归零命令，
-也不会主动给标定文件中的其他电机发送 MIT 帧。程序退出时仍会执行驱动已有的失能流程，
-因此会向标定地址发送失能帧。使用前应确认 `can0 0x01` 是实际电机地址；如果电机已使能或
-机械负载不安全，不要在未固定机械结构时进行测试。
-
-终端会每约 100 ms 输出一次状态：`UPDATING` 表示 `seq` 在增长，`NO_UPDATE` 表示暂时没有
-新反馈，`NO_FEEDBACK` 表示尚未收到该电机的有效反馈帧。
-
-### 完整硬件程序
-
-完整模式还需要有效的电机标定文件。不要直接使用示例路径
-`path/to/calibration.txt`，应替换成真实文件的绝对路径：
-
-```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-
-ros2 run mymit_robot hardware_main \
-  --calibration /home/simon/real_mitrl_dog/ros2_ws/mit_robot/config/dm1_hardware_calibration.txt
-```
-
-完整模式现在会等待真实的 12 路健康反馈，并检查静止、水平和趴卧姿态。默认策略是：
-所有关节相对趴卧姿态 `(0, -0.203, -2.22)` rad 的偏差必须小于 `--zero-tolerance`
-（默认 `0.05 rad`），超出窗口直接拒绝启动。
-
-电机零位就是 OpenDog 机械零位，模型关节角与 OpenDog URDF 完全一致（无安装零偏）：
-髋水平；大腿电机接口对准螺丝（大腿水平朝后）；小腿向后伸直顶到限位。写零时机器人
-必须悬空（DM1 脚着地时大腿无法与躯干平行）摆成这个姿态并固定，再执行 `--set-zero`；
-`--set-zero` 不检查姿态，直接写零。之后放下趴好正常启动。参考图和步骤见
-`ros2_ws/mit_robot/docs/OPENDOG_ZERO_CALIBRATION.md`。
-普通启动、`--enable-output` 和键盘解锁都绝不会写入电机参数；需要无论当前偏差大小
-执行明确零位维护时，使用 `--set-zero`。该模式仍不会使能输出，也不能与
-`--enable-output` 或 `--stand-up` 同时使用。
-
-### 常见报错排查
-
-程序通常会先打印 `[DM IMU] ...` 的具体原因，最后的
-`DM1 hardware startup failed` 只是汇总错误。应优先查看前一行。
-
-| 日志 | 原因和处理 |
-|---|---|
-| `open(/dev/ttyACM0) failed: Permission denied` | 当前终端没有串口权限。执行 `id` 检查是否有 `dialout`；没有则执行 `newgrp dialout`，或注销后重新登录，再重新 `source install/setup.bash`。不要用 `chmod 666` 作为永久解决方案。 |
-| `open(/dev/ttyACM0) failed: No such file or directory` | 设备不存在、USB 线松动，或插拔后设备号改变。重新执行 `ls -l /dev/ttyACM* /dev/ttyUSB*`，将命令中的路径改成实际路径。 |
-| `open(...) failed: Device or resource busy` | 串口被串口调试器、厂商工具、另一个硬件进程或旧进程占用。执行 `fuser -v /dev/ttyACM0` 查找占用者，关闭对应程序后重试。 |
-| `tcgetattr failed: ...` | 设备虽然能打开，但不是可配置的串口设备或设备已断开。重新插拔 IMU，确认使用的是正确的 `/dev/ttyACM*`/`/dev/ttyUSB*`。 |
-| `tcsetattr failed: ...` | 串口参数配置失败。确认 IMU 串口支持 921600 波特率，并检查 USB 转串口驱动和连接稳定性。 |
-| `no serial bytes received` | 串口已打开，但 IMU 没有发送数据。检查 IMU 是否上电、发送功能是否开启、串口线 TX/RX/GND 是否正确，以及波特率是否为 921600。 |
-| `received ... raw bytes, but no valid 57-byte frame` | 收到了数据，但帧格式、波特率或数据起始位置不匹配。确认 IMU 输出的是连续三段 19 字节记录组成的 57 字节协议帧，并确认波特率为 921600。 |
-| `waiting for a valid 57-byte frame` | 使用的仍可能是旧版本安装程序或旧日志。重新构建并刷新环境：`colcon build --packages-select mymit_robot --symlink-install`，然后 `source install/setup.bash`。 |
-| `unable to open IMU serial port` | 这是上面串口错误的汇总信息，不能单独判断原因，查看它前面的 `[DM IMU]` 日志。 |
-| `cannot open calibration file` | 完整模式的标定文件路径错误或文件不存在。使用标定文件的绝对路径；首次可先使用 `--imu-only` 验证 IMU。 |
-| `motor ID must be in [1,255]` | 标定文件中的电机 ID 仍为 0 或超出范围。检查 `config/dm1_hardware_calibration.txt`，每个 ID 必须是 1 到 255。 |
-| `Startup check rejected` | 普通完整模式启动检查失败。机器人必须保持静止、水平、机械零位正确，并收到 12 路健康电机反馈。 |
-| `Startup rejected: robot initial position error` | 至少一个电机相对趴卧姿态的偏差达到接受窗口（默认 `0.05 rad`）；程序不会自动写零，需先把机器人摆回趴卧姿态。只有在悬空摆好 OpenDog 零位时才执行 `--set-zero`。 |
-| `DM1 hardware bridge is read-only at startup` | 普通启动不会写零；确认机械状态后如需维护操作，显式使用 `--set-zero`。 |
-
-### 重新构建和环境刷新
-
-修改代码、切换工作空间，或怀疑运行的是旧程序时，执行：
-
-```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select mymit_robot --symlink-install
-source install/setup.bash
-hash -r
-```
-
-## 构建工程
-
-确认 ROS 2 和相关依赖已安装后，在工作空间中执行：
-
-```bash
-cd ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select mymit_robot
-source install/setup.bash
-```
-
-## 运行仿真
-
-启动 DM1 仿真（默认自动选择 OpenGL，机器人从趴卧姿态原地初始化）：
-
-```bash
-ros2 run mymit_robot mymit_robot_user --render-gpu auto
-```
-
-MuJoCo 窗口中的 `Stand up`、`Forward slow`、`Forward fast`、`Backward`、
-`Left`、`Right`、`Rotate CCW` 按钮可用于站起/回站和方向控制。启动后先点击
-`Enable motors`，再点击 `Stand up`，然后使用方向按钮。方向命令会锁存，按 `Space`
-或点击 `Stop` 显式停止。
-
-在不使用 NVIDIA PRIME 独立显卡渲染的环境中，可以选择自动渲染模式：
-
-```bash
-ros2 launch mymit_robot dm1_control.launch.py
-```
-
-仅查看不带控制器的 DM1 模型时使用 `dm1_display.launch.py`。
-
-## 调整站立速度
-
-硬件版和 MuJoCo 仿真共用同一套站立速度参数。当前已将站立动作调慢：支撑后
-机身抬升速率为 `0.04 m/s`，趴地展开阶段为 `1.8 s`。以后调整站立速度时，修改
-带有“换站立速度要修改的地方”标记的位置：
-
-- `ros2_ws/mit_robot/include/model/robot_control_parameters.hpp`：修改实际运行参数；
-- `ros2_ws/mit_robot/config/dm1_model_contract.yaml`：同步修改契约记录；
-- `ros2_ws/mit_robot/src/FSM/FSM_State_StandUp.cpp` 和
-  `ros2_ws/mit_robot/user/RobotRunner.cpp`：只需在改变站立控制逻辑时修改，通常不动。
-
-修改后重新构建：
-
-```bash
-cd /home/simon/real_mitrl_dog/ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select mymit_robot --symlink-install
-source install/setup.bash
-```
-
-## 测试
-
-工程提供了按功能模块划分的测试用例。完成构建后可运行：
-
-```bash
-cd ros2_ws
-colcon test --packages-select mymit_robot
-colcon test-result --verbose
-```
-
-## 项目说明
-
-本项目主要用于 DM1 控制算法的开发、验证与学习；新增硬件驱动时应实现
-`MitTransport`，不得绕过统一 `JointCommand` 安全边界。
-
-## License
-
-本项目包含采用 Apache-2.0 与 BSD-3-Clause 许可证发布的代码及资源，具体授权信息请参阅工程中的 [LICENSE](ros2_ws/mit_robot/LICENSE) 文件及相关模型目录中的许可说明。
-
-## FDCAN 接口配置
-
-双路 USB2CANFD 刷入 `gs_usb` 固件后直接提供 `can0`/`can1` SocketCAN 接口，
-不再生成 `/dev/ttyACM*`，也不应使用 `slcand`。按设备配置界面的 FDCAN 参数设置：
-
-- 工作模式：FDCAN
-- 仲裁域波特率：1 Mbps
-- 数据域波特率：5 Mbps
-- 仲裁域采样点：75%；数据域采样点：87.5%
-
-当前 DM 电机驱动仍发送 8 字节经典 CAN 帧；因此实际电机帧使用仲裁域
-1 Mbps，5 Mbps 数据域参数仅在发送带 BRS 的 CAN-FD 帧时生效。
-
-```bash
-sudo /home/simon/real_mitrl_dog/ros2_ws/mit_robot/scripts/setup_dm1_can.sh
-```
-
-脚本等价于以下手工配置，并会同时检查、启动 `can0` 和 `can1`：
+脚本等价于对 `can0`、`can1` 分别执行：
 
 ```bash
 sudo ip link set can0 down
@@ -401,19 +126,108 @@ sudo ip link set can0 type can \
   dbitrate 5000000 dsample-point 0.875 \
   fd on loopback off
 sudo ip link set can0 up
-
-sudo ip link set can1 down
-sudo ip link set can1 type can \
-  bitrate 1000000 sample-point 0.75 \
-  dbitrate 5000000 dsample-point 0.875 \
-  fd on loopback off
-sudo ip link set can1 up
 ```
 
-该 `gs_usb` 设备不支持 `restart-ms`；发送队列异常时通过 `ip link set canX down/up`
-手动恢复。使用以下命令确认实际参数：
+该设备不支持 `restart-ms`；发送队列异常时用 `ip link set canX down/up` 手动恢复，
+用 `ip -details -statistics link show can0` 查看实际参数。
+
+## 真机运行
+
+以下命令都在已 `source install/setup.bash` 的终端中执行。标定文件为
+`ros2_ws/dm1_robot/config/hardware/dm1_hardware_calibration.txt`，下文简写为 `$CAL`：
 
 ```bash
-ip -details -statistics link show can0
-ip -details -statistics link show can1
+CAL=/home/simon/real_mitrl_dog/ros2_ws/dm1_robot/config/hardware/dm1_hardware_calibration.txt
 ```
+
+推荐按下面的顺序逐步确认，软件上锁不能替代物理急停。
+
+### 1. 只测 IMU
+
+不需要标定文件，不打开 CAN，不发送任何电机命令：
+
+```bash
+ros2 run dm1_robot hardware_main --imu-only
+# 等价：ros2 launch dm1_robot dm1_imu.launch.py
+```
+
+启动时会先采集静止基准（3 秒内需收到足够稳定的帧，期间保持 IMU 静止），成功时打印
+`[DM IMU] startup baseline accepted: ...`，随后周期性输出 `status=UPDATING`、
+递增的 `seq` 以及加速度、角速度和欧拉角。
+
+### 2. 只测电机反馈
+
+部分达妙电机只在收到 MIT 帧后才回一帧反馈。下面的命令只向指定电机周期性发送
+`kp=0, kd=0, tau=0` 的 MIT 帧，不使能、不写零，也不向其他电机发 MIT 帧；退出时
+仍会向标定地址发送失能帧。
+
+```bash
+ros2 run dm1_robot hardware_main --motor-only --calibration "$CAL" --poll-feedback can0 0x01
+```
+
+终端约每 100 ms 输出一次：`UPDATING` 表示 `seq` 在增长，`NO_UPDATE` 表示暂时没有
+新反馈，`NO_FEEDBACK` 表示尚未收到有效反馈帧。电机规划为物理 CAN ID `0x01`～`0x06`、
+Master ID `0x11`～`0x16`：控制/使能/失能/写零帧用物理 ID 作仲裁 ID，反馈帧用
+Master ID，并在 D0 低 4 位携带物理 ID。
+
+### 3. 完整硬件只读启动
+
+打开 IMU 和两路 CAN、等待 12 路电机反馈，通过启动检查后持续监测 IMU；不使能电机：
+
+```bash
+ros2 run dm1_robot hardware_main --calibration "$CAL"
+```
+
+### 4. 键盘控制
+
+```bash
+ros2 run dm1_robot hardware_main --calibration "$CAL" --keyboard-control
+```
+
+启动后电机上锁。启动检查要求 12 路反馈健康、机器人静止且水平，**不检查关节是否处于
+趴卧姿态**，按 `Shift+U` 解锁前必须人工确认机器人已趴好。解锁后 1.2 s 内平滑回到
+趴卧姿态 `(0, -0.203, -2.22)`，再按 `1` 站立；`P` 趴下，`0` 失能，`Esc` 失能并退出。
+完整按键表见 RUN_COMMANDS.md。
+
+### 5. 电机零位维护
+
+电机零位就是 OpenDog 机械零位：髋水平；大腿电机接口对准螺丝（大腿水平朝后）；
+小腿向后伸直顶到限位。DM1 脚着地时大腿无法与躯干平行，因此写零时机器人必须悬空，
+摆成这个姿态并固定后执行：
+
+```bash
+ros2 run dm1_robot hardware_main --calibration "$CAL" --set-zero
+```
+
+`--set-zero` 不检查姿态、直接写零，也不使能输出。只读启动和键盘解锁都绝不会写入
+电机参数。参考图和步骤见 OPENDOG_ZERO_CALIBRATION.md。
+
+## 常见报错
+
+程序通常先打印具体原因，最后的 `DM1 硬件启动失败: ...` 只是汇总，应优先看前几行。
+
+| 日志 | 原因和处理 |
+|---|---|
+| `[DM IMU] open(...) failed: Permission denied` | 没有串口权限。用 `id` 确认是否有 `dialout`；没有则 `newgrp dialout` 或注销重新登录。不要用 `chmod 666` 作永久方案。 |
+| `[DM IMU] open(...) failed: No such file or directory` | 设备不存在、USB 松动或插拔后设备名变化。用 `ls -l /dev/ttyACM* /dev/ttyUSB*` 确认后修改 `--imu`。 |
+| `[DM IMU] open(...) failed: Device or resource busy` | 串口被调试器、厂商工具或旧进程占用。用 `fuser -v /dev/ttyACM0` 找到并关闭占用者。 |
+| `[DM IMU] tcgetattr/tcsetattr failed` | 不是可配置的串口、设备已断开，或不支持 921600 波特率。重新插拔并确认设备路径。 |
+| `no serial bytes received` | 串口已打开但 IMU 没发数据。检查供电、发送功能、TX/RX/GND 接线和波特率。 |
+| `but no valid 57-byte frame` | 收到数据但帧格式或波特率不匹配。确认 IMU 输出 57 字节协议帧、波特率 921600。 |
+| `[DM IMU] startup baseline rejected` | 启动静止基准未通过：机器人在动，或 IMU 数据不稳定。保持静止后重试。 |
+| `无法打开标定文件` | 标定文件路径错误。使用绝对路径；首次可先用 `--imu-only` 验证 IMU。 |
+| `DM1 bus must be 0/1, physical CAN ID in [1,0x0f] ...` | 标定文件中的总线或 ID 越界。物理 CAN ID 为 1～0x0F，Master ID 为 1～0x7FF。 |
+| `DM1 motor bus/CAN/master mappings must be unique` | 标定文件中同一总线上有重复的物理 ID 或 Master ID。 |
+| `启动检查被拒绝：未收到 IMU 和 12 个电机的完整首轮反馈` | 500 ms 内没有收齐反馈。检查 CAN 配置、电机供电和标定文件中的地址。 |
+| `启动检查被拒绝：机器人必须静止、水平，且反馈健康` | 启动时机器人在动、倾斜过大，或有电机报故障/过温。 |
+
+## 新增硬件驱动
+
+新增或替换 CAN/IMU 设备时实现 `dm1_hardware::Dm1HardwareIo`（见
+`include/hardware/dm1_hardware_io.hpp`），不要绕过 `Dm1MitInterface` 的命令校验和
+力矩饱和。
+
+## License
+
+本项目包含采用 Apache-2.0 与 BSD-3-Clause 许可证发布的代码及资源，具体授权信息请参阅
+工程中的 [LICENSE](ros2_ws/dm1_robot/LICENSE) 文件及相关模型目录中的许可说明。

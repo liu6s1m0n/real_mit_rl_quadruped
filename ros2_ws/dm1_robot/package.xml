@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <!-- ROS 2 包清单：声明构建、运行、接口生成和测试所需依赖，不包含控制参数。 -->
+  <name>dm1_robot</name>
+  <version>0.0.0</version>
+  <description>DM1 ROS 2 interfaces, robot description, and OpenDog WBC+NMPC control for MuJoCo and hardware.</description>
+  <maintainer email="2461405053@qq.com">simon</maintainer>
+  <license>Apache-2.0</license>
+  <license>BSD-3-Clause</license>
+
+  <!-- 编译控制程序所需的依赖。 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>mujoco_vendor</depend>
+  <depend>rclcpp</depend>
+  <depend>rcl</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>std_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>realtime_tools</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>urdfdom_headers</depend>
+  <depend>tinyxml2_vendor</depend>
+  <depend>eigen</depend>
+
+  <!-- 启动文件依赖。 -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,214 @@
+/*! @file sim_main.cpp
+ *  @brief MuJoCo 仿真程序入口。
+ *
+ *  这里解析运行参数，SimulationBridge 再将其送入
+ *  OpenDog 状态估计 -> SQP-MPC -> WBC 控制链。
+ */
+#include <cstdio>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <unistd.h>
+
+#include <rclcpp/rclcpp.hpp>
+
+#include "simulation/SimulationBridge.hpp"
+
+namespace
+{
+// 软件控制默认值统一由 include/common/control_config.h 提供。
+
+/// 命令行解析结果。
+struct RobotSelection
+{
+  const char * scene_path;    ///< DM1 MuJoCo 场景。
+  const char * render_gpu;    ///< OpenGL 渲染设备策略：auto 或 nvidia。
+  HardwareSimulationOptions hardware_simulation;  ///< 硬件在环仿真参数。
+  std::string algorithm_config_directory = "config/opendog";  ///< OpenDog 配置目录。
+};
+
+/// 解析仿真命令行参数；--sim-* 和 --calibration 只能与 --hardware-sim 一起使用。
+RobotSelection selectRobot(int argc, char ** argv)
+{
+  // launch_ros 会在自定义参数后追加“--ros-args -r ...”。这里只解析渲染
+  // 选项，遇到 --ros-args 后把剩余参数完整留给 ROS 2。
+  const char * render_gpu = "auto";
+  HardwareSimulationOptions hardware_simulation;
+  hardware_simulation.calibration_path = DM1_ROBOT_DM1_CALIBRATION_PATH;
+#ifdef DM1_ROBOT_ALGORITHM_CONFIG_DIR
+  std::string algorithm_config_directory = DM1_ROBOT_ALGORITHM_CONFIG_DIR;
+#else
+  std::string algorithm_config_directory = "config/opendog";
+#endif
+  bool hardware_options_used = false;
+  for (int index = 1; index < argc; ++index) {
+    if (std::strcmp(argv[index], "--ros-args") == 0) {break;}
+    if (std::strcmp(argv[index], "--algorithm") == 0) {
+      // 兼容旧命令：OpenDog 是唯一算法，只接受 opendog。
+      if (++index >= argc || std::strcmp(argv[index], "opendog") != 0) {
+        throw std::invalid_argument("--algorithm only accepts opendog (MIT controller was removed)");
+      }
+    } else if (std::strcmp(argv[index], "--algorithm-config") == 0) {
+      if (++index >= argc) {throw std::invalid_argument("--algorithm-config requires a path");}
+      algorithm_config_directory = argv[index];
+    } else if (std::strcmp(argv[index], "--hardware-sim") == 0) {
+      hardware_simulation.enabled = true;
+    } else if (std::strcmp(argv[index], "--calibration") == 0) {
+      hardware_options_used = true;
+      if (++index >= argc) {throw std::invalid_argument("--calibration requires a path");}
+      hardware_simulation.calibration_path = argv[index];
+    } else if (std::strncmp(argv[index], "--sim-", 6) == 0 ||
+      std::strcmp(argv[index], "--torque-limit") == 0)
+    {
+      const std::string option(argv[index]);
+      hardware_options_used = true;
+      if (++index >= argc) {throw std::invalid_argument(option + " requires a number");}
+      std::size_t parsed = 0;
+      const double value = std::stod(argv[index], &parsed);
+      if (argv[index][parsed] != '\0') {throw std::invalid_argument("invalid number for " + option);}
+      if (option == "--sim-command-delay-ms") {hardware_simulation.command_delay_ms = value;}
+      else if (option == "--sim-feedback-delay-ms") {hardware_simulation.feedback_delay_ms = value;}
+      else if (option == "--sim-imu-period-ms") {hardware_simulation.imu_period_ms = value;}
+      else if (option == "--sim-imu-delay-ms") {hardware_simulation.imu_delay_ms = value;}
+      else if (option == "--sim-motor-time-constant-ms") {hardware_simulation.motor_time_constant_ms = value;}
+      else if (option == "--sim-output-scale") {hardware_simulation.output_scale = value;}
+      else if (option == "--sim-impairment-after-s") {hardware_simulation.impairment_after_s = value;}
+      else if (option == "--sim-drop-every") {hardware_simulation.drop_every = value;}
+      else if (option == "--torque-limit") {hardware_simulation.torque_limit_nm = value;}
+      else if (option == "--sim-weak-joint") {
+        if (!std::isfinite(value) || value < 0 || value >= kNumJoints || std::floor(value) != value) {
+          throw std::invalid_argument("--sim-weak-joint must be an integer in [0,11]");
+        }
+        hardware_simulation.weak_joint = static_cast<int>(value);
+      } else {throw std::invalid_argument("unknown option: " + option);}
+    } else if (std::strcmp(argv[index], "--render-gpu") == 0) {
+      if (index + 1 >= argc) {
+        throw std::invalid_argument("usage: sim_main [--render-gpu nvidia|auto]");
+      }
+      render_gpu = argv[++index];
+    } else {
+      throw std::invalid_argument(
+              "usage: sim_main [--render-gpu nvidia|auto]");
+    }
+  }
+
+  if (std::strcmp(render_gpu, "nvidia") != 0 &&
+    std::strcmp(render_gpu, "auto") != 0)
+  {
+    throw std::invalid_argument("render GPU must be nvidia or auto");
+  }
+  hardware_simulation.validate();
+  hardware_simulation.algorithm_config_directory = algorithm_config_directory;
+  if (hardware_options_used && !hardware_simulation.enabled) {
+    throw std::invalid_argument("hardware simulation options require --hardware-sim");
+  }
+  return {
+    DM1_ROBOT_DM1_SCENE_PATH, render_gpu,
+    hardware_simulation, algorithm_config_directory};
+}
+
+/**
+ * @brief 补齐图形桌面会话的运行时环境，避免 GLFW 找不到用户会话。
+ *
+ * 从 ROS 2、IDE 或 systemd 用户服务启动时，这些变量偶尔不会被继承。
+ * 仅在变量缺失且当前用户的 systemd 会话目录存在时补齐，不覆盖用户配置。
+ */
+void configureDesktopSession()
+{
+  const std::string runtime_dir = "/run/user/" + std::to_string(::getuid());
+  const std::filesystem::path runtime_path(runtime_dir);
+
+  auto setDefault = [](const char * name, const std::string & value) {
+      const char * current = std::getenv(name);
+      if ((current == nullptr || current[0] == '\0') &&
+        ::setenv(name, value.c_str(), 1) != 0)
+      {
+        throw std::runtime_error(std::string("failed to set ") + name);
+      }
+    };
+
+  if (std::filesystem::is_directory(runtime_path)) {
+    setDefault("XDG_RUNTIME_DIR", runtime_dir);
+    const std::filesystem::path bus_path = runtime_path / "bus";
+    if (std::filesystem::exists(bus_path)) {
+      setDefault("DBUS_SESSION_BUS_ADDRESS", "unix:path=" + bus_path.string());
+    }
+  }
+
+  const char * current_authority = std::getenv("XAUTHORITY");
+  if (current_authority == nullptr || current_authority[0] == '\0') {
+    const char * home = std::getenv("HOME");
+    if (home != nullptr) {
+      const std::filesystem::path authority = std::filesystem::path(home) / ".Xauthority";
+      if (std::filesystem::is_regular_file(authority)) {
+        setDefault("XAUTHORITY", authority.string());
+      }
+    }
+  }
+}
+
+/** @brief 在混合显卡笔记本上让 GLFW/OpenGL 创建 NVIDIA 上下文。 */
+void configureGpuRendering(const char * render_gpu)
+{
+  if (std::strcmp(render_gpu, "auto") == 0) {
+    // 清理旧 shell 遗留的 PRIME 变量，让 GLX 按当前桌面默认设备选择。
+    ::unsetenv("__NV_PRIME_RENDER_OFFLOAD");
+    ::unsetenv("__GLX_VENDOR_LIBRARY_NAME");
+    ::unsetenv("__VK_LAYER_NV_optimus");
+    return;
+  }
+  // 这些变量必须在 GlfwAdapter 创建 OpenGL 上下文之前设置。第三个参数为 1，
+  // 确保 launch 的默认 nvidia 策略不会被桌面会话中的旧变量意外覆盖。
+  if (setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 1) != 0 ||
+    setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 1) != 0 ||
+    setenv("__VK_LAYER_NV_optimus", "NVIDIA_only", 1) != 0)
+  {
+    throw std::runtime_error("failed to configure NVIDIA PRIME render offload");
+  }
+}
+}
+
+/// 程序入口：解析参数、配置桌面/GPU 环境、初始化 ROS 2 并运行仿真。
+int main(int argc, char ** argv)
+{
+  if (argc == 2 && std::strcmp(argv[1], "--help") == 0) {
+    std::printf(
+      "Usage: sim_main [--hardware-sim] [--render-gpu auto|nvidia]\n"
+      "  --algorithm-config DIR           OpenDog config/opendog directory\n"
+      "Hardware simulation (all actual hardware algorithms, simulated devices):\n"
+      "  --calibration FILE              same calibration format as hardware_main\n"
+      "  --torque-limit NM               same default as hardware_main: 88\n"
+      "  --sim-command-delay-ms MS       default 1\n"
+      "  --sim-feedback-delay-ms MS      default 1\n"
+      "  --sim-imu-period-ms MS          default 2\n"
+      "  --sim-imu-delay-ms MS           default 2\n"
+      "  --sim-motor-time-constant-ms MS default 4\n"
+      "  --sim-weak-joint INDEX          joint 0..11 in FR,FL,RR,RL order\n"
+      "  --sim-output-scale SCALE       remaining motor output, 0..1\n"
+      "  --sim-impairment-after-s S      seconds after first enable\n"
+      "  --sim-drop-every N             fail every Nth MIT write; 0 disables\n"
+      "Device timing/response defaults are unmeasured stress assumptions.\n");
+    return 0;
+  }
+  try {
+    const RobotSelection robot = selectRobot(argc, argv);
+    // 仿真参数已由 selectRobot() 解析，初始化 ROS 时不再把自定义参数交给 rclcpp。
+    rclcpp::init(0, nullptr);
+    configureDesktopSession();
+    configureGpuRendering(robot.render_gpu);
+    SimulationBridge bridge(robot.scene_path);
+    bridge.setAlgorithmConfigDirectory(robot.algorithm_config_directory);
+    bridge.setHardwareSimulation(robot.hardware_simulation);
+    const int result = bridge.run();
+    rclcpp::shutdown();
+    return result;
+  } catch (const std::exception & error) {
+    std::fprintf(stderr, "simulation failed: %s\n", error.what());
+    return 1;
+  }
+}

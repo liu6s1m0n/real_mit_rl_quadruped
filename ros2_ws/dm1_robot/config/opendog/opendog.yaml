@@ -1,0 +1,8 @@
+# OpenDog algorithm configuration: the URDF and OCS2 info files loaded by
+# OpenDogAlgorithm. Mechanical geometry, joint zero, directions and limits
+# match the DM1 MJCF (checked by test/model/opendog_model_contract_test.py).
+opendog:
+  urdf_file: "dm1_opendog.urdf"
+  task_file: "opendog_task.info"
+  reference_file: "opendog_reference.info"
+  gait_file: "opendog_gait.info"
