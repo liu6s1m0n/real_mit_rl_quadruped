@@ -14,9 +14,9 @@
 Dm1HardwareDriver::Dm1HardwareDriver(
   std::string can0, std::string can1, std::string imu_device,
   const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration,
-  DmMotorDriver::CanTransport * transport)
+  DmMotorDriver::CanTransport * transport, ImuType imu_type)
 : can0_(std::move(can0)), can1_(std::move(can1)), imu_device_(std::move(imu_device)),
-  imu_reader_(imu_device_, 921600), motor_driver_(can0_, can1_, calibration, transport)
+  imu_type_(imu_type), imu_reader_(imu_device_, 921600, imu_type_), motor_driver_(can0_, can1_, calibration, transport)
 {
 }
 
@@ -73,8 +73,8 @@ bool Dm1HardwareDriver::open()
   }
   imu_log::print(
     imu_log::Level::Info,
-    "Reading DM IMU from '%s' at 921600 baud; CAN buses '%s'/'%s' stay disabled until unlocked with Shift+U.\n",
-    imu_device_.c_str(), can0_.c_str(), can1_.c_str());
+    "Reading %s IMU from '%s' at 921600 baud; CAN buses '%s'/'%s' stay disabled until unlocked with Shift+U.\n",
+    imuTypeName(imu_type_), imu_device_.c_str(), can0_.c_str(), can1_.c_str());
   return true;
 }
 

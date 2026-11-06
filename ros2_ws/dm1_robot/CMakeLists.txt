@@ -109,6 +109,7 @@ endif()
 add_library(dm1_robot_sensor
   src/sensor/imu.cpp
   src/sensor/imu_driver.cpp
+  src/sensor/hfi_imu_driver.cpp
   src/sensor/leg.cpp
   third_party/dm_imu/src/bsp_crc.cpp
 )

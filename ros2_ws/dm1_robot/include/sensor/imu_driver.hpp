@@ -1,5 +1,5 @@
 /*! @file imu_driver.hpp
- *  @brief DM IMU 的后台串口接收驱动。
+ *  @brief IMU 原始样本、串口接收接口，以及 DM IMU 的后台串口接收驱动。
  */
 
 #ifndef DM1_ROBOT_SENSOR_IMU_DRIVER_HPP_
@@ -23,13 +23,42 @@ struct DmImuRawSample
   std::uint64_t sequence = 0;                            ///< 接收序号，从 1 开始递增。
 };
 
+/// 各型号 IMU 共用的原始样本；HFI 驱动也按上面的单位和坐标语义输出。
+using ImuRawSample = DmImuRawSample;
+
+/**
+ * @brief IMU 串口接收驱动的公共接口；HardwareImu 只通过它读取原始样本。
+ *
+ * 实现：ImuDriver（DM IMU）、HfiImuDriver（HandsFree HFI-A9）。
+ */
+class ImuReceiver
+{
+public:
+  virtual ~ImuReceiver() = default;
+
+  /** @brief 打开串口并启动接收线程。 */
+  virtual bool start() = 0;
+
+  /** @brief 停止接收线程并关闭串口。 */
+  virtual void stop() noexcept = 0;
+
+  /**
+   * @brief 复制最近有效样本。
+   * @param sample 输出原始数据。
+   * @param maximum_age 最大允许数据年龄。
+   */
+  virtual bool latest(
+    ImuRawSample & sample,
+    std::chrono::milliseconds maximum_age = std::chrono::milliseconds(50)) const = 0;
+};
+
 /**
  * @brief 只接收 DM IMU 数据的后台串口驱动。
  *
  * start() 成功后由内部线程独占串口，调用 latest() 只复制最近一次有效帧，
  * 不会向设备发送配置命令，也不会让控制线程等待串口数据。
  */
-class ImuDriver final
+class ImuDriver final : public ImuReceiver
 {
 public:
   static constexpr std::size_t kFrameSize = 57;        ///< 一帧 DM IMU 数据的字节数。
@@ -38,16 +67,16 @@ public:
   /// @param serial_device 串口设备路径；@param baudrate 串口波特率。
   ImuDriver(std::string serial_device, int baudrate);
   /// 析构时停止接收线程。
-  ~ImuDriver();
+  ~ImuDriver() override;
 
   ImuDriver(const ImuDriver &) = delete;
   ImuDriver & operator=(const ImuDriver &) = delete;
 
   /** @brief 打开串口并启动接收线程。 */
-  bool start();
+  bool start() override;
 
   /** @brief 停止接收线程并关闭串口。 */
-  void stop() noexcept;
+  void stop() noexcept override;
 
   /**
    * @brief 复制最近有效帧。
@@ -56,7 +85,7 @@ public:
    */
   bool latest(
     DmImuRawSample & sample,
-    std::chrono::milliseconds maximum_age = std::chrono::milliseconds(50)) const;
+    std::chrono::milliseconds maximum_age = std::chrono::milliseconds(50)) const override;
 
   /** @brief 校验并解码一个完整的 57 字节 DM IMU 帧。 */
   static bool decodeFrame(const Frame & frame, DmImuRawSample & sample) noexcept;

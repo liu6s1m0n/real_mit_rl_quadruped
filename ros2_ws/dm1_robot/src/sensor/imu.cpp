@@ -1,8 +1,8 @@
 /*! @file imu.cpp
  *  @brief IMU 数据源实现。
  *
- *  真实硬件路径在本文件内直接完成串口接收、DM 协议校验和数据转换；
- *  不再依赖独立的 ROS IMU 接收节点。
+ *  真实硬件路径按型号创建串口接收驱动（DM / HFI-A9），本文件完成两者共用的
+ *  启动基准、安装偏差补偿和数据转换；不再依赖独立的 ROS IMU 接收节点。
  */
 
 #include "sensor/imu.hpp"
@@ -17,6 +17,7 @@
 #include <thread>
 #include <utility>
 
+#include "sensor/hfi_imu_driver.hpp"
 #include "sensor/imu_driver.hpp"
 #include "common/console_log.hpp"
 
@@ -49,6 +50,13 @@ Eigen::Quaternionf rpyDegreesToQuaternion(const Vec3<float> & rpy_degrees)
 constexpr float kDefaultImuMountRollDeg = -1.32F;
 constexpr float kDefaultImuMountPitchDeg = 1.84F;
 constexpr float kDefaultImuMountYawDeg = 0.0F;
+// HFI-A9 安装偏差默认值。来源：2026-11-06 同一位置 0° / 180° 两次静止站立
+// （dm1_diag_imucal_20261106），用 scripts/imu_mount_calibration.py 把 IMU 竖直方向
+// 对齐四足足端平面法向，两次平均消去地面坡度（两次差 ±0.2~0.3°）。
+// 轴向已用倾斜测试确认与机体 FLU 对齐，yaw 无法由重力观测，保持 0。
+constexpr float kDefaultHfiMountRollDeg = 0.97F;
+constexpr float kDefaultHfiMountPitchDeg = -0.07F;
+constexpr float kDefaultHfiMountYawDeg = 0.0F;
 constexpr float kMaximumImuMountDeg = 10.0F;
 // 下游估计器使用的标准重力；加速度计输出统一归一化到这个模长。
 constexpr float kNominalGravity = 9.81F;
@@ -57,7 +65,7 @@ constexpr float kMinimumAccelerationScale = 0.90F;
 constexpr float kMaximumAccelerationScale = 1.10F;
 
 /// 读取安装角环境变量；未设置、无法解析或超过 ±10° 时使用默认值。
-float mountAngleFromEnvironment(const char * name, float default_value)
+float mountAngleFromEnvironment(const char * tag, const char * name, float default_value)
 {
   const char * text = std::getenv(name);
   if (text == nullptr || *text == '\0') {return default_value;}
@@ -66,8 +74,8 @@ float mountAngleFromEnvironment(const char * name, float default_value)
   if (end == text || !std::isfinite(value) || std::fabs(value) > kMaximumImuMountDeg) {
     imu_log::print(
       imu_log::Level::Warning,
-      "[DM IMU] 忽略无效的 %s='%s'（需为 |值|<=%.0f 的度数），使用默认 %.3f°。\n",
-      name, text, static_cast<double>(kMaximumImuMountDeg),
+      "%s 忽略无效的 %s='%s'（需为 |值|<=%.0f 的度数），使用默认 %.3f°。\n",
+      tag, name, text, static_cast<double>(kMaximumImuMountDeg),
       static_cast<double>(default_value));
     return default_value;
   }
@@ -145,22 +153,32 @@ int SimImu::requireSensor(
 
 // ---------- 真实硬件 IMU 数据源 ----------
 
-// 构造时只读取安装偏差，不打开串口。
-HardwareImu::HardwareImu(std::string serial_device, int baudrate)
-: serial_device_(std::move(serial_device)), baudrate_(baudrate)
+// 构造时只读取安装偏差并创建对应型号的接收驱动，不打开串口。
+HardwareImu::HardwareImu(std::string serial_device, int baudrate, ImuType type)
+: serial_device_(std::move(serial_device)), baudrate_(baudrate), type_(type),
+  log_tag_(std::string("[") + imuTypeName(type) + " IMU]")
 {
+  const bool hfi = type_ == ImuType::Hfi;
+  const char * tag = log_tag_.c_str();
   mount_rpy_degrees_ = Vec3<float>(
-    mountAngleFromEnvironment("DM1_IMU_MOUNT_ROLL_DEG", kDefaultImuMountRollDeg),
-    mountAngleFromEnvironment("DM1_IMU_MOUNT_PITCH_DEG", kDefaultImuMountPitchDeg),
-    mountAngleFromEnvironment("DM1_IMU_MOUNT_YAW_DEG", kDefaultImuMountYawDeg));
+    mountAngleFromEnvironment(
+      tag, "DM1_IMU_MOUNT_ROLL_DEG", hfi ? kDefaultHfiMountRollDeg : kDefaultImuMountRollDeg),
+    mountAngleFromEnvironment(
+      tag, "DM1_IMU_MOUNT_PITCH_DEG", hfi ? kDefaultHfiMountPitchDeg : kDefaultImuMountPitchDeg),
+    mountAngleFromEnvironment(
+      tag, "DM1_IMU_MOUNT_YAW_DEG", hfi ? kDefaultHfiMountYawDeg : kDefaultImuMountYawDeg));
   mount_body_from_sensor_ = rpyDegreesToQuaternion(mount_rpy_degrees_);
   imu_log::print(
     imu_log::Level::Info,
-    "[DM IMU] 安装偏差补偿 mount_rpy_deg=(%.3f, %.3f, %.3f)（传感器相对机体）\n",
+    "%s 安装偏差补偿 mount_rpy_deg=(%.3f, %.3f, %.3f)（传感器相对机体）\n", tag,
     static_cast<double>(mount_rpy_degrees_.x()),
     static_cast<double>(mount_rpy_degrees_.y()),
     static_cast<double>(mount_rpy_degrees_.z()));
-  driver_ = std::make_unique<ImuDriver>(serial_device_, baudrate_);
+  if (hfi) {
+    driver_ = std::make_unique<HfiImuDriver>(serial_device_, baudrate_);
+  } else {
+    driver_ = std::make_unique<ImuDriver>(serial_device_, baudrate_);
+  }
 }
 
 HardwareImu::~HardwareImu()
@@ -240,7 +258,7 @@ bool HardwareImu::calibrateStartupBaseline()
 
   imu_log::print(
     imu_log::Level::Warning,
-    "[DM IMU] collecting startup baseline; keep robot motionless...\n");
+    "%s collecting startup baseline; keep robot motionless...\n", log_tag_.c_str());
   const auto deadline = std::chrono::steady_clock::now() + kCalibrationTimeout;
   Vec3<float> acceleration_sum = Vec3<float>::Zero();
   Vec3<float> acceleration_square_sum = Vec3<float>::Zero();
@@ -286,9 +304,9 @@ bool HardwareImu::calibrateStartupBaseline()
   if (sample_count < kMinimumSamples) {
     imu_log::print(
       imu_log::Level::Error,
-      "[DM IMU] startup baseline rejected: only %zu stable samples; "
+      "%s startup baseline rejected: only %zu stable samples; "
       "keep the robot still while IMU data is streaming.\n",
-      sample_count);
+      log_tag_.c_str(), sample_count);
     return false;
   }
 
@@ -301,9 +319,9 @@ bool HardwareImu::calibrateStartupBaseline()
   if (!std::isfinite(maximum_std_dev) || maximum_std_dev > kMaximumAccelerationStdDev) {
     imu_log::print(
       imu_log::Level::Error,
-      "[DM IMU] startup baseline rejected: robot moved or acceleration is "
+      "%s startup baseline rejected: robot moved or acceleration is "
       "unstable (max std=%.3f m/s^2).\n",
-      maximum_std_dev);
+      log_tag_.c_str(), maximum_std_dev);
     return false;
   }
 
@@ -316,9 +334,22 @@ bool HardwareImu::calibrateStartupBaseline()
   if (!std::isfinite(gravity_magnitude) || gravity_magnitude < kMinimumGravity) {
     imu_log::print(
       imu_log::Level::Error,
-      "[DM IMU] startup baseline rejected: invalid gravity reference.\n");
+      "%s startup baseline rejected: invalid gravity reference.\n", log_tag_.c_str());
     return false;
   }
+
+  // 姿态与加速度计一致性检查（只告警）：静止时 R_ws^T * z 应与实测比力同向。
+  // 机身倾斜时可暴露欧拉角符号约定错误（例如 HFI 的 pitch 取反方向不对）。
+  const Vec3<float> predicted_up_sensor =
+    rpyDegreesToQuaternion(average_rpy_degrees).conjugate() * Vec3<float>::UnitZ();
+  const float tilt_mismatch_degrees = std::acos(std::clamp(
+      predicted_up_sensor.dot(average_acceleration / gravity_magnitude), -1.0F, 1.0F)) *
+    kRadiansToDegrees;
+  imu_log::print(
+    tilt_mismatch_degrees > 3.0F ? imu_log::Level::Warning : imu_log::Level::Info,
+    "%s 姿态/重力一致性：欧拉角推算的重力方向与加速度计相差 %.2f°%s\n",
+    log_tag_.c_str(), static_cast<double>(tilt_mismatch_degrees),
+    tilt_mismatch_degrees > 3.0F ? "（>3°，检查欧拉角符号约定或 IMU 是否在动）" : "");
 
   // 基准重力和启动姿态都转换到机体系，与 readAt() 的输出保持同一坐标语义。
   startup_gravity_body_ = mount_body_from_sensor_ * average_acceleration;
@@ -334,8 +365,8 @@ bool HardwareImu::calibrateStartupBaseline()
     acceleration_scale_ = 1.0F;
     imu_log::print(
       imu_log::Level::Warning,
-      "[DM IMU] 启动 |g|=%.3f m/s^2 超出合理范围，跳过加速度归一化（系数保持 1.0）。\n",
-      static_cast<double>(gravity_magnitude));
+      "%s 启动 |g|=%.3f m/s^2 超出合理范围，跳过加速度归一化（系数保持 1.0）。\n",
+      log_tag_.c_str(), static_cast<double>(gravity_magnitude));
   }
   startup_rpy_degrees_ = average_rpy_degrees;
   // 加速度仍然是设备世界系中的重力向量，不能把启动 roll/pitch 一起减掉；
@@ -350,10 +381,10 @@ bool HardwareImu::calibrateStartupBaseline()
   startup_baseline_valid_ = true;
   imu_log::print(
     imu_log::Level::Info,
-    "[DM IMU] startup baseline accepted: gravity_body=(%.3f, %.3f, %.3f) "
+    "%s startup baseline accepted: gravity_body=(%.3f, %.3f, %.3f) "
     "|g|=%.3f m/s^2 rpy0_deg=(%.3f, %.3f, %.3f) from %zu samples; "
     "acc_scale=%.4f\n",
-    startup_gravity_body_.x(), startup_gravity_body_.y(), startup_gravity_body_.z(),
+    log_tag_.c_str(), startup_gravity_body_.x(), startup_gravity_body_.y(), startup_gravity_body_.z(),
     startup_gravity_magnitude_, startup_rpy_degrees_.x(), startup_rpy_degrees_.y(),
     startup_rpy_degrees_.z(), sample_count, static_cast<double>(acceleration_scale_));
   return true;
@@ -381,7 +412,7 @@ bool HardwareImu::readAt(ImuData<float> & sample, float timestamp)
       imu_log::print(
         imu_log::Level::Warning,
         "DM1 IMU 不可用：没有新鲜帧（>50 ms 或接收线程已停止）；"
-        "看上方 [DM IMU] status=NO_DATA / INVALID_FRAME 提示。\n");
+        "看上方 %s status=NO_DATA / INVALID_FRAME 提示。\n", log_tag_.c_str());
     }
     return false;
   }

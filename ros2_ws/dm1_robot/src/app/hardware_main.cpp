@@ -68,6 +68,8 @@ struct Arguments
   std::string can1 = "can1";  ///< 后腿 SocketCAN 总线名称。
   /// IMU 串口路径；默认使用自动检测。
   std::string imu_device = "auto";
+  /// IMU 型号：hfi（HandsFree HFI-A9，默认）或 dm（原 DM IMU）。
+  ImuType imu_type = ImuType::Hfi;
   /// 控制周期，单位 s。
   float control_time_step = float(control_config::control_time_step);
   /// 关节力矩饱和上限；默认 88 Nm（电机峰值 97 Nm）。超限关节按比例缩小后
@@ -88,7 +90,7 @@ struct Arguments
   throw std::invalid_argument(
           message +
           "\n用法: hardware_main --calibration FILE [--can0 can0] [--can1 can1] "
-          "[--imu auto|DEVICE] [--control-dt 0.002] "
+          "[--imu auto|DEVICE] [--imu-type hfi|dm] [--control-dt 0.002] "
           "[--torque-limit 88]（0~97 Nm，关节力矩饱和上限） "
           "[--algorithm-config DIR] "
           "[--keyboard-control | --set-zero] "
@@ -96,23 +98,28 @@ struct Arguments
           "[--poll-feedback BUS CAN_ID]");
 }
 
-/// 解析 IMU 串口路径；"auto" 时在 /dev/serial/by-id 中查找唯一的 DM-IMU 设备。
-std::string resolveImuDevice(const std::string & requested)
+/// 解析 IMU 串口路径；"auto" 时在 /dev/serial/by-id 中查找唯一的对应型号设备。
+/// DM 匹配 "DM-IMU"；HFI 匹配 "HandsFree"，找不到时回退到厂商 udev 规则建立的
+/// /dev/HFRobotIMU。
+std::string resolveImuDevice(const std::string & requested, ImuType type)
 {
   // 用户明确给出设备路径时，直接使用该路径，不做自动选择。
   if (requested != "auto") {return requested;}
+  const bool hfi = type == ImuType::Hfi;
+  const char * pattern = hfi ? "HandsFree" : "DM-IMU";
+  const std::string label = std::string(imuTypeName(type)) + " IMU";
 
   // /dev/serial/by-id 下的名称通常比 /dev/ttyUSB0 更稳定，适合自动识别。
   const std::filesystem::path by_id_directory("/dev/serial/by-id");
   std::error_code error;
   std::vector<std::string> candidates;
 
-  // 查找名称中包含 DM-IMU 的串口设备。
+  // 查找名称中包含型号关键字的串口设备。
   for (std::filesystem::directory_iterator iterator(by_id_directory, error), end;
     !error && iterator != end; iterator.increment(error))
   {
     const std::string name = iterator->path().filename().string();
-    if (name.find("DM-IMU") != std::string::npos) {// 匹配 DM-IMU 串口设备。
+    if (name.find(pattern) != std::string::npos) {
       candidates.push_back(iterator->path().string());
     }
   }
@@ -122,18 +129,26 @@ std::string resolveImuDevice(const std::string & requested)
   // 自动模式要求恰好找到一个设备，避免误选多个 IMU 中的某一个。
   if (candidates.size() == 1) {
     imu_log::print(
-      imu_log::Level::Info, "[DM IMU] 已自动选择串口设备: %s\n",
-      candidates.front().c_str());
+      imu_log::Level::Info, "[%s] 已自动选择串口设备: %s\n",
+      label.c_str(), candidates.front().c_str());
     return candidates.front();
   }
   if (candidates.empty()) {
+    const std::filesystem::path udev_link("/dev/HFRobotIMU");
+    if (hfi && std::filesystem::exists(udev_link, error)) {
+      imu_log::print(
+        imu_log::Level::Info, "[%s] 已自动选择串口设备: %s\n",
+        label.c_str(), udev_link.c_str());
+      return udev_link.string();
+    }
     // 目录不存在、没有匹配设备等情况都会走到这里。
     throw std::runtime_error(
-            "无法在 /dev/serial/by-id 下自动检测到 DM IMU；请使用 --imu DEVICE");
+            "无法在 /dev/serial/by-id 下自动检测到 " + label +
+            (hfi ? "（也没有 /dev/HFRobotIMU）" : "") + "；请使用 --imu DEVICE");
   }
-  // 找到多个 DM IMU 时必须由用户通过 --imu 明确指定。
+  // 找到多个同型号 IMU 时必须由用户通过 --imu 明确指定。
   throw std::runtime_error(
-          "检测到多个 DM IMU 设备；请使用 --imu DEVICE 明确指定");
+          "检测到多个 " + label + " 设备；请使用 --imu DEVICE 明确指定");
 }
 
 /// 解析并校验命令行参数；非法参数或互斥模式组合会抛出异常。
@@ -162,6 +177,16 @@ Arguments parseArguments(int argc, char ** argv)
       // IMU 设备路径或 auto。
     } else if (argument == "--imu") {
       result.imu_device = requireValue("--imu");
+      // IMU 型号；原 DM IMU 保留为可选项。
+    } else if (argument == "--imu-type") {
+      const std::string type = requireValue("--imu-type");
+      if (type == "hfi") {
+        result.imu_type = ImuType::Hfi;
+      } else if (type == "dm") {
+        result.imu_type = ImuType::Dm;
+      } else {
+        usageError("--imu-type 只接受 hfi 或 dm");
+      }
       // 控制周期，使用 stof 将命令行字符串转换为 float。
     } else if (argument == "--control-dt") {
       result.control_time_step = std::stof(requireValue("--control-dt"));
@@ -380,10 +405,10 @@ int runMotorOnly(
 }
 
 /// imu-only 诊断：只打开 IMU 串口，周期打印解算后的 IMU 数据。
-int runImuOnly(const std::string & device, float control_time_step)
+int runImuOnly(const std::string & device, ImuType type, float control_time_step)
 {
   // IMU-only 模式完全绕过电机驱动和控制器，只验证 IMU 串口接收链路。
-  HardwareImu imu(device, 921600);
+  HardwareImu imu(device, 921600, type);
   if (!imu.open()) {
     throw std::runtime_error("无法打开 IMU 串口: " + device);
   }
@@ -412,13 +437,18 @@ int runImuOnly(const std::string & device, float control_time_step)
     const auto now = std::chrono::steady_clock::now();
     if (valid && now >= next_print && sample.sequence != last_printed_sequence) {
       // 以 ZYX 顺序从当前姿态四元数恢复 roll/pitch/yaw，并转换为角度输出。
-      const auto yaw_pitch_roll =
-        sample.orientation_world_from_body.toRotationMatrix().eulerAngles(2, 1, 0);
+      // 不用 Eigen eulerAngles()：它把 yaw 限制在 [0, π]，yaw 略小于 0 时会翻成
+      // (180, -180, 180) 这类等价解，诊断输出难以阅读。
+      const Eigen::Matrix3f rotation = sample.orientation_world_from_body.toRotationMatrix();
+      const Vec3<float> yaw_pitch_roll(
+        std::atan2(rotation(1, 0), rotation(0, 0)),
+        std::asin(std::clamp(-rotation(2, 0), -1.0F, 1.0F)),
+        std::atan2(rotation(2, 1), rotation(2, 2)));
       imu_log::print(
         imu_log::Level::Info,
-        "[DM IMU] seq=%llu t=%.3f acc=(%.3f, %.3f, %.3f) "
+        "[%s IMU] seq=%llu t=%.3f acc=(%.3f, %.3f, %.3f) "
         "gyro=(%.3f, %.3f, %.3f) rpy_deg=(%.3f, %.3f, %.3f)\n",
-        static_cast<unsigned long long>(sample.sequence), sample.timestamp,
+        imuTypeName(type), static_cast<unsigned long long>(sample.sequence), sample.timestamp,
         sample.acceleration_body.x(), sample.acceleration_body.y(),
         sample.acceleration_body.z(), sample.angular_velocity_body.x(),
         sample.angular_velocity_body.y(), sample.angular_velocity_body.z(),
@@ -452,7 +482,9 @@ int main(int argc, char ** argv)
 
     if (arguments.imu_only) {
       // IMU-only 不需要标定文件，并且直接返回，不进入完整硬件路径。
-      return runImuOnly(resolveImuDevice(arguments.imu_device), arguments.control_time_step);
+      return runImuOnly(
+        resolveImuDevice(arguments.imu_device, arguments.imu_type), arguments.imu_type,
+        arguments.control_time_step);
     }
 
     // motor-only 和完整模式都需要先加载 12 电机标定。
@@ -470,7 +502,9 @@ int main(int argc, char ** argv)
 
     // 完整模式的底层硬件适配器，统一管理两条 CAN 总线和一个 IMU 串口。
     Dm1HardwareDriver driver(
-      arguments.can0, arguments.can1, resolveImuDevice(arguments.imu_device), calibration);
+      arguments.can0, arguments.can1,
+      resolveImuDevice(arguments.imu_device, arguments.imu_type), calibration,
+      nullptr, arguments.imu_type);
     HardwareBridge::Options options;
     // 将命令行参数转换成控制桥使用的运行配置。
     options.control_time_step = arguments.control_time_step;

@@ -11,7 +11,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "port",
             default_value="auto",
-            description="DM IMU serial device path, or auto to use /dev/serial/by-id",
+            description="IMU serial device path, or auto to use /dev/serial/by-id",
+        ),
+        DeclareLaunchArgument(
+            "imu_type",
+            default_value="hfi",
+            description="IMU model: hfi (HandsFree HFI-A9) or dm (DM IMU)",
         ),
         ExecuteProcess(
             cmd=[
@@ -22,6 +27,8 @@ def generate_launch_description():
                 "--imu-only",
                 "--imu",
                 LaunchConfiguration("port"),
+                "--imu-type",
+                LaunchConfiguration("imu_type"),
             ],
             output="screen",
         ),

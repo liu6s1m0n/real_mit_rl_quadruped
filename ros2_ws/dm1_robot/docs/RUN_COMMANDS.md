@@ -266,7 +266,38 @@ MuJoCo Reset 后会重新上锁；上锁时仍执行 `mj_step()`，机器人会�
 
 ## 3. 单独启动 IMU
 
-### 自动选择 DM IMU 串口
+### IMU 型号选择
+
+`--imu-type` 选择 IMU 型号，所有硬件模式（`--imu-only`、只读完整模式、键盘控制、
+`--set-zero`）都适用：
+
+| 取值 | 型号 | 协议 | `--imu auto` 的查找方式 |
+|------|------|------|-------------------------|
+| `hfi`（默认） | HandsFree HFI-A9 | `AA 55` + 0x2C 惯性帧 / 0x14 欧拉角帧，CRC16/MODBUS，921600 | `/dev/serial/by-id/*HandsFree*`，其次 `/dev/HFRobotIMU` |
+| `dm` | 原 DM IMU | 57 字节三记录帧，921600 | `/dev/serial/by-id/*DM-IMU*` |
+
+两种型号共用同一套启动静止标定、安装偏差补偿（`DM1_IMU_MOUNT_*_DEG`）和加速度
+归一化。DM 默认安装偏差为 roll −1.32°、pitch 1.84°；HFI 为 roll 0.97°、pitch −0.07°
+（2026-11-06 标定）。
+
+重新标定 HFI 安装偏差：同一位置按 `1` 静止站立 10 s 以上，原地转 180° 再站一次，然后
+
+```bash
+python3 dm1_robot/scripts/imu_mount_calibration.py --current-mount 0.97,-0.07 \
+  "$DM1_LOG_DIR"/dm1_march_*.csv
+```
+
+`--current-mount` 填采集时生效的安装角，脚本输出新的建议值。
+MuJoCo 硬件仿真注入的仍是 DM 帧，不受此选项影响。
+
+HFI 的 `/dev/HFRobotIMU` 链接需要安装厂商 udev 规则（只需一次）：
+
+```bash
+sudo cp /home/simon/real_mitrl_dog/ros2_ws/dm1_robot/config/udev/99-handsfree-imu.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+```
+
+### 自动选择 IMU 串口
 
 ```bash
 cd /home/simon/real_mitrl_dog/ros2_ws
@@ -274,7 +305,9 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 
 ros2 run dm1_robot hardware_main \
-  --imu-only
+  --imu-only                    # HFI-A9（默认）
+ros2 run dm1_robot hardware_main \
+  --imu-only --imu-type dm      # 原 DM IMU
 ```
 
 `--imu-only` 不需要标定文件，不打开 CAN，也不会发送任何电机命令。
@@ -302,7 +335,12 @@ ros2 launch dm1_robot dm1_imu.launch.py \
   port:=/dev/serial/by-id/你的-IMU-设备
 ```
 
+使用原 DM IMU：`ros2 launch dm1_robot dm1_imu.launch.py imu_type:=dm`。
+
 启动时应保持 IMU 和机器人静止，等待出现 `startup baseline accepted`。
+标定时还会打印“姿态/重力一致性”：欧拉角推算的重力方向与加速度计的夹角，超过 3°
+会告警。首次使用 HFI 时，把机身向左侧和机头方向各倾斜约 10° 后分别启动一次 IMU-only，
+确认该夹角都很小，就说明欧拉角符号约定与加速度计一致。
 
 ## 4. 单独监听 DM 电机反馈
 
@@ -409,7 +447,7 @@ tar -czf "${DM1_LOG_DIR}.tar.gz" -C "$(dirname "$DM1_LOG_DIR")" "$(basename "$DM
 
 ```bash
 ros2 run dm1_robot hardware_main --imu-only \
-  --imu /dev/serial/by-id/你的-DM-IMU-设备 2>&1 | tee "$DM1_LOG_DIR/imu_only.log"
+  --imu /dev/serial/by-id/你的-IMU-设备 2>&1 | tee "$DM1_LOG_DIR/imu_only.log"
 ```
 
 实机推荐顺序：先用 `--motor-only --poll-feedback` 确认反馈，再用只读完整模式确认 IMU

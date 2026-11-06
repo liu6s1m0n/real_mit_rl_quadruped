@@ -25,7 +25,9 @@ target_link_libraries(test_dm_motor_driver
 ament_add_gtest(
   test_imu_driver
   hardware/imu_driver_test.cpp
+  hardware/hfi_imu_driver_test.cpp
   ${PROJECT_SOURCE_DIR}/src/sensor/imu_driver.cpp
+  ${PROJECT_SOURCE_DIR}/src/sensor/hfi_imu_driver.cpp
   ${PROJECT_SOURCE_DIR}/third_party/dm_imu/src/bsp_crc.cpp)
 target_include_directories(test_imu_driver PRIVATE
   ${PROJECT_SOURCE_DIR}/include

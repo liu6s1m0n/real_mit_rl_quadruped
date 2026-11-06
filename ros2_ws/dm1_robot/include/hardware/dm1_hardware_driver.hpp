@@ -21,15 +21,16 @@ class Dm1HardwareDriver final : public dm1_hardware::Dm1HardwareIo
 {
 public:
   /// transport 为 nullptr 时使用 SocketCAN；仿真时传入替代的 CAN 传输层。
+  /// imu_type 选择 IMU 型号；仿真注入的是 DM 帧，因此默认 DM。
   Dm1HardwareDriver(
     std::string can0, std::string can1, std::string imu_device,
     const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration,
-    DmMotorDriver::CanTransport * transport = nullptr);
+    DmMotorDriver::CanTransport * transport = nullptr, ImuType imu_type = ImuType::Dm);
 
   bool open() override;  ///< 打开两条 CAN 和 IMU 串口。
   bool read(dm1_hardware::HardwareSample & sample, double now_s) override;  ///< 读取 IMU 和电机反馈。
   bool pollMotors() override;  ///< 发送零增益帧刷新电机反馈。
-  /** @brief 读取一帧 DM IMU 数据并转换为控制层格式。 */
+  /** @brief 读取一帧 IMU 数据并转换为控制层格式。 */
   bool readImu(ImuData<float> & sample, double now_s);
   bool setMotorZero(const dm1_hardware::MotorAddress & address) override;  ///< 写入电机零位。
   bool sendMit(const dm1_hardware::MitFrame & frame) override;  ///< 发送一帧 MIT 命令。
@@ -41,6 +42,7 @@ private:
   std::string can0_;            ///< 前腿 CAN 设备名（can0）。
   std::string can1_;            ///< 后腿 CAN 设备名（can1）。
   std::string imu_device_;      ///< IMU 串口设备路径。
+  ImuType imu_type_;            ///< IMU 型号。
   HardwareImu imu_reader_;      ///< IMU 读取与姿态解算。
   DmMotorDriver motor_driver_;  ///< 电机驱动。
   /// IMU 串口掉线（USB 重新枚举/瞬断）后自动重连用的时间基准，单位 s。

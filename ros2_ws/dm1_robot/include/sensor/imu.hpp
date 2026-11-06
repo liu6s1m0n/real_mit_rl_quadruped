@@ -1,5 +1,5 @@
 /*! @file imu.hpp
- *  @brief IMU 数据源：MuJoCo 仿真传感器与 DM IMU 串口，统一输出 ImuData<float>。
+ *  @brief IMU 数据源：MuJoCo 仿真传感器与 DM / HFI-A9 IMU 串口，统一输出 ImuData<float>。
  */
 
 #ifndef DM1_ROBOT_SENSOR_IMU_HPP_
@@ -12,7 +12,20 @@
 
 #include "common/robot_types.hpp"
 
-class ImuDriver;
+class ImuReceiver;
+
+/// 真实硬件 IMU 型号；决定串口协议和默认安装偏差。
+enum class ImuType
+{
+  Dm,   ///< 达妙 DM IMU（57 字节三记录帧）。
+  Hfi,  ///< HandsFree HFI-A9（AA 55 0x2C/0x14 帧）。
+};
+
+/// 型号的日志名称，例如 "DM"、"HFI"。
+inline const char * imuTypeName(ImuType type)
+{
+  return type == ImuType::Hfi ? "HFI" : "DM";
+}
 
 /**
  * @brief 仿真器 IMU 数据源：从 MuJoCo 仿真数据读取。
@@ -67,15 +80,16 @@ private:
 /**
  * @brief 真实硬件 IMU 数据源。
  *
- * 该类直接打开并读取 IMU 串口，在 imu.cpp 内完成协议校验、数据转换和姿态
- * 四元数计算。设备端必须已经配置为持续输出数据；本类只接收，不向设备发送
- * 配置命令。
+ * 按 ImuType 选择串口接收驱动（ImuDriver / HfiImuDriver）完成协议校验，
+ * 启动基准、安装偏差补偿、加速度归一化和姿态四元数计算两种型号共用。
+ * 设备端必须已经配置为持续输出数据；本类只接收，不向设备发送配置命令。
  */
 class HardwareImu
 {
 public:
-  /// @param serial_device 串口设备路径；@param baudrate 串口波特率。
-  explicit HardwareImu(std::string serial_device, int baudrate = 921600);
+  /// @param serial_device 串口设备路径；@param baudrate 串口波特率；@param type IMU 型号。
+  explicit HardwareImu(
+    std::string serial_device, int baudrate = 921600, ImuType type = ImuType::Dm);
   /// 析构时关闭串口和接收线程。
   ~HardwareImu();
 
@@ -98,7 +112,7 @@ public:
   bool tryRecover();
 
   /**
-   * @brief 从串口接收并转换一帧 DM IMU 数据。
+   * @brief 从串口接收并转换一帧 IMU 数据。
    * @param sample 输出的控制层 IMU 数据。
    * @param timestamp 控制循环使用的单调时间戳，单位秒。
    */
@@ -110,7 +124,9 @@ private:
 
   std::string serial_device_;           ///< 串口设备路径。
   int baudrate_ = 921600;               ///< 串口波特率。
-  std::unique_ptr<ImuDriver> driver_;   ///< 后台串口接收驱动。
+  ImuType type_ = ImuType::Dm;          ///< IMU 型号。
+  std::string log_tag_;                 ///< 日志前缀，例如 "[DM IMU]"。
+  std::unique_ptr<ImuReceiver> driver_; ///< 后台串口接收驱动。
   Vec3<float> startup_gravity_body_ = Vec3<float>::Zero();  ///< 启动静止时机身系下的平均重力，m/s^2。
   Vec3<float> startup_rpy_degrees_ = Vec3<float>::Zero();   ///< 启动静止时的平均 roll/pitch/yaw，度。
   float startup_gravity_magnitude_ = 9.81F;                 ///< 启动静止时测得的重力模长，m/s^2。

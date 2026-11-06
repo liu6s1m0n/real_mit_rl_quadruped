@@ -1,0 +1,3 @@
+# HandsFree HFI-A9 IMU：建立 /dev/HFRobotIMU 固定链接（来自厂商 handsfree_ros_imu/usb_rules）。
+# 安装：sudo cp 99-handsfree-imu.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+KERNEL=="ttyUSB*", ATTRS{interface}=="HandsFree IMU USB to UART Bridge Controller", MODE:="0666", SYMLINK+="HFRobotIMU"
