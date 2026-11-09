@@ -1,6 +1,8 @@
 /*! @file opendog_algorithm.cpp
  *  @brief OpenDogAlgorithm 实现：配置加载、MPC 后台线程和每周期的估计/WBC 计算。
  */
+#include <pinocchio/fwd.hpp>  // pinocchio 要求最先包含
+
 #include "control/opendog_algorithm.hpp"
 
 #include <algorithm>
@@ -22,15 +24,19 @@
 #include <ocs2_centroidal_model/AccessHelperFunctions.h>
 #include <ocs2_centroidal_model/CentroidalModelPinocchioMapping.h>
 #include <ocs2_centroidal_model/CentroidalModelRbdConversions.h>
+#include <ocs2_centroidal_model/ModelHelperFunctions.h>
 #include <ocs2_core/thread_support/ExecuteAndSleep.h>
 #include <ocs2_core/thread_support/SetThreadPriority.h>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_pinocchio_interface/PinocchioEndEffectorKinematics.h>
+#include <pinocchio/algorithm/frames.hpp>
+#include <pinocchio/algorithm/kinematics.hpp>
 #include <ocs2_sqp/SqpMpc.h>
 
 #include <legged_estimation_ros2/LinearKalmanFilter.hpp>
 #include <legged_interface/LeggedInterface.h>
 #include <legged_wbc/WeightedWbc.h>
+#include "control/contact_detector.hpp"
 #include "control/opendog_reference.hpp"
 
 namespace
@@ -124,6 +130,9 @@ struct OpenDogAlgorithm::Impl
   double initial_period;                                   ///< 首帧估计使用的控制周期，s。
   float joint_kp = 4.0F;                                   ///< 关节 kp，可被 task 文件覆盖。
   float joint_kd = 5.0F;                                   ///< 关节 kd，可被 task 文件覆盖。
+  /// 关节库仑摩擦补偿：前馈加 friction_torque·tanh(dq_des / friction_velocity)，0 表示不补偿。
+  float friction_torque = 0.0F;
+  float friction_velocity = 0.1F;                          ///< 补偿的过渡速度，rad/s。
   /// 各腿小腿（KFE）单独的 kp，按 FR/FL/RR/RL 存放，缺省等于 joint_kp。
   std::array<float, kNumLegs> calf_kp{{4.0F, 4.0F, 4.0F, 4.0F}};
   /// OCS2 质心模型观测：state 依次为归一化质心动量(6)、机身位置(3)、
@@ -135,6 +144,22 @@ struct OpenDogAlgorithm::Impl
   bool configured = false;                                 ///< configure() 是否成功。
   /// 本工程腿序 FR/FL/RR/RL 到 OpenDog URDF 腿序 LF/LH/RF/RH 的映射。
   std::array<std::size_t, kNumLegs> opendog_leg_for_current{{2, 0, 3, 1}};
+  /// 本工程腿序 FR/FL/RR/RL 到 OCS2 接触点序 LF/RF/LH/RH 的映射；接触力、接触标志按此索引，
+  /// 与关节腿序不同（11-05 诊断误用关节腿序，FR/RL 的接触列曾互换）。
+  std::array<std::size_t, kNumLegs> contact_for_current{{1, 0, 3, 2}};
+  /// 落地高度自适应：每条腿按自己最近一次稳定支撑的足端高度规划摆腿（按接触点序 LF/RF/LH/RH）。
+  bool adaptive_touch_down = false;
+  double foot_radius = 0.02;                               ///< 足端半径，即平地上足端球心高度，m。
+  std::array<double, kNumLegs> terrain_height{{0.02, 0.02, 0.02, 0.02}};
+  std::array<double, kNumLegs> stance_time{{0.0, 0.0, 0.0, 0.0}};  ///< 各足连续计划支撑的时长，s。
+  std::unique_ptr<ocs2::PinocchioInterface> terrain_pinocchio;     ///< 只在控制线程使用的模型副本。
+  std::unique_ptr<ocs2::PinocchioEndEffectorKinematics> terrain_kinematics;
+  /// 真实触地检测（晚落地处理），按接触点序 LF/RF/LH/RH；mode 见 ContactDetectionSettings。
+  ContactDetector contact_detector;
+  std::array<std::size_t, kNumLegs> foot_frame{};          ///< 各接触点足端在 pinocchio 模型中的 frame id。
+  /// 各接触点足端对本腿三个关节的平移雅可比（世界系方向），由触地检测每周期更新，供下探速度换算。
+  std::array<Eigen::Matrix3d, kNumLegs> leg_jacobian{};
+  std::array<bool, kNumLegs> contact_planned{};            ///< 本周期计划支撑（接触点序）。
   std::uint64_t command_sequence = 0;                      ///< 输出命令序号。
 };
 
@@ -192,6 +217,46 @@ bool OpenDogAlgorithm::configure()
     impl_->legged_interface->getPinocchioInterface(),
     impl_->legged_interface->getCentroidalModelInfo(), *impl_->ee_kinematics);
   impl_->wbc->loadTasksSetting(task, false);
+  // 落地高度自适应（可选，task 文件 swing_trajectory_config.adaptiveTouchDown 为 1 时启用）
+  {
+    boost::property_tree::ptree swing_settings;
+    boost::property_tree::read_info(task, swing_settings);
+    impl_->adaptive_touch_down = swing_settings.get<int>("swing_trajectory_config.adaptiveTouchDown", 0) != 0;
+    impl_->foot_radius = swing_settings.get<double>("kalmanFilter.footRadius", 0.02);
+    impl_->terrain_height.fill(impl_->foot_radius);
+    impl_->terrain_pinocchio = std::make_unique<ocs2::PinocchioInterface>(
+      impl_->legged_interface->getPinocchioInterface());
+    impl_->terrain_kinematics.reset(impl_->ee_kinematics->clone());
+    impl_->terrain_kinematics->setPinocchioInterface(*impl_->terrain_pinocchio);
+    std::printf("[OpenDog][SWING] adaptiveTouchDown=%d footRadius=%.3f\n",
+      impl_->adaptive_touch_down ? 1 : 0, impl_->foot_radius);
+  }
+  // 真实触地检测（可选，task 文件 contactDetection 段；缺省关闭，触地即计划）
+  {
+    boost::property_tree::ptree settings;
+    boost::property_tree::read_info(task, settings);
+    ContactDetectionSettings detection;
+    detection.mode = settings.get<int>("contactDetection.mode", detection.mode);
+    detection.force_threshold = settings.get<double>("contactDetection.forceThreshold", detection.force_threshold);
+    detection.height_threshold = settings.get<double>("contactDetection.heightThreshold", detection.height_threshold);
+    detection.velocity_threshold = settings.get<double>("contactDetection.velocityThreshold", detection.velocity_threshold);
+    detection.confirm_ticks = settings.get<int>("contactDetection.confirmTicks", detection.confirm_ticks);
+    detection.max_delay = settings.get<double>("contactDetection.maxDelay", detection.max_delay);
+    detection.probe_velocity = settings.get<double>("contactDetection.probeVelocity", detection.probe_velocity);
+    // 接触点序 LF/RF/LH/RH，rearOnly 时只检测两条后腿
+    const bool rear_only = settings.get<int>("contactDetection.rearOnly", 0) != 0;
+    detection.enabled = {{!rear_only, !rear_only, true, true}};
+    impl_->contact_detector = ContactDetector(detection);
+    const auto & names = impl_->legged_interface->modelSettings().contactNames3DoF;
+    for (std::size_t contact = 0; contact < kNumLegs; ++contact) {
+      impl_->foot_frame[contact] = impl_->terrain_pinocchio->getModel().getFrameId(names[contact]);
+      impl_->leg_jacobian[contact].setIdentity();
+    }
+    std::printf(
+      "[OpenDog][CONTACT] mode=%d rearOnly=%d force>%.1f N height<%.4f m vz>-%.3f m/s confirm=%d maxDelay=%.3f s probe=%.3f m/s\n",
+      detection.mode, detection.enabled[0] ? 0 : 1, detection.force_threshold, detection.height_threshold, detection.velocity_threshold,
+      detection.confirm_ticks, detection.max_delay, detection.probe_velocity);
+  }
   // 刚体状态与质心模型状态之间的转换
   impl_->rbd_conversions = std::make_shared<ocs2::CentroidalModelRbdConversions>(
     impl_->legged_interface->getPinocchioInterface(),
@@ -221,6 +286,12 @@ bool OpenDogAlgorithm::configure()
   for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
     impl_->calf_kp[leg] = output_settings.get<float>(calf_kp_keys[leg], impl_->joint_kp);
   }
+  impl_->friction_torque = output_settings.get<float>(
+    "hardware_output.frictionCompensation.torque", impl_->friction_torque);
+  impl_->friction_velocity = std::max(1e-3F, output_settings.get<float>(
+    "hardware_output.frictionCompensation.velocity", impl_->friction_velocity));
+  std::printf("[OpenDog][OUTPUT] frictionCompensation torque=%.2f Nm velocity=%.2f rad/s\n",
+    impl_->friction_torque, impl_->friction_velocity);
   // 站立高度和键盘速度档位
   ocs2::loadData::loadCppDataType(reference, "comHeight", impl_->command_settings.standing_height);
   auto & velocity = impl_->command_settings.velocity;
@@ -279,7 +350,56 @@ bool OpenDogAlgorithm::compute(
   const auto mode = impl_->initialized ?
     impl_->mrt->getPolicy().modeSchedule_.modeAtTime(impl_->time) :
     static_cast<std::size_t>(ocs2::legged_robot::ModeNumber::STANCE);
-  impl_->state_estimate->updateContact(ocs2::legged_robot::modeNumber2StanceLeg(mode));
+  // 2a. 真实触地检测：用上一周期的机身估计和本周期关节反馈算足端力、离地高度和竖直速度。
+  // 只在踏步模式下判断；其他模式四脚本来就在地上，直接取计划。
+  impl_->contact_planned = ocs2::legged_robot::modeNumber2StanceLeg(mode);
+  const auto & detection = impl_->contact_detector.settings();
+  const bool locomotion = input.desired.mode == ControlMode::Locomotion;
+  if (detection.mode == 0 || !locomotion || !impl_->initialized ||
+    impl_->measured_rbd_state.size() != static_cast<Eigen::Index>(2 * info.generalizedCoordinatesNum))
+  {
+    impl_->contact_detector.acceptPlanned(impl_->contact_planned);
+  } else {
+    const auto & rbd = impl_->measured_rbd_state;
+    const auto n = static_cast<Eigen::Index>(info.generalizedCoordinatesNum);
+    ocs2::vector_t q(n), v(n);
+    q.head<3>() = rbd.segment<3>(3);
+    q.segment<3>(3) = rbd.head<3>();
+    q.tail(info.actuatedDofNum) = joint_position;
+    v.head<3>() = rbd.segment<3>(n + 3);
+    v.segment<3>(3) = ocs2::getEulerAnglesZyxDerivativesFromGlobalAngularVelocity<ocs2::scalar_t>(
+      q.segment<3>(3), rbd.segment<3>(n));
+    v.tail(info.actuatedDofNum) = joint_velocity;
+    const auto & model = impl_->terrain_pinocchio->getModel();
+    auto & data = impl_->terrain_pinocchio->getData();
+    pinocchio::forwardKinematics(model, data, q, v);
+    pinocchio::computeJointJacobians(model, data, q);
+    pinocchio::updateFramePlacements(model, data);
+    const auto feet = impl_->terrain_kinematics->getPosition(ocs2::vector_t());
+    const auto feet_velocity = impl_->terrain_kinematics->getVelocity(ocs2::vector_t(), ocs2::vector_t());
+    std::array<ContactSignal, kNumLegs> signals{};
+    for (std::size_t current_leg = 0; current_leg < kNumLegs; ++current_leg) {
+      const std::size_t contact = impl_->contact_for_current[current_leg];
+      const auto column = static_cast<Eigen::Index>(6 + kJointsPerLeg * impl_->opendog_leg_for_current[current_leg]);
+      Eigen::Matrix<double, 6, Eigen::Dynamic> jacobian(6, model.nv);
+      jacobian.setZero();
+      pinocchio::getFrameJacobian(model, data, impl_->foot_frame[contact], pinocchio::LOCAL_WORLD_ALIGNED, jacobian);
+      impl_->leg_jacobian[contact] = jacobian.block<3, 3>(0, column);
+      // 关节力矩 = -J^T·F（F 为地面对足端的力），反推 F
+      const Eigen::Vector3d torque = input.joints[current_leg].torque_estimate.cast<double>();
+      const Eigen::Vector3d force = -impl_->leg_jacobian[contact].transpose().fullPivLu().solve(torque);
+      auto & signal = signals[contact];
+      signal.planned_stance = impl_->contact_planned[contact];
+      signal.force_z = force.z();
+      signal.height = feet[contact].z() - impl_->terrain_height[contact];
+      signal.velocity_z = feet_velocity[contact].z();
+    }
+    const double dt = input.timestamp - impl_->time;
+    impl_->contact_detector.update(signals, dt);
+  }
+  const bool contact_active = detection.mode == 2 && locomotion;
+  const auto & contact_detected = impl_->contact_detector.detected();
+  impl_->state_estimate->updateContact(contact_active ? contact_detected : impl_->contact_planned);
   const auto quat = input.imu.orientation_world_from_body.cast<ocs2::scalar_t>();
   const auto angular = input.imu.angular_velocity_body.cast<ocs2::scalar_t>();
   const auto acceleration = input.imu.acceleration_body.cast<ocs2::scalar_t>();
@@ -349,6 +469,43 @@ bool OpenDogAlgorithm::compute(
     impl_->observation.time, impl_->observation.state,
     optimized_state, optimized_input, planned_mode);
   impl_->observation.input = optimized_input;
+  // 5b. 落地高度自适应：支撑超过 60 ms 的足端，其估计高度低通后作为该腿的地面高度，
+  // 限制在足端半径 ±3 cm 内；摆腿轨迹的抬脚和落地都以此为准，避免各腿地面估计不一致时提前触地。
+  if (impl_->adaptive_touch_down) {
+    const auto & rbd = impl_->measured_rbd_state;
+    ocs2::vector_t q(info.generalizedCoordinatesNum);
+    q.head<3>() = rbd.segment<3>(3);
+    q.segment<3>(3) = rbd.head<3>();
+    q.tail(info.actuatedDofNum) = rbd.segment(6, info.actuatedDofNum);
+    const auto & model = impl_->terrain_pinocchio->getModel();
+    auto & data = impl_->terrain_pinocchio->getData();
+    pinocchio::forwardKinematics(model, data, q);
+    pinocchio::updateFramePlacements(model, data);
+    const auto feet = impl_->terrain_kinematics->getPosition(ocs2::vector_t());
+    const auto stance = contact_active ? contact_detected : ocs2::legged_robot::modeNumber2StanceLeg(planned_mode);
+    std::array<ocs2::scalar_t, kNumLegs> heights{};
+    for (std::size_t contact = 0; contact < kNumLegs; ++contact) {
+      impl_->stance_time[contact] = stance[contact] ? impl_->stance_time[contact] + period.seconds() : 0.0;
+      if (impl_->stance_time[contact] > 0.06) {
+        const double measured = std::clamp(
+          feet[contact].z(), impl_->foot_radius - 0.03, impl_->foot_radius + 0.03);
+        impl_->terrain_height[contact] += 0.02 * (measured - impl_->terrain_height[contact]);
+      }
+      heights[contact] = impl_->terrain_height[contact];
+    }
+    impl_->legged_interface->getSwitchedModelReferenceManagerPtr()->setFootTerrainHeights(heights);
+  }
+  // 触地检测参与控制时：WBC 支撑腿按真实触地，计划支撑但未触地的腿按摆腿处理并继续下探
+  std::array<bool, kNumLegs> probing{};
+  if (contact_active) {
+    const auto planned_stance = ocs2::legged_robot::modeNumber2StanceLeg(planned_mode);
+    auto wbc_contact = planned_stance;
+    for (std::size_t contact = 0; contact < kNumLegs; ++contact) {
+      probing[contact] = planned_stance[contact] && !contact_detected[contact];
+      wbc_contact[contact] = planned_stance[contact] && contact_detected[contact];
+    }
+    impl_->wbc->setContactOverride(wbc_contact, probing, detection.probe_velocity);
+  }
   const auto wbc_start = std::chrono::steady_clock::now();
   const auto wbc_solution = impl_->wbc->update(
     optimized_state, optimized_input, impl_->measured_rbd_state,
@@ -389,14 +546,26 @@ bool OpenDogAlgorithm::compute(
     command.kp.setConstant(impl_->joint_kp);
     command.kp[2] = impl_->calf_kp[current_leg];
     command.kd.setConstant(impl_->joint_kd);
+    // 下探中的腿：在 MPC 关节速度上叠加足端以 probe_velocity 竖直向下所需的关节速度
+    Eigen::Vector3d probe_velocity = Eigen::Vector3d::Zero();
+    const std::size_t contact_index = impl_->contact_for_current[current_leg];
+    if (probing[contact_index]) {
+      probe_velocity = impl_->leg_jacobian[contact_index].fullPivLu().solve(
+        Eigen::Vector3d(0.0, 0.0, -detection.probe_velocity));
+    }
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t opendog_index = opendog_leg * kJointsPerLeg + joint;
       command.position_desired(static_cast<Eigen::Index>(joint)) =
         static_cast<float>(position(static_cast<Eigen::Index>(opendog_index)));
-      command.velocity_desired(static_cast<Eigen::Index>(joint)) =
-        static_cast<float>(velocity(static_cast<Eigen::Index>(opendog_index)));
-      command.torque_feedforward(static_cast<Eigen::Index>(joint)) =
-        static_cast<float>(torque(static_cast<Eigen::Index>(opendog_index)));
+      const double joint_velocity = velocity(static_cast<Eigen::Index>(opendog_index)) +
+        probe_velocity(static_cast<Eigen::Index>(joint));
+      command.velocity_desired(static_cast<Eigen::Index>(joint)) = static_cast<float>(joint_velocity);
+      // WBC 力矩不含关节摩擦，踏步时按期望转速方向补上库仑摩擦。站立时 dq_des 只是零附近的噪声，
+      // 补偿会随符号来回跳（11-09 实机 1.5 Nm/0.1 rad/s 站立时电机自激振荡），所以只在踏步模式下补。
+      const double friction = locomotion ?
+        impl_->friction_torque * std::tanh(joint_velocity / impl_->friction_velocity) : 0.0;
+      command.torque_feedforward(static_cast<Eigen::Index>(joint)) = static_cast<float>(
+        torque(static_cast<Eigen::Index>(opendog_index)) + friction);
     }
     command.enabled = true;
   }
@@ -408,12 +577,13 @@ bool OpenDogAlgorithm::compute(
   const auto stance_legs = ocs2::legged_robot::modeNumber2StanceLeg(planned_mode);
   const auto wbc_force_offset = static_cast<Eigen::Index>(info.generalizedCoordinatesNum);
   for (std::size_t current_leg = 0; current_leg < kNumLegs; ++current_leg) {
-    const std::size_t opendog_leg = impl_->opendog_leg_for_current[current_leg];
-    diagnostics.contact[current_leg] = stance_legs[opendog_leg];
+    const std::size_t contact = impl_->contact_for_current[current_leg];
+    diagnostics.contact[current_leg] = stance_legs[contact];
+    diagnostics.contact_detected[current_leg] = contact_detected[contact];
     const auto force_des = ocs2::centroidal_model::getContactForces(
-      optimized_input, opendog_leg, info);
+      optimized_input, contact, info);
     const auto force_wbc = wbc_solution.segment<3>(
-      wbc_force_offset + static_cast<Eigen::Index>(3 * opendog_leg));
+      wbc_force_offset + static_cast<Eigen::Index>(3 * contact));
     for (std::size_t axis = 0; axis < 3; ++axis) {
       diagnostics.force_des[current_leg][axis] =
         static_cast<float>(force_des(static_cast<Eigen::Index>(axis)));
@@ -463,6 +633,12 @@ void OpenDogAlgorithm::reset() noexcept
   // 第一帧 MPC/WBC 会给出约 30 Nm 的力矩尖峰和约 0.2 rad 的期望关节跳变（11/02 实测）。
   if (impl_->state_estimate) {impl_->state_estimate->reset();}
   if (impl_->wbc) {impl_->wbc->reset();}
+  impl_->terrain_height.fill(impl_->foot_radius);
+  impl_->stance_time.fill(0.0);
+  impl_->contact_detector.reset();
+  if (impl_->legged_interface) {
+    impl_->legged_interface->getSwitchedModelReferenceManagerPtr()->clearFootTerrainHeights();
+  }
   impl_->time = 0.0;
   impl_->observation.state.setZero();
   impl_->observation.input.setZero();

@@ -167,8 +167,8 @@ MuJoCo 仅提供机械动力学和设备端替身：CAN 字节交给原始电机
 `Stop`/空格停止，`0` 失能，Esc 退出。暂停或 Reset 会停止旧硬件桥并清空设备命令；
 继续后重新执行启动检查，电机保持锁定。站高使用 OpenDog 配置中的 `comHeight`。
 
-默认总力矩上限与当前 `hardware_main` 一样为 **88 Nm**；
-复现今天以 30 Nm 进行的实机测试时必须同步指定：
+默认总力矩上限与当前 `hardware_main` 一样为 **30 Nm**（2026-11-09 由 88 Nm 下调）；
+需要其他上限时，仿真和实机要同步指定，例如：
 
 ```bash
 ros2 run dm1_robot sim_main --hardware-sim --torque-limit 30

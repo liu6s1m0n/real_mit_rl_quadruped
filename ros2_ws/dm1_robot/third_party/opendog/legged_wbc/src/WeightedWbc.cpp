@@ -48,7 +48,8 @@ vector_t WeightedWbc::update(const vector_t& stateDesired, const vector_t& input
 }
 
 Task WeightedWbc::formulateConstraints() {
-  return formulateFloatingBaseEomTask() + formulateTorqueLimitsTask() + formulateFrictionConeTask() + formulateNoContactMotionTask();
+  return formulateFloatingBaseEomTask() + formulateTorqueLimitsTask() + formulateFrictionConeTask() + formulateNoContactMotionTask() +
+         formulateContactForceRampTask();
 }
 
 Task WeightedWbc::formulateWeightedTasks(const vector_t& stateDesired, const vector_t& inputDesired, scalar_t period) {

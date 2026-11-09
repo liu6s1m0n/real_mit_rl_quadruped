@@ -182,7 +182,7 @@ int main(int argc, char ** argv)
       "  --algorithm-config DIR           OpenDog config/opendog directory\n"
       "Hardware simulation (all actual hardware algorithms, simulated devices):\n"
       "  --calibration FILE              same calibration format as hardware_main\n"
-      "  --torque-limit NM               same default as hardware_main: 88\n"
+      "  --torque-limit NM               same default as hardware_main: 30\n"
       "  --sim-command-delay-ms MS       default 1\n"
       "  --sim-feedback-delay-ms MS      default 1\n"
       "  --sim-imu-period-ms MS          default 2\n"

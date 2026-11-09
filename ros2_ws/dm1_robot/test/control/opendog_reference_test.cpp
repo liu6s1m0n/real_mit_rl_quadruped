@@ -6,6 +6,8 @@
 #include <string>
 
 #include <gtest/gtest.h>
+#include <boost/property_tree/info_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include <ocs2_core/misc/LoadData.h>
 #include <ocs2_oc/synchronized_module/ReferenceManager.h>
 
@@ -143,6 +145,13 @@ TEST(OpenDogReference, BothDiagonalSwingsUseEstimatorFootCenterHeight)
   double clearance = 0.0;
   ocs2::loadData::loadCppDataType(config("opendog_task.info"), "kalmanFilter.footRadius", radius);
   ocs2::loadData::loadCppDataType(config("opendog_task.info"), "swing_trajectory_config.swingHeight", clearance);
+  // 摆腿最高点时刻比例（缺省 0.5 为原 OCS2 对称样条）
+  boost::property_tree::ptree swing;
+  boost::property_tree::read_info(config("opendog_task.info"), swing);
+  const double apex_phase = swing.get<double>("swing_trajectory_config.swingApexPhase", 0.5);
+  // 摆腿落地目标相对地面的偏移（缺省 0）
+  const double touch_down_offset = swing.get<double>("swing_trajectory_config.touchDownOffset", 0.0);
+  const double touch_down_offset_rear = swing.get<double>("swing_trajectory_config.touchDownOffsetRear", 0.0);
   auto manager = interface.getSwitchedModelReferenceManagerPtr();
   const ocs2::ModeSchedule modes({0.1, 0.55, 1.1, 1.55}, {15, 6, 15, 9, 15});
   manager->setModeSchedule(modes);
@@ -150,14 +159,16 @@ TEST(OpenDogReference, BothDiagonalSwingsUseEstimatorFootCenterHeight)
   auto planner = manager->getSwingTrajectoryPlanner();
   for (double start : {0.1, 1.1}) {
     const double middle = start + 0.225;
+    const double apex = start + apex_phase * 0.45;
     EXPECT_EQ(manager->getModeSchedule().modeAtTime(middle), modes.modeAtTime(middle));
     const auto contacts = manager->getContactFlags(middle);
     for (std::size_t leg = 0; leg < contacts.size(); ++leg) {
       EXPECT_NEAR(planner->getZpositionConstraint(leg, start + 1e-8), radius, 1e-8);
-      EXPECT_NEAR(planner->getZpositionConstraint(leg, start + 0.45 - 1e-8), radius, 1e-8);
-      EXPECT_NEAR(planner->getZpositionConstraint(leg, middle),
+      EXPECT_NEAR(planner->getZpositionConstraint(leg, start + 0.45 - 1e-8),
+        radius + (contacts[leg] ? 0.0 : touch_down_offset + (leg >= 2 ? touch_down_offset_rear : 0.0)), 1e-8);
+      EXPECT_NEAR(planner->getZpositionConstraint(leg, apex),
         radius + (contacts[leg] ? 0.0 : clearance), 1e-9);
-      EXPECT_NEAR(planner->getZvelocityConstraint(leg, middle), 0.0, 1e-9);
+      EXPECT_NEAR(planner->getZvelocityConstraint(leg, apex), 0.0, 1e-9);
       if (!contacts[leg]) {
         EXPECT_GT(planner->getZvelocityConstraint(leg, start + 1e-8), 0.0);
       }

@@ -25,8 +25,8 @@ namespace control_config
     inline constexpr float forward = 0.18F;  ///< 选择慢速前进档时的目标前进速度；增大后同一慢档命令要求走得更快。
     inline constexpr float forward_fast = 0.36F;  ///< 选择快速前进档时的目标前进速度；应大于慢档。
     inline constexpr float backward = 0.18F;  ///< 后退档的速度大小；下游自动添加后退方向的负号，这里填写正数。
-    inline constexpr float lateral = 0.20F;  ///< 左移和右移档共用的横移速度大小；左右方向由命令选择。
-    inline constexpr float yaw_rate = 0.30F;  ///< 左右转向档共用的转向速度大小；增大后要求更快地改变朝向。
+    inline constexpr float lateral = 0.15F;  ///< 左移和右移档共用的横移速度大小；左右方向由命令选择。
+    inline constexpr float yaw_rate = 0.20F;  ///< 左右转向档共用的转向速度大小；增大后要求更快地改变朝向。
     inline constexpr int watchdog_ms = 500;  ///< 开启 watchdog 的运动命令多久未刷新后自动停止；当前键盘/GUI 是锁存命令，默认不启用此超时。
   }
 
@@ -43,7 +43,7 @@ namespace control_config
 /// 硬件链路的软件默认值：启动检查、反馈时效、调度告警与重连策略。
   namespace hardware
   {
-    inline constexpr float torque_limit = 88;  ///< 硬件发送链和仿真执行端默认的每关节力矩上限；启动参数可显式覆盖。
+    inline constexpr float torque_limit = 30;  ///< 硬件发送链和仿真执行端默认的每关节力矩上限（2026-11-09 由 88 降到电机连续额定 30，限制电池峰值电流）；启动参数可显式覆盖。
     inline constexpr double feedback_timeout = 0.10;  ///< MIT 接口判定电机反馈是否过期的时限；增大允许使用更旧的数据，不会增加反馈更新频率。
     inline constexpr float startup_stationary_velocity = 0.05F;  ///< 启动检查允许的关节速度绝对值；减小后更严格地要求电机静止。
     inline constexpr int maximum_consecutive_overruns = 3;  ///< 连续控制周期超时达到多少次时触发超时处理/告警；当前处理会丢弃过期周期，不自动失能。

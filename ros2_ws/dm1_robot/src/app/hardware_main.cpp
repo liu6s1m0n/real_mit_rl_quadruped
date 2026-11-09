@@ -72,7 +72,7 @@ struct Arguments
   ImuType imu_type = ImuType::Hfi;
   /// 控制周期，单位 s。
   float control_time_step = float(control_config::control_time_step);
-  /// 关节力矩饱和上限；默认 88 Nm（电机峰值 97 Nm）。超限关节按比例缩小后
+  /// 关节力矩饱和上限；默认 30 Nm（电机连续额定 30、峰值 97 Nm）。超限关节按比例缩小后
   /// 照常发送，不丢弃整帧。
   float torque_limit_nm = control_config::hardware::torque_limit;
   bool keyboard_control = false;  ///< --keyboard-control：键盘控制模式。
@@ -91,7 +91,7 @@ struct Arguments
           message +
           "\n用法: hardware_main --calibration FILE [--can0 can0] [--can1 can1] "
           "[--imu auto|DEVICE] [--imu-type hfi|dm] [--control-dt 0.002] "
-          "[--torque-limit 88]（0~97 Nm，关节力矩饱和上限） "
+          "[--torque-limit 30]（0~97 Nm，关节力矩饱和上限） "
           "[--algorithm-config DIR] "
           "[--keyboard-control | --set-zero] "
           "[--imu-only | --motor-only] "

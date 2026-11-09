@@ -11,6 +11,7 @@
 #include <pinocchio/algorithm/crba.hpp>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
+#include <algorithm>
 #include <utility>
 
 namespace legged {
@@ -27,14 +28,26 @@ WbcBase::WbcBase(const PinocchioInterface& pinocchioInterface, CentroidalModelIn
 }
 
 vector_t WbcBase::update(const vector_t& stateDesired, const vector_t& inputDesired, const vector_t& rbdStateMeasured, size_t mode,
-                         scalar_t /*period*/) {
-  contactFlag_ = modeNumber2StanceLeg(mode);
+                         scalar_t period) {
+  contactFlag_ = overrideValid_ ? overrideFlag_ : modeNumber2StanceLeg(mode);
+  probing_ = overrideValid_ ? overrideProbing_ : contact_flag_t{};
+  probeVelocity_ = overrideProbeVelocity_;
+  overrideValid_ = false;
   numContacts_ = 0;
   for (bool flag : contactFlag_) {
     if (flag) {
       numContacts_++;
     }
   }
+  // 落地力缓升：记录每个接触点进入支撑后的时长，刚落地的周期为 0
+  for (size_t i = 0; i < contactAge_.size(); ++i) {
+    if (!contactFlag_[i]) {
+      contactAge_[i] = kNotInContact;
+    } else {
+      contactAge_[i] = contactAge_[i] < 0.0 ? 0.0 : contactAge_[i] + period;
+    }
+  }
+  inputDesiredLast_ = inputDesired;
 
   updateMeasured(rbdStateMeasured);
   updateDesired(stateDesired, inputDesired);
@@ -228,6 +241,11 @@ Task WbcBase::formulateSwingLegTask() {
   size_t j = 0;
   for (size_t i = 0; i < info_.numThreeDofContacts; ++i) {
     if (!contactFlag_[i]) {
+      if (probing_[i]) {
+        // 计划已支撑但还没触地：水平保持 MPC 期望位置，竖直不跟踪位置、以固定速度继续下探
+        posDesired[i].z() = posMeasured[i].z();
+        velDesired[i].z() = -probeVelocity_;
+      }
       vector3_t accel = swingKp_ * (posDesired[i] - posMeasured[i]) + swingKd_ * (velDesired[i] - velMeasured[i]);
       a.block(3 * j, 0, 3, info_.generalizedCoordinatesNum) = j_.block(3 * i, 0, 3, info_.generalizedCoordinatesNum);
       b.segment(3 * j, 3) = accel - dj_.block(3 * i, 0, 3, info_.generalizedCoordinatesNum) * vMeasured_;
@@ -249,6 +267,32 @@ Task WbcBase::formulateContactForceTask(const vector_t& inputDesired) const {
   b = inputDesired.head(a.rows());
 
   return {a, b, matrix_t(), vector_t()};
+}
+
+Task WbcBase::formulateContactForceRampTask() const {
+  // 每个仍在缓升期的支撑腿一行不等式：Fz <= ratio * max(MPC 期望 Fz, 0)
+  size_t numRamping = 0;
+  if (contactRampDuration_ > 0.0) {
+    for (size_t i = 0; i < info_.numThreeDofContacts; ++i) {
+      if (contactFlag_[i] && contactAge_[i] < contactRampDuration_) {
+        numRamping++;
+      }
+    }
+  }
+  matrix_t d = matrix_t::Zero(numRamping, numDecisionVars_);
+  vector_t f = vector_t::Zero(numRamping);
+  size_t j = 0;
+  for (size_t i = 0; i < info_.numThreeDofContacts && j < numRamping; ++i) {
+    if (!contactFlag_[i] || contactAge_[i] >= contactRampDuration_) {
+      continue;
+    }
+    const scalar_t ratio = contactRampInitialRatio_ + (1.0 - contactRampInitialRatio_) * contactAge_[i] / contactRampDuration_;
+    const scalar_t forceDesiredZ = std::max(centroidal_model::getContactForces(inputDesiredLast_, i, info_)(2), scalar_t(0.0));
+    d(j, info_.generalizedCoordinatesNum + 3 * i + 2) = 1.0;
+    f(j) = ratio * forceDesiredZ;
+    j++;
+  }
+  return {matrix_t(), vector_t(), d, f};
 }
 
 void WbcBase::loadTasksSetting(const std::string& taskFile, bool verbose) {
@@ -279,6 +323,10 @@ void WbcBase::loadTasksSetting(const std::string& taskFile, bool verbose) {
   }
   loadData::loadPtreeValue(pt, swingKp_, prefix + "kp", verbose);
   loadData::loadPtreeValue(pt, swingKd_, prefix + "kd", verbose);
+  // 落地力缓升为可选项：task 文件中没有 contactForceRamp 段时保持原行为
+  contactRampDuration_ = pt.get<scalar_t>("contactForceRamp.duration", 0.0);
+  contactRampInitialRatio_ = std::min(std::max(pt.get<scalar_t>("contactForceRamp.initialRatio", 1.0), scalar_t(0.0)), scalar_t(1.0));
+  std::cerr << "[WBC] contactForceRamp duration=" << contactRampDuration_ << " s initialRatio=" << contactRampInitialRatio_ << "\n";
 }
 
 }  // namespace legged

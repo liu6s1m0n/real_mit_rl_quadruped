@@ -37,6 +37,30 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace ocs2 {
 namespace legged_robot {
 
+/**
+ * 摆腿高度样条：与 OCS2 SplineCpg 相同的两段三次样条，但最高点时刻可调。
+ * apexPhase 为最高点在摆腿时间中的比例，0.5 与 SplineCpg 完全相同；
+ * 取 0.4 时下降段更长，落地前的下降速度更低（2026-11-09 为减小实机落地冲击加入）。
+ */
+class ApexSplineCpg {
+ public:
+  ApexSplineCpg(CubicSpline::Node liftOff, scalar_t midHeight, CubicSpline::Node touchDown, scalar_t apexPhase)
+      : midTime_(liftOff.time + apexPhase * (touchDown.time - liftOff.time)),
+        leftSpline_(liftOff, CubicSpline::Node{midTime_, midHeight, 0.0}),
+        rightSpline_(CubicSpline::Node{midTime_, midHeight, 0.0}, touchDown) {}
+
+  scalar_t position(scalar_t time) const { return (time < midTime_) ? leftSpline_.position(time) : rightSpline_.position(time); }
+  scalar_t velocity(scalar_t time) const { return (time < midTime_) ? leftSpline_.velocity(time) : rightSpline_.velocity(time); }
+  scalar_t acceleration(scalar_t time) const {
+    return (time < midTime_) ? leftSpline_.acceleration(time) : rightSpline_.acceleration(time);
+  }
+
+ private:
+  scalar_t midTime_;
+  CubicSpline leftSpline_;
+  CubicSpline rightSpline_;
+};
+
 class SwingTrajectoryPlanner {
  public:
   struct Config {
@@ -44,6 +68,9 @@ class SwingTrajectoryPlanner {
     scalar_t touchDownVelocity = 0.0;
     scalar_t swingHeight = 0.1;
     scalar_t swingTimeScale = 0.15;  // swing phases shorter than this time will be scaled down in height and velocity
+    scalar_t swingApexPhase = 0.5;   // 最高点在摆腿时间中的比例，0.5 为原 OCS2 对称样条
+    scalar_t touchDownOffset = 0.0;  // 落地目标相对地面高度的偏移 [m]，负值让足端在计划落地时刻仍在下探
+    scalar_t touchDownOffsetRear = 0.0;  // 后腿（接触点序 LH、RH）额外的落地目标偏移 [m]，叠加在 touchDownOffset 上
   };
 
   SwingTrajectoryPlanner(Config config, size_t numFeet);
@@ -106,7 +133,7 @@ class SwingTrajectoryPlanner {
   const Config config_;
   const size_t numFeet_;
 
-  feet_array_t<std::vector<SplineCpg>> feetHeightTrajectories_;
+  feet_array_t<std::vector<ApexSplineCpg>> feetHeightTrajectories_;
   feet_array_t<std::vector<scalar_t>> feetHeightTrajectoriesEvents_;
 };
 

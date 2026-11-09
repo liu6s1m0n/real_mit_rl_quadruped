@@ -27,6 +27,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
 
+#include <algorithm>
 #include <boost/property_tree/info_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 
@@ -120,14 +121,17 @@ void SwingTrajectoryPlanner::update(const ModeSchedule& modeSchedule, const feet
         const scalar_t scaling = swingTrajectoryScaling(swingStartTime, swingFinalTime, config_.swingTimeScale);
 
         const CubicSpline::Node liftOff{swingStartTime, liftOffHeightSequence[j][p], scaling * config_.liftOffVelocity};
-        const CubicSpline::Node touchDown{swingFinalTime, touchDownHeightSequence[j][p], scaling * config_.touchDownVelocity};
+        // 接触点序 LF、RF、LH、RH，后两条为后腿
+        const scalar_t offset = config_.touchDownOffset + (j >= 2 ? config_.touchDownOffsetRear : 0.0);
+        const CubicSpline::Node touchDown{swingFinalTime, touchDownHeightSequence[j][p] + offset,
+                                          scaling * config_.touchDownVelocity};
         const scalar_t midHeight = maxHeightSequence[j][p] + scaling * config_.swingHeight;
-        feetHeightTrajectories_[j].emplace_back(liftOff, midHeight, touchDown);
+        feetHeightTrajectories_[j].emplace_back(liftOff, midHeight, touchDown, config_.swingApexPhase);
       } else {  // for a stance leg
         // Note: setting the time here arbitrarily to 0.0 -> 1.0 makes the assert in CubicSpline fail
         const CubicSpline::Node liftOff{0.0, liftOffHeightSequence[j][p], 0.0};
         const CubicSpline::Node touchDown{1.0, liftOffHeightSequence[j][p], 0.0};
-        feetHeightTrajectories_[j].emplace_back(liftOff, liftOffHeightSequence[j][p], touchDown);
+        feetHeightTrajectories_[j].emplace_back(liftOff, liftOffHeightSequence[j][p], touchDown, 0.5);
       }
     }
     feetHeightTrajectoriesEvents_[j] = eventTimes;
@@ -254,6 +258,14 @@ SwingTrajectoryPlanner::Config loadSwingTrajectorySettings(const std::string& fi
   loadData::loadPtreeValue(pt, config.touchDownVelocity, prefix + "touchDownVelocity", verbose);
   loadData::loadPtreeValue(pt, config.swingHeight, prefix + "swingHeight", verbose);
   loadData::loadPtreeValue(pt, config.swingTimeScale, prefix + "swingTimeScale", verbose);
+  // 可选：最高点时刻比例，缺省 0.5 保持原 OCS2 行为；限制在 [0.3, 0.7]
+  config.swingApexPhase = std::min(std::max(pt.get<scalar_t>(prefix + "swingApexPhase", 0.5), scalar_t(0.3)), scalar_t(0.7));
+  std::cerr << "[SwingTrajectory] swingApexPhase=" << config.swingApexPhase << "\n";
+  config.touchDownOffset = std::min(std::max(pt.get<scalar_t>(prefix + "touchDownOffset", 0.0), scalar_t(-0.02)), scalar_t(0.02));
+  config.touchDownOffsetRear =
+      std::min(std::max(pt.get<scalar_t>(prefix + "touchDownOffsetRear", 0.0), scalar_t(-0.02)), scalar_t(0.02));
+  std::cerr << "[SwingTrajectory] touchDownOffset=" << config.touchDownOffset << " touchDownOffsetRear=" << config.touchDownOffsetRear
+            << "\n";
 
   if (verbose) {
     std::cerr << " #### =============================================================================" << std::endl;

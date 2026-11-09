@@ -28,7 +28,7 @@ public:
   {
     float control_time_step = float(control_config::control_time_step);  ///< 控制周期，s。
     double feedback_timeout_s = control_config::hardware::feedback_timeout;  ///< 电机反馈超时，s。
-    /// 关节力矩饱和上限；电机连续额定 30 Nm、峰值 97 Nm，默认 88 Nm。
+    /// 关节力矩饱和上限；电机连续额定 30 Nm、峰值 97 Nm，默认 30 Nm。
     /// 超过该值的关节会把 kp/kd/前馈按同一比例缩小到上限，其余关节不受影响，
     /// 整批 12 帧照常发送（丢帧会让电机收不到命令而超时失能）。
     float torque_limit_nm = control_config::hardware::torque_limit;

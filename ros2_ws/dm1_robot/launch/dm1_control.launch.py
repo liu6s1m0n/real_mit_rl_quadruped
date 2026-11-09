@@ -59,7 +59,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "torque_limit",
-            default_value="88",
+            default_value="30",
             description="Hardware simulation torque limit; match the hardware_main run",
         ),
         *_desktop_session_environment(),

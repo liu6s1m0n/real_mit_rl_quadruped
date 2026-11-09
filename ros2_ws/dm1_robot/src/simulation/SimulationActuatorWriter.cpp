@@ -55,7 +55,7 @@ double clampActuatorForce(
     symmetric_limit = std::min(
       symmetric_limit, std::max(std::abs(minimum), std::abs(maximum)));
   }
-  // 只对输出机械功率的驱动方向应用转速降额；反向制动仍受 88 Nm 指令上限约束。
+  // 只对输出机械功率的驱动方向应用转速降额；反向制动仍受默认 30 Nm 指令上限约束。
   if (force * velocity > 0.0) {
     symmetric_limit = std::min(symmetric_limit, motoringTorqueLimit(velocity));
   }

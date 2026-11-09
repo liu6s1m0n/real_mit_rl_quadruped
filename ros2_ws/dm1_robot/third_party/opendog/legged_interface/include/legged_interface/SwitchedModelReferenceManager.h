@@ -29,6 +29,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #pragma once
 
+#include <mutex>
+
 #include <ocs2_core/thread_support/Synchronized.h>
 #include <ocs2_oc/synchronized_module/ReferenceManager.h>
 
@@ -66,12 +68,33 @@ class SwitchedModelReferenceManager : public ReferenceManager {
 
   void attachRosNode(const rclcpp::Node::SharedPtr& nh);
 
+  // 各足落地高度（足端球心世界 z，按接触点序 LF/RF/LH/RH）。控制线程写、MPC 线程读。
+  // 设置后摆腿轨迹按每条腿各自的地面高度规划；clear 后回到统一的足端半径高度。
+  void setFootTerrainHeights(const feet_array_t<scalar_t>& heights) {
+    std::lock_guard<std::mutex> lock(terrainMutex_);
+    terrainHeights_ = heights;
+    terrainValid_ = true;
+  }
+  void clearFootTerrainHeights() {
+    std::lock_guard<std::mutex> lock(terrainMutex_);
+    terrainValid_ = false;
+  }
+
  protected:
   void modifyReferences(scalar_t initTime, scalar_t finalTime, const vector_t& initState, TargetTrajectories& targetTrajectories,
                         ModeSchedule& modeSchedule) override;
 
   std::shared_ptr<GaitSchedule> gaitSchedulePtr_;
   std::shared_ptr<SwingTrajectoryPlanner> swingTrajectoryPtr_;
+
+  bool getFootTerrainHeights(feet_array_t<scalar_t>& heights) const {
+    std::lock_guard<std::mutex> lock(terrainMutex_);
+    heights = terrainHeights_;
+    return terrainValid_;
+  }
+  mutable std::mutex terrainMutex_;
+  feet_array_t<scalar_t> terrainHeights_{};
+  bool terrainValid_ = false;
   
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr MysetTrotSub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr MysetStanceSub_ ;

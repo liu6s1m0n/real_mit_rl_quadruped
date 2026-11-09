@@ -53,7 +53,19 @@ class FootCenterReferenceManager final : public SwitchedModelReferenceManager {
   void modifyReferences(scalar_t initTime, scalar_t finalTime, const vector_t& initState,
                         TargetTrajectories& targetTrajectories, ModeSchedule& modeSchedule) override {
     SwitchedModelReferenceManager::modifyReferences(initTime, finalTime, initState, targetTrajectories, modeSchedule);
-    getSwingTrajectoryPlanner()->update(modeSchedule, footRadius_);
+    feet_array_t<scalar_t> heights{};
+    if (!getFootTerrainHeights(heights)) {
+      getSwingTrajectoryPlanner()->update(modeSchedule, footRadius_);
+      return;
+    }
+    // 每条腿的抬脚和落地高度都取该腿最近一次稳定支撑时的足端高度
+    feet_array_t<scalar_array_t> liftOff;
+    feet_array_t<scalar_array_t> touchDown;
+    for (size_t leg = 0; leg < heights.size(); ++leg) {
+      liftOff[leg] = scalar_array_t(modeSchedule.modeSequence.size(), heights[leg]);
+      touchDown[leg] = liftOff[leg];
+    }
+    getSwingTrajectoryPlanner()->update(modeSchedule, liftOff, touchDown);
   }
 
  private:

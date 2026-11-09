@@ -50,6 +50,7 @@ struct ControlOutput
     std::size_t active_mode = 15;                            ///< 当前时刻生效的接触模式。
     std::size_t planned_mode = 15;                           ///< MPC 计划中的接触模式。
     std::array<bool, kNumLegs> contact{};                    ///< 各腿当前是否处于支撑相。
+    std::array<bool, kNumLegs> contact_detected{};           ///< 触地检测结果（检测关闭时等于计划）。
     std::array<std::array<float, 3>, kNumLegs> force_des{};  ///< MPC 给出的期望足端力。
     std::array<std::array<float, 3>, kNumLegs> force_wbc{};  ///< WBC 求解后的足端力。
   };

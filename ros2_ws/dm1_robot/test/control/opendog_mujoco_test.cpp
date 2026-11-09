@@ -136,8 +136,9 @@ TEST(OpenDogMuJoCo, SingleStepsAndMeasuresPolicyFreshness)
         ASSERT_GT(data->qpos[2], 0.18) << "time=" << time;
         ASSERT_GT(data->xmat[9 * base_body + 8], 0.7) << "time=" << time;
       }
-      if (time > 5.5 && time < 6.5) {EXPECT_EQ(timing.planned_mode, 15U);}
-      if (time > 8.0 && time < 9.0) {EXPECT_EQ(timing.planned_mode, 15U);}
+      // 单步追加在预测时域（1.0 s）末端，按键后约 1.1 s 开始、约 1.55 s 结束
+      if (time > 6.0 && time < 6.5) {EXPECT_EQ(timing.planned_mode, 15U);}
+      if (time > 8.5 && time < 9.0) {EXPECT_EQ(timing.planned_mode, 15U);}
       first_diagonal_seen |= stage == 1 && timing.planned_mode == 6;
       second_diagonal_seen |= stage == 2 && timing.planned_mode == 9;
       // 原调度在预测时域末端追加单步；排除连续踏步遗留的前缀。

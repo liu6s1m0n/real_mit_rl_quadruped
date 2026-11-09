@@ -299,7 +299,7 @@ HardwareBridge::HardwareBridge(
   const Options & options)
 : hardware_(hardware), calibration_(calibration), options_(options),
   runner_(options.algorithm_config_directory, options.control_time_step),
-  // 默认 88 N*m 关节力矩饱和上限（电机峰值 97 N*m）：超限关节按比例缩小后
+  // 默认 30 N*m 关节力矩饱和上限（电机峰值 97 N*m）：超限关节按比例缩小后
   // 照常发送，不丢弃整帧；可用 hardware_main --torque-limit 覆盖。
   mit_(calibration, options.torque_limit_nm)
 {}
@@ -335,6 +335,7 @@ int HardwareBridge::runKeyboardControl(
     csv_log << ",opendog_diag_valid,opendog_active_mode,opendog_planned_mode";
     for (const auto * leg : {"FR", "FL", "RR", "RL"}) {
       csv_log << ',' << "opendog_" << leg << "_contact"
+              << ',' << "opendog_" << leg << "_contact_detected"
               << ',' << "opendog_" << leg << "_force_des_x"
               << ',' << "opendog_" << leg << "_force_des_y"
               << ',' << "opendog_" << leg << "_force_des_z"
@@ -582,7 +583,7 @@ int HardwareBridge::runKeyboardControl(
           csv_log << ',' << opendog.valid << ',' << opendog.active_mode
                   << ',' << opendog.planned_mode;
           for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
-            csv_log << ',' << opendog.contact[leg];
+            csv_log << ',' << opendog.contact[leg] << ',' << opendog.contact_detected[leg];
             for (std::size_t axis = 0; axis < 3; ++axis) {
               csv_log << ',' << opendog.force_des[leg][axis];
             }

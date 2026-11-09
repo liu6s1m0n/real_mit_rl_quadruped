@@ -505,7 +505,8 @@ install(DIRECTORY docs/
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_opendog_algorithm
-    test/control/opendog_algorithm_test.cpp test/control/opendog_reference_test.cpp)
+    test/control/opendog_algorithm_test.cpp test/control/opendog_reference_test.cpp
+    test/control/contact_detector_test.cpp)
   target_link_libraries(test_opendog_algorithm dm1_opendog_algorithm)
   # libhpipm.so has no RUNPATH for its blasfeo dependency; keep blasfeo as a
   # direct DT_NEEDED entry so the test resolves it through its own RUNPATH.
