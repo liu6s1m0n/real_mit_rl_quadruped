@@ -255,9 +255,8 @@ TEST(Dm1MitInterfaceTest, RejectsNonFiniteTorqueFeedforward)
   EXPECT_TRUE(transport.frames.empty());
 }
 
-// 指令速度只是前馈目标，放宽到电机空载 60 rpm；超过才拒绝。
-// 期望速度上限使用空载转速 60 rpm。
-TEST(Dm1MitInterfaceTest, UsesNoLoadVelocityLimit)
+// 指令速度只是前馈目标，上限为电机空载 60 rpm；超过时限幅后照常发送，不拒绝整批。
+TEST(Dm1MitInterfaceTest, ClampsVelocityToNoLoadLimit)
 {
   dm1_hardware::Dm1MitInterface interface(calibration());
   ASSERT_TRUE(interface.updateFeedback(feedback(1.0)));
@@ -267,7 +266,25 @@ TEST(Dm1MitInterfaceTest, UsesNoLoadVelocityLimit)
   EXPECT_TRUE(interface.validateCommands(commands));
 
   commands[0].velocity_desired[0] = 7.0F;
-  EXPECT_FALSE(interface.validateCommands(commands));
+  commands[1].velocity_desired[2] = -9.0F;
+  EXPECT_TRUE(interface.validateCommands(commands));
+  FrameSink sink;
+  ASSERT_TRUE(send(interface, sink, commands));
+  bool checked_leg0 = false;
+  bool checked_leg1 = false;
+  for (const auto & frame : sink.frames) {
+    // leg0/joint0 在 bus0 can_id1，方向 -1；leg1/joint2 在 bus0 can_id6，方向 +1。
+    if (frame.bus == 0 && frame.can_id == 1) {
+      EXPECT_NEAR(frame.velocity, -6.2831853F, 1e-5F);
+      checked_leg0 = true;
+    }
+    if (frame.bus == 0 && frame.can_id == 6) {
+      EXPECT_NEAR(frame.velocity, -6.2831853F, 1e-5F);
+      checked_leg1 = true;
+    }
+  }
+  EXPECT_TRUE(checked_leg0);
+  EXPECT_TRUE(checked_leg1);
 }
 
 // 软件温度上限放到 120 摄氏度；100~120 度是警告区，不再直接失能。

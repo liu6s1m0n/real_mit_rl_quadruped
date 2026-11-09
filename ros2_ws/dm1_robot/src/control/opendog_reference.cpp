@@ -12,6 +12,14 @@
 
 #include <ocs2_core/misc/LoadData.h>
 
+namespace
+{
+/// 运动模式水平锚点最多领先当前位置的距离，m。
+constexpr double kMaximumAnchorLead = 0.15;
+/// 运动模式偏航锚点最多领先当前偏航的角度，rad。
+constexpr double kMaximumYawAnchorLead = 0.3;
+}  // namespace
+
 OpenDogReference::OpenDogReference(
   const std::string & reference_file, const std::string & task_file)
 {
@@ -60,14 +68,39 @@ ocs2::TargetTrajectories OpenDogReference::update(
     return stand_up_target_;
   }
   standing_up_ = false;
+  if (desired.mode != ControlMode::Locomotion) {anchor_valid_ = false;}
   ocs2::vector_t pose(6);
   pose << desired.body_position_world.cast<double>(),
     double(desired.body_rpy.z()), double(desired.body_rpy.y()), double(desired.body_rpy.x());
   if (desired.mode == ControlMode::Locomotion) {
-    // 运动模式：目标位姿按期望速度外推一个预测时长，轨迹各点带期望线速度。
-    pose.head<2>() = observation.state.segment<2>(6) +
-      horizon_ * desired.body_velocity_world.head<2>().cast<double>();
-    pose(3) = observation.state(9) + horizon_ * desired.body_angular_velocity.z();
+    // 运动模式：水平目标取按期望速度积分的锚点再外推一个预测时长，轨迹各点带期望线速度。
+    // 锚点不随当前位置重置，速度跟不上或原地漂移时误差会累积，MPC 据此追回；
+    // 锚点与当前位置的距离限幅，被卡住时不无限累积。
+    // 偏航同样锁定（2026-11-06 换 HFI IMU 后 yaw 静止漂移约 0.1°/20 s）：
+    // 原先每拍跟随当前值，原地踏步会慢慢转身，转向只跟到命令的约 22%。
+    const Eigen::Vector2d current_xy = observation.state.segment<2>(6);
+    const Eigen::Vector2d velocity_xy = desired.body_velocity_world.head<2>().cast<double>();
+    const double current_yaw = observation.state(9);
+    const double yaw_rate = desired.body_angular_velocity.z();
+    if (!anchor_valid_) {
+      anchor_xy_ = current_xy;
+      anchor_yaw_ = current_yaw;
+      anchor_valid_ = true;
+    } else {
+      const double dt = std::max(0.0, observation.time - anchor_time_);
+      anchor_xy_ += velocity_xy * dt;
+      anchor_yaw_ += yaw_rate * dt;
+    }
+    anchor_time_ = observation.time;
+    const Eigen::Vector2d lead = anchor_xy_ - current_xy;
+    if (lead.norm() > kMaximumAnchorLead) {
+      anchor_xy_ = current_xy + lead * (kMaximumAnchorLead / lead.norm());
+    }
+    // 偏航误差按 [-π, π] 取最短方向，与状态里的偏航是否连续展开无关。
+    const double yaw_lead = std::remainder(anchor_yaw_ - current_yaw, 2.0 * M_PI);
+    anchor_yaw_ = current_yaw + std::clamp(yaw_lead, -kMaximumYawAnchorLead, kMaximumYawAnchorLead);
+    pose.head<2>() = anchor_xy_ + horizon_ * velocity_xy;
+    pose(3) = anchor_yaw_ + horizon_ * yaw_rate;
     auto target = poseToTrajectory(pose, observation, observation.time + horizon_);
     for (auto & state : target.stateTrajectory) {
       state.head<3>() = desired.body_velocity_world.cast<double>();

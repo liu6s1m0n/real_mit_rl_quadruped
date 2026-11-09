@@ -22,6 +22,7 @@
 #include <functional>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
 
 #include "common/console_log.hpp"
@@ -62,6 +63,135 @@ Vec3<float> footPositionBody(LegId leg, const Vec3<float> & q)
   return hip_location + rotation_hip * hip_to_thigh +
          rotation_thigh * thigh_to_calf + rotation_calf * calf_to_foot;
 }
+
+/**
+ * 静止站立水平核对，只打印建议值，不修改标定。
+ *
+ * 平地上四脚在世界系应等高。IMU 安装偏差用旧零位标定，与电机零位独立，
+ * 因此可用 IMU 姿态把足端换到世界系，解出让四脚等高且总和为 0 的小腿零位修正：
+ * 第 k 腿高度 z_k 对小腿的灵敏度为 a_k，公共高度 h = Σ(z_k/a_k)/Σ(1/a_k)，
+ * 修正 x_k = (h - z_k)/a_k。四腿同向的偏差只改变站高，此法无法观测。
+ * 每次进入站立/支撑状态，在连续静止 1 s 后报告一次。
+ */
+class StanceLevelCheck
+{
+public:
+  void update(
+    const char * state, double now_s,
+    const std::array<JointState<float>, kNumLegs> & joints,
+    const Mat3<float> & rotation_world_from_body, const Vec3<float> & angular_velocity,
+    const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration)
+  {
+    const std::string label(state);
+    if (label != state_) {
+      state_ = label;
+      state_start_s_ = now_s;
+      reported_ = false;
+      resetWindow();
+    }
+    const bool standing = label == "OPENDOG_STAND_UP" || label == "OPENDOG_STANCE";
+    if (!standing || reported_ || now_s - state_start_s_ < kMinimumDwellS) {return;}
+    // 关节和机身都静止才累计；任一帧运动就重新开始窗口。
+    bool still = angular_velocity.cwiseAbs().maxCoeff() < kStillAngularVelocity;
+    for (const auto & joint : joints) {
+      still = still && joint.velocity.cwiseAbs().maxCoeff() < kStillJointVelocity;
+    }
+    if (!still) {
+      resetWindow();
+      return;
+    }
+    if (samples_ == 0) {window_start_s_ = now_s;}
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {position_sum_[leg] += joints[leg].position;}
+    rotation_sum_ += rotation_world_from_body;
+    ++samples_;
+    if (now_s - window_start_s_ < kStillWindowS) {return;}
+    reported_ = true;
+    report(calibration);
+    resetWindow();
+  }
+
+private:
+  static constexpr double kMinimumDwellS = 1.0;          ///< 进入状态后至少等待的时间。
+  static constexpr double kStillWindowS = 1.0;           ///< 需要连续静止的时间。
+  static constexpr float kStillJointVelocity = 0.05F;    ///< 关节静止阈值，rad/s。
+  static constexpr float kStillAngularVelocity = 0.05F;  ///< 机身静止阈值，rad/s。
+  static constexpr float kWarnTrimDeg = 1.5F;            ///< 超过此修正量时警告。
+
+  void resetWindow()
+  {
+    samples_ = 0;
+    for (auto & sum : position_sum_) {sum.setZero();}
+    rotation_sum_.setZero();
+  }
+
+  /// 第 leg 腿足端在世界系（不含平移）的高度。
+  static float footHeight(std::size_t leg, const Vec3<float> & q, const Mat3<float> & rotation)
+  {
+    return (rotation * footPositionBody(static_cast<LegId>(leg), q)).z();
+  }
+
+  void report(const dm1_hardware::Dm1MitInterface::CalibrationArray & calibration) const
+  {
+    const float scale = 1.0F / static_cast<float>(samples_);
+    // 平均旋转矩阵只用于取高度方向；静止 1 s 内姿态变化很小。
+    const Mat3<float> rotation = rotation_sum_ * scale;
+    std::array<float, kNumLegs> height{};
+    std::array<float, kNumLegs> slope{};
+    float weighted_height = 0.0F;
+    float weight = 0.0F;
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const Vec3<float> q = position_sum_[leg] * scale;
+      Vec3<float> dq = q;
+      dq[2] += 1e-3F;
+      height[leg] = footHeight(leg, q, rotation);
+      slope[leg] = (footHeight(leg, dq, rotation) - height[leg]) / 1e-3F;
+      weighted_height += height[leg] / slope[leg];
+      weight += 1.0F / slope[leg];
+    }
+    const float common_height = weighted_height / weight;
+    const float mean_height = (height[0] + height[1] + height[2] + height[3]) / 4.0F;
+    std::array<float, kNumLegs> trim_deg{};
+    float max_trim_deg = 0.0F;
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      trim_deg[leg] = (common_height - height[leg]) / slope[leg] * 180.0F / static_cast<float>(M_PI);
+      max_trim_deg = std::max(max_trim_deg, std::abs(trim_deg[leg]));
+    }
+    // 对角扭曲 (FL+RR)-(FR+RL) 与平面倾斜无关，只反映零位或地面不平。
+    const float twist_cm = 100.0F * (height[1] + height[2] - height[0] - height[3]);
+    const auto level = max_trim_deg > kWarnTrimDeg ? imu_log::Level::Warning : imu_log::Level::Info;
+    // 建议的标定第 6 列：zero_new = zero_old - trim * direction。
+    std::array<float, kNumLegs> zero{};
+    for (std::size_t leg = 0; leg < kNumLegs; ++leg) {
+      const auto & calf = calibration[leg * kJointsPerLeg + 2];
+      zero[leg] = calf.zero_position -
+        trim_deg[leg] * static_cast<float>(M_PI) / 180.0F * static_cast<float>(calf.direction);
+    }
+    imu_log::print(
+      level,
+      "[站立水平核对] %s 静止 %.1f s：四脚扭曲 (FL+RR)-(FR+RL)=%+.2f cm；"
+      "世界系高度差 FR %+.2f FL %+.2f RR %+.2f RL %+.2f cm；"
+      "小腿零位建议修正 FR %+.2f° FL %+.2f° RR %+.2f° RL %+.2f°；"
+      "对应标定第 6 列 FR_calf %.4f FL_calf %.4f RR_calf %.4f RL_calf %.4f。%s\n",
+      state_.c_str(), kStillWindowS, static_cast<double>(twist_cm),
+      100.0 * (height[0] - mean_height), 100.0 * (height[1] - mean_height),
+      100.0 * (height[2] - mean_height), 100.0 * (height[3] - mean_height),
+      static_cast<double>(trim_deg[0]), static_cast<double>(trim_deg[1]),
+      static_cast<double>(trim_deg[2]), static_cast<double>(trim_deg[3]),
+      static_cast<double>(zero[0]), static_cast<double>(zero[1]),
+      static_cast<double>(zero[2]), static_cast<double>(zero[3]),
+      max_trim_deg > kWarnTrimDeg ?
+      "修正量超过 1.5°：可能地面不平或电机零位变化；确认地面水平、多次结果一致后再写入标定文件" :
+      "在 1.5° 以内，无需修改");
+  }
+
+  std::string state_;
+  double state_start_s_ = 0.0;
+  double window_start_s_ = 0.0;
+  bool reported_ = false;
+  std::size_t samples_ = 0;
+  std::array<Vec3<float>, kNumLegs> position_sum_{};
+  Mat3<float> rotation_sum_ = Mat3<float>::Zero();
+};
 
 /// 每秒最多报告一次故障码、温度或电压异常的电机；只报错，不失能。
 void reportMotorFaults(const dm1_hardware::HardwareSample & sample)
@@ -259,6 +389,7 @@ int HardwareBridge::runKeyboardControl(
   dm1_hardware::PeriodicMitSender::Frames published_frames{};
   double last_published_s = -1.0;
   bool keyboard_fault_reported = false;
+  StanceLevelCheck level_check;
   auto next_cycle = std::chrono::steady_clock::now();
   const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
     std::chrono::duration<double>(options_.control_time_step));
@@ -428,6 +559,12 @@ int HardwareBridge::runKeyboardControl(
     }
     if (publish_attempted && !publish_ok) {
       report_control_failure("MIT命令校验/发布失败");
+    }
+    if (control_active) {
+      level_check.update(
+        runner_.stateLabel(), now_s, log_js,
+        algorithm_output.estimate.rotation_world_from_body,
+        sample.imu.angular_velocity_body, calibration_);
     }
     // 7. 每个控制周期提交快照；CSV 格式化、足端诊断和写盘在独立线程执行。
     if (control_active && csv_log.is_open()) {

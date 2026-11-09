@@ -55,9 +55,38 @@ TEST(OpenDogReference, KeepsOriginalVelocityTrajectoryFieldOrder)
   EXPECT_DOUBLE_EQ(target.stateTrajectory.back()(3), 0.0);
   for (int leg = 0; leg < 4; ++leg) {
     EXPECT_DOUBLE_EQ(target.stateTrajectory.back()(12 + 3 * leg), 0.0);
-    EXPECT_NEAR(target.stateTrajectory.back()(13 + 3 * leg), -0.485961, 1e-9);
-    EXPECT_NEAR(target.stateTrajectory.back()(14 + 3 * leg), -1.480271, 1e-9);
+    EXPECT_NEAR(target.stateTrajectory.back()(13 + 3 * leg), -0.602113, 1e-9);
+    EXPECT_NEAR(target.stateTrajectory.back()(14 + 3 * leg), -1.259860, 1e-9);
   }
+}
+
+// 运动模式下偏航目标按期望角速度积分锁定，不随当前偏航重置；领先量限幅 0.3 rad。
+TEST(OpenDogReference, LocomotionYawAnchorIntegratesCommandedRate)
+{
+  double horizon = 0.0;
+  ocs2::loadData::loadCppDataType(config("opendog_task.info"), "mpc.timeHorizon", horizon);
+  OpenDogReference reference(config("opendog_reference.info"), config("opendog_task.info"));
+  auto state = observation();
+  DesiredState<float> desired;
+  desired.valid = true;
+  desired.mode = ControlMode::Locomotion;
+  desired.body_position_world.z() = 0.28F;
+  desired.body_angular_velocity.z() = 0.3F;
+  reference.update(desired, state);
+  // 机身没转（偏航仍为 0.4），0.5 s 后锚点应前进 0.15 rad。
+  state.time += 0.5;
+  auto target = reference.update(desired, state);
+  EXPECT_NEAR(target.stateTrajectory.back()(9), 0.4 + 0.3 * 0.5 + 0.3 * horizon, 1e-6);
+  // 再过 2 s 锚点被限幅在当前偏航 + 0.3 rad。
+  state.time += 2.0;
+  target = reference.update(desired, state);
+  EXPECT_NEAR(target.stateTrajectory.back()(9), 0.4 + 0.3 + 0.3 * horizon, 1e-6);
+  // 离开运动模式后锚点清除，重新进入时从当前偏航开始。
+  desired.mode = ControlMode::BalanceStand;
+  reference.update(desired, state);
+  desired.mode = ControlMode::Locomotion;
+  target = reference.update(desired, state);
+  EXPECT_NEAR(target.stateTrajectory.back()(9), 0.4 + 0.3 * horizon, 1e-6);
 }
 
 // 站立期间轨迹保持首次生成时的起始时间，不随每帧刷新。

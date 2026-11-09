@@ -400,6 +400,28 @@ bool OpenDogAlgorithm::compute(
     }
     command.enabled = true;
   }
+  // 7b. 求解器诊断，仅供日志：接触按 WBC 实际使用的计划模式，
+  // MPC 足端力取自最优输入，WBC 足端力取自解向量中广义加速度之后的 3×4 段
+  auto & diagnostics = output.opendog;
+  diagnostics.active_mode = mode;
+  diagnostics.planned_mode = planned_mode;
+  const auto stance_legs = ocs2::legged_robot::modeNumber2StanceLeg(planned_mode);
+  const auto wbc_force_offset = static_cast<Eigen::Index>(info.generalizedCoordinatesNum);
+  for (std::size_t current_leg = 0; current_leg < kNumLegs; ++current_leg) {
+    const std::size_t opendog_leg = impl_->opendog_leg_for_current[current_leg];
+    diagnostics.contact[current_leg] = stance_legs[opendog_leg];
+    const auto force_des = ocs2::centroidal_model::getContactForces(
+      optimized_input, opendog_leg, info);
+    const auto force_wbc = wbc_solution.segment<3>(
+      wbc_force_offset + static_cast<Eigen::Index>(3 * opendog_leg));
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      diagnostics.force_des[current_leg][axis] =
+        static_cast<float>(force_des(static_cast<Eigen::Index>(axis)));
+      diagnostics.force_wbc[current_leg][axis] =
+        static_cast<float>(force_wbc(static_cast<Eigen::Index>(axis)));
+    }
+  }
+  diagnostics.valid = true;
   // 8. 耗时统计，每秒打印一次
   auto & timing = impl_->timing;
   const auto now = std::chrono::steady_clock::now();

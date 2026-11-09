@@ -29,7 +29,7 @@ public:
   ocs2::TargetTrajectories update(
     const DesiredState<float> & desired, const ocs2::SystemObservation & observation);
   /// 清除站立轨迹缓存，下次 StandUp 从当前状态重新生成。
-  void reset() noexcept {standing_up_ = false;}
+  void reset() noexcept {standing_up_ = false; anchor_valid_ = false;}
 
 private:
   /// 生成从当前位姿到 pose 的两点轨迹，在 reaching_time 到达。
@@ -43,6 +43,10 @@ private:
   double stand_up_duration_ = 0.0;      ///< 站立轨迹时长，s。
   ocs2::vector_t default_joints_ = ocs2::vector_t::Zero(12);  ///< 站立默认关节角（OpenDog 腿序）。
   bool standing_up_ = false;            ///< 已生成并缓存站立轨迹。
+  bool anchor_valid_ = false;           ///< 运动模式的水平位置和偏航锚点是否有效。
+  double anchor_time_ = 0.0;            ///< 锚点上次更新的时间，s。
+  Eigen::Vector2d anchor_xy_ = Eigen::Vector2d::Zero();  ///< 按期望速度积分的水平位置锚点，m。
+  double anchor_yaw_ = 0.0;             ///< 按期望角速度积分的偏航锚点，rad。
   ocs2::TargetTrajectories stand_up_target_;  ///< 缓存的站立轨迹，站立期间保持不变。
 };
 

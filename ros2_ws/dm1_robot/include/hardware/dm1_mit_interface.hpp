@@ -244,8 +244,9 @@ public:
   /**
    * @brief 校验一整批命令的协议字段，不发送。
    *
-   * 关节目标先按模型限位限幅；非有限值、超出协议范围的速度/增益/电机位置
-   * 会拒绝整批。力矩超限只记录，发送时在 prepareFrames() 中按比例截断。
+   * 关节目标先按模型限位限幅，期望速度按 kVelocityLimit 限幅；非有限值、
+   * 超出协议范围的增益/电机位置会拒绝整批。力矩超限只记录，发送时在
+   * prepareFrames() 中按比例截断。
    */
   bool validateCommands(const CommandArray & commands) const noexcept
   {
@@ -279,7 +280,8 @@ public:
         const auto i = static_cast<Eigen::Index>(joint);
         const float requested_q = command.position_desired[i];
         const float q = std::clamp(requested_q, kLowerLimit[joint], kUpperLimit[joint]);
-        const float dq = command.velocity_desired[i];
+        const float requested_dq = command.velocity_desired[i];
+        const float dq = std::clamp(requested_dq, -kVelocityLimit, kVelocityLimit);
         const float kp = command.kp[i];
         const float kd = command.kd[i];
         const float tau = command.torque_feedforward[i];
@@ -295,8 +297,17 @@ public:
               static_cast<double>(requested_q), static_cast<double>(q));
           }
         }
-        if (std::abs(dq) > kVelocityLimit) {
-          return reject(leg, joint, "velocity_desired", dq, -kVelocityLimit, kVelocityLimit);
+        // 2026-11-06 由整批拒绝改为限幅：实机每秒约 0.6 次在抬脚/落地瞬间小腿 dq_des
+        // 略超 2π，整批拒绝会让 12 个关节都沿用上一帧，造成顿挫。
+        if (dq != requested_dq) {
+          static robot_log::Throttle velocity_limit_log(1000);
+          if (velocity_limit_log.ready()) {
+            imu_log::print(
+              imu_log::Level::Warning,
+              "DM1 期望速度已限幅：leg=%zu joint=%zu requested=%.3f bounded=%.3f rad/s；"
+              "完整命令继续发送。\n", leg, joint,
+              static_cast<double>(requested_dq), static_cast<double>(dq));
+          }
         }
         if (kp < 0.0F || kp > mit_protocol::kKpMax) {
           return reject(leg, joint, "kp", kp, 0.0, mit_protocol::kKpMax);
@@ -341,7 +352,7 @@ public:
         // 单个目标越界只在硬件边界限幅，不阻断其他十一关节的新命令。
         const float q = std::clamp(
           command.position_desired[i], kLowerLimit[joint], kUpperLimit[joint]);
-        const float dq = command.velocity_desired[i];
+        const float dq = std::clamp(command.velocity_desired[i], -kVelocityLimit, kVelocityLimit);
         const float kp = command.kp[i];
         const float kd = command.kd[i];
         const float tau = command.torque_feedforward[i];
@@ -387,6 +398,7 @@ private:
   /// 关节速度绝对值上限，单位为 rad/s。
   /// 电机额定 40 rpm，峰值/空载 60 rpm；指令速度只是前馈目标，电机内部还有
   /// 自己的限速，所以这里放宽到空载 60 rpm，避免爬行/摆动起步时被误判。
+  /// 超出时限幅后照常发送（不拒绝整批）。
   static constexpr float kVelocityLimit = 6.2831853F;
 
   /// 以当前反馈估算该关节的 MIT-PD 总力矩。

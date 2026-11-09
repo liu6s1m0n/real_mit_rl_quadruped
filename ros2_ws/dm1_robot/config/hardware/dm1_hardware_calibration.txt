@@ -1,10 +1,14 @@
 # COPY THIS FILE, MEASURE EVERY VALUE, THEN PASS THE COPY TO --calibration.
 # DO NOT USE THESE PLACEHOLDER MOTOR IDs ON A POWERED ROBOT.
 # Format: JOINT_NAME BUS CAN_ID MASTER_ID DIRECTION(+1|-1) MOTOR_ZERO_RAD
-# MOTOR_ZERO_RAD must stay 0: the firmware zero IS the model zero.
+# MOTOR_ZERO_RAD is the raw motor position at model zero: q = DIRECTION * (raw - MOTOR_ZERO_RAD).
+# Keep it 0 unless a joint is measured to be off; reset all to 0 after every --set-zero.
 # Firmware zero = OpenDog mechanical zero (write it with --set-zero while the robot hangs):
 #   hip level; thigh motor connector aligned with the thigh screw (thigh horizontal, pointing back);
-#   calf straightened backwards against its hard stop.
+#   calf straightened backwards (aligned by eye, there is no hard stop).
+# 2026-11-05 rear calf trims, from the IMU-level fit of 31 static stands (11-04/11-05 logs):
+#   RL_calf off by -3.97 deg -> +0.0693, RR_calf off by +3.27 deg -> +0.0571 (front calves < 1 deg, kept 0).
+#   Fixes the 2.4 cm (FL+RR)-(FR+RL) foot twist; zero = -off * DIRECTION.
 # Normal startup expects the prone pose (0, -0.203, -2.22) rad, not the zero pose.
 FR_hip    can0 4 0x14  1 0.0
 FR_thigh  can0 5 0x15 -1 0.0
@@ -14,7 +18,7 @@ FL_thigh  can0 2 0x12  1 0.0
 FL_calf   can0 3 0x13  1 0.0
 RR_hip    can1 4 0x14 -1 0.0
 RR_thigh  can1 5 0x15 -1 0.0
-RR_calf   can1 6 0x16 -1 0.0
+RR_calf   can1 6 0x16 -1 0.0571
 RL_hip    can1 1 0x11 -1 0.0
 RL_thigh  can1 2 0x12  1 0.0
-RL_calf   can1 3 0x13  1 0.0
+RL_calf   can1 3 0x13  1 0.0693
