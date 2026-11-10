@@ -29,7 +29,14 @@ public:
   ocs2::TargetTrajectories update(
     const DesiredState<float> & desired, const ocs2::SystemObservation & observation);
   /// 清除站立轨迹缓存，下次 StandUp 从当前状态重新生成。
-  void reset() noexcept {standing_up_ = false; anchor_valid_ = false;}
+  void reset() noexcept
+  {
+    standing_up_ = false;
+    anchor_valid_ = false;
+    velocity_integral_.setZero();
+  }
+  /// 当前速度外环积分修正（机体系 x/y），m/s；仅供日志和测试。
+  const Eigen::Vector2d & velocityCorrection() const noexcept {return velocity_integral_;}
 
 private:
   /// 生成从当前位姿到 pose 的两点轨迹，在 reaching_time 到达。
@@ -47,6 +54,12 @@ private:
   double anchor_time_ = 0.0;            ///< 锚点上次更新的时间，s。
   Eigen::Vector2d anchor_xy_ = Eigen::Vector2d::Zero();  ///< 按期望速度积分的水平位置锚点，m。
   double anchor_yaw_ = 0.0;             ///< 按期望角速度积分的偏航锚点，rad。
+  /// 速度外环积分：有平移命令时按 (命令速度 − 质心速度) 在机体系积分，叠加到发给 MPC 的速度参考上，
+  /// 补偿持续的方向性偏差；停止平移命令后按 velocity_leak_time_ 衰减到 0。增益为 0 时关闭。
+  double velocity_gain_ = 0.0;          ///< 积分增益，1/s。
+  double velocity_limit_ = 0.06;        ///< 每个轴的修正上限，m/s。
+  double velocity_leak_time_ = 0.5;     ///< 无平移命令时的衰减时间常数，s。
+  Eigen::Vector2d velocity_integral_ = Eigen::Vector2d::Zero();  ///< 机体系 x/y 速度修正，m/s。
   ocs2::TargetTrajectories stand_up_target_;  ///< 缓存的站立轨迹，站立期间保持不变。
 };
 

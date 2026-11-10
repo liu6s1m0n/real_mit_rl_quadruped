@@ -54,7 +54,12 @@ constexpr float kDefaultImuMountYawDeg = 0.0F;
 // （dm1_diag_imucal_20261106），用 scripts/imu_mount_calibration.py 把 IMU 竖直方向
 // 对齐四足足端平面法向，两次平均消去地面坡度（两次差 ±0.2~0.3°）。
 // 轴向已用倾斜测试确认与机体 FLU 对齐，yaw 无法由重力观测，保持 0。
-constexpr float kDefaultHfiMountRollDeg = 0.97F;
+// 2026-11-09 roll 由 0.97 改为 0.22（不是安装测量值，是行走对称性配平）：实机同样命令下右移比左移快约一倍、
+// 左移更晃；仿真给 IMU 加 +1.5° roll 误差能复现同样的不对称（-1.5° 则相反），按一半修正。
+// 原因可能是安装误差、质心偏右或左右腿不一致，配平统一抵消。
+// 11-10 0.22 实测：右移 14.7、左移 6.6–9.3 cm/s（指令 12），仍不对称，再改到 -0.25（共修正约 1.2°）。
+// 11-10 -0.25 实测：右移 14.0、左移 8.3–10.6 cm/s（右/左 由 2.2→1.85→1.5），继续改到 -0.55（共修正约 1.5°，即仿真估计的全量）。
+constexpr float kDefaultHfiMountRollDeg = -0.55F;
 constexpr float kDefaultHfiMountPitchDeg = -0.07F;
 constexpr float kDefaultHfiMountYawDeg = 0.0F;
 constexpr float kMaximumImuMountDeg = 10.0F;

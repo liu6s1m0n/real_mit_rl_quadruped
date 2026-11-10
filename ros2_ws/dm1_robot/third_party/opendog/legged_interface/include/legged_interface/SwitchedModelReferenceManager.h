@@ -79,6 +79,11 @@ class SwitchedModelReferenceManager : public ReferenceManager {
     std::lock_guard<std::mutex> lock(terrainMutex_);
     terrainValid_ = false;
   }
+  // 各足落地目标的额外高度偏移 [m]（按接触点序），只作用于落地、不影响抬脚；由控制线程每周期更新。
+  void setFootTouchDownOffsets(const feet_array_t<scalar_t>& offsets) {
+    std::lock_guard<std::mutex> lock(terrainMutex_);
+    touchDownOffsets_ = offsets;
+  }
 
  protected:
   void modifyReferences(scalar_t initTime, scalar_t finalTime, const vector_t& initState, TargetTrajectories& targetTrajectories,
@@ -92,8 +97,13 @@ class SwitchedModelReferenceManager : public ReferenceManager {
     heights = terrainHeights_;
     return terrainValid_;
   }
+  feet_array_t<scalar_t> getFootTouchDownOffsets() const {
+    std::lock_guard<std::mutex> lock(terrainMutex_);
+    return touchDownOffsets_;
+  }
   mutable std::mutex terrainMutex_;
   feet_array_t<scalar_t> terrainHeights_{};
+  feet_array_t<scalar_t> touchDownOffsets_{};
   bool terrainValid_ = false;
   
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr MysetTrotSub_;

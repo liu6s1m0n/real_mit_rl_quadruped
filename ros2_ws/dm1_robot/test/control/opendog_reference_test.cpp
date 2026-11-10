@@ -91,6 +91,46 @@ TEST(OpenDogReference, LocomotionYawAnchorIntegratesCommandedRate)
   EXPECT_NEAR(target.stateTrajectory.back()(9), 0.4 + 0.3 * horizon, 1e-6);
 }
 
+// 速度外环积分：有平移命令且质心速度跟不上时，修正量在机体系累积并叠加到速度参考，受上限约束；
+// 停止平移命令后衰减，离开运动模式清零。
+TEST(OpenDogReference, LocomotionVelocityIntegralCompensatesPersistentLag)
+{
+  boost::property_tree::ptree settings;
+  boost::property_tree::read_info(config("opendog_reference.info"), settings);
+  const double gain = settings.get<double>("velocityIntegral.gain", 0.0);
+  const double limit = settings.get<double>("velocityIntegral.limit", 0.06);
+  OpenDogReference reference(config("opendog_reference.info"), config("opendog_task.info"));
+  auto state = observation();
+  state.state(9) = 0.0;  // 偏航 0，机体系与世界系一致
+  DesiredState<float> desired;
+  desired.valid = true;
+  desired.mode = ControlMode::Locomotion;
+  desired.body_position_world.z() = 0.28F;
+  desired.body_velocity_world << 0.1F, 0.0F, 0.0F;
+  reference.update(desired, state);
+  state.time += 0.2;
+  auto target = reference.update(desired, state);
+  const double expected = std::min(gain * 0.1 * 0.2, limit);
+  EXPECT_NEAR(reference.velocityCorrection().x(), expected, 1e-9);
+  EXPECT_NEAR(reference.velocityCorrection().y(), 0.0, 1e-9);
+  EXPECT_NEAR(target.stateTrajectory.back()(0), 0.1 + expected, 1e-6);
+  // 长时间跟不上时修正量被限幅
+  for (int i = 0; i < 100; ++i) {
+    state.time += 0.1;
+    reference.update(desired, state);
+  }
+  EXPECT_NEAR(reference.velocityCorrection().x(), gain > 0.0 ? limit : 0.0, 1e-9);
+  // 停止平移命令后衰减
+  desired.body_velocity_world.setZero();
+  state.time += 2.0;
+  reference.update(desired, state);
+  EXPECT_LT(reference.velocityCorrection().x(), 0.1 * limit + 1e-12);
+  // 离开运动模式清零
+  desired.mode = ControlMode::BalanceStand;
+  reference.update(desired, state);
+  EXPECT_DOUBLE_EQ(reference.velocityCorrection().norm(), 0.0);
+}
+
 // 站立期间轨迹保持首次生成时的起始时间，不随每帧刷新。
 TEST(OpenDogReference, StandUpTrajectoryRetainsItsInitialTime)
 {
@@ -172,6 +212,37 @@ TEST(OpenDogReference, BothDiagonalSwingsUseEstimatorFootCenterHeight)
       if (!contacts[leg]) {
         EXPECT_GT(planner->getZvelocityConstraint(leg, start + 1e-8), 0.0);
       }
+    }
+  }
+}
+
+// 落地高度偏移只改变摆腿落地目标，不改变抬脚高度。
+TEST(OpenDogReference, TouchDownOffsetsShiftOnlyTouchDownHeight)
+{
+  legged::LeggedInterface interface(
+    config("opendog_task.info"), config("dm1_opendog.urdf"), config("opendog_reference.info"));
+  interface.setupOptimalControlProblem(
+    config("opendog_task.info"), config("dm1_opendog.urdf"), config("opendog_reference.info"), false);
+  boost::property_tree::ptree swing;
+  boost::property_tree::read_info(config("opendog_task.info"), swing);
+  const double offset = swing.get<double>("swing_trajectory_config.touchDownOffset", 0.0);
+  const double offset_rear = swing.get<double>("swing_trajectory_config.touchDownOffsetRear", 0.0);
+  auto manager = interface.getSwitchedModelReferenceManagerPtr();
+  const ocs2::ModeSchedule modes({0.1, 0.55, 1.1, 1.55}, {15, 6, 15, 9, 15});
+  manager->setModeSchedule(modes);
+  manager->setFootTerrainHeights({{0.02, 0.02, 0.02, 0.02}});
+  manager->setFootTouchDownOffsets({{0.008, -0.008, 0.004, -0.004}});
+  manager->preSolverRun(0.0, 2.0, interface.getInitialState());
+  auto planner = manager->getSwingTrajectoryPlanner();
+  // 模式 6（RF_LH 支撑）时 LF、RH 摆动，模式 9（LF_RH 支撑）时 RF、LH 摆动
+  const std::array<double, 4> extra{{0.008, -0.008, 0.004, -0.004}};
+  for (double start : {0.1, 1.1}) {
+    const auto contacts = manager->getContactFlags(start + 0.2);
+    for (std::size_t leg = 0; leg < contacts.size(); ++leg) {
+      if (contacts[leg]) {continue;}
+      EXPECT_NEAR(planner->getZpositionConstraint(leg, start + 1e-8), 0.02, 1e-8);
+      EXPECT_NEAR(planner->getZpositionConstraint(leg, start + 0.45 - 1e-8),
+        0.02 + offset + (leg >= 2 ? offset_rear : 0.0) + extra[leg], 1e-8);
     }
   }
 }

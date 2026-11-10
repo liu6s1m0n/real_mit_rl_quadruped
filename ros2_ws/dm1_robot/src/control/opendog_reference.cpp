@@ -10,6 +10,8 @@
 #include <cmath>
 #include <utility>
 
+#include <boost/property_tree/info_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include <ocs2_core/misc/LoadData.h>
 
 namespace
@@ -29,6 +31,11 @@ OpenDogReference::OpenDogReference(
   ocs2::loadData::loadCppDataType(reference_file, "standUpDuration", stand_up_duration_);
   ocs2::loadData::loadEigenMatrix(reference_file, "defaultJointState", default_joints_);
   ocs2::loadData::loadCppDataType(task_file, "mpc.timeHorizon", horizon_);
+  boost::property_tree::ptree settings;
+  boost::property_tree::read_info(reference_file, settings);
+  velocity_gain_ = std::max(0.0, settings.get<double>("velocityIntegral.gain", velocity_gain_));
+  velocity_limit_ = std::max(0.0, settings.get<double>("velocityIntegral.limit", velocity_limit_));
+  velocity_leak_time_ = std::max(1e-3, settings.get<double>("velocityIntegral.leakTime", velocity_leak_time_));
 }
 
 ocs2::TargetTrajectories OpenDogReference::poseToTrajectory(
@@ -68,7 +75,10 @@ ocs2::TargetTrajectories OpenDogReference::update(
     return stand_up_target_;
   }
   standing_up_ = false;
-  if (desired.mode != ControlMode::Locomotion) {anchor_valid_ = false;}
+  if (desired.mode != ControlMode::Locomotion) {
+    anchor_valid_ = false;
+    velocity_integral_.setZero();
+  }
   ocs2::vector_t pose(6);
   pose << desired.body_position_world.cast<double>(),
     double(desired.body_rpy.z()), double(desired.body_rpy.y()), double(desired.body_rpy.x());
@@ -82,15 +92,38 @@ ocs2::TargetTrajectories OpenDogReference::update(
     const Eigen::Vector2d velocity_xy = desired.body_velocity_world.head<2>().cast<double>();
     const double current_yaw = observation.state(9);
     const double yaw_rate = desired.body_angular_velocity.z();
+    double dt = 0.0;
     if (!anchor_valid_) {
       anchor_xy_ = current_xy;
       anchor_yaw_ = current_yaw;
       anchor_valid_ = true;
+      velocity_integral_.setZero();
     } else {
-      const double dt = std::max(0.0, observation.time - anchor_time_);
+      dt = std::max(0.0, observation.time - anchor_time_);
       anchor_xy_ += velocity_xy * dt;
       anchor_yaw_ += yaw_rate * dt;
     }
+    // 速度外环积分（2026-11-09）：实机同样的速度命令，后退和右移偏快、前进和左移偏慢（有约 8 N 的持续后向扰动，
+    // MPC 只按位置误差比例纠正，总留有方向性误差）。有平移命令时在机体系积分命令与质心速度之差，
+    // 叠加到给 MPC 的速度参考；锚点仍按原命令积分。
+    const double cy = std::cos(current_yaw);
+    const double sy = std::sin(current_yaw);
+    const auto to_body = [cy, sy](const Eigen::Vector2d & v) {
+        return Eigen::Vector2d(cy * v.x() + sy * v.y(), -sy * v.x() + cy * v.y());
+      };
+    if (velocity_gain_ > 0.0 && dt > 0.0) {
+      const Eigen::Vector2d command_body = to_body(velocity_xy);
+      if (command_body.norm() > 0.02) {
+        const Eigen::Vector2d error = command_body - to_body(observation.state.head<2>());
+        velocity_integral_ = (velocity_integral_ + velocity_gain_ * error * dt).cwiseMax(-velocity_limit_)
+          .cwiseMin(velocity_limit_);
+      } else {
+        velocity_integral_ *= std::exp(-dt / velocity_leak_time_);
+      }
+    }
+    const Eigen::Vector2d reference_xy = velocity_xy + Eigen::Vector2d(
+      cy * velocity_integral_.x() - sy * velocity_integral_.y(),
+      sy * velocity_integral_.x() + cy * velocity_integral_.y());
     anchor_time_ = observation.time;
     const Eigen::Vector2d lead = anchor_xy_ - current_xy;
     if (lead.norm() > kMaximumAnchorLead) {
@@ -99,11 +132,12 @@ ocs2::TargetTrajectories OpenDogReference::update(
     // 偏航误差按 [-π, π] 取最短方向，与状态里的偏航是否连续展开无关。
     const double yaw_lead = std::remainder(anchor_yaw_ - current_yaw, 2.0 * M_PI);
     anchor_yaw_ = current_yaw + std::clamp(yaw_lead, -kMaximumYawAnchorLead, kMaximumYawAnchorLead);
-    pose.head<2>() = anchor_xy_ + horizon_ * velocity_xy;
+    pose.head<2>() = anchor_xy_ + horizon_ * reference_xy;
     pose(3) = anchor_yaw_ + horizon_ * yaw_rate;
     auto target = poseToTrajectory(pose, observation, observation.time + horizon_);
     for (auto & state : target.stateTrajectory) {
       state.head<3>() = desired.body_velocity_world.cast<double>();
+      state.head<2>() = reference_xy;
     }
     return target;
   }

@@ -55,15 +55,16 @@ class FootCenterReferenceManager final : public SwitchedModelReferenceManager {
     SwitchedModelReferenceManager::modifyReferences(initTime, finalTime, initState, targetTrajectories, modeSchedule);
     feet_array_t<scalar_t> heights{};
     if (!getFootTerrainHeights(heights)) {
-      getSwingTrajectoryPlanner()->update(modeSchedule, footRadius_);
-      return;
+      heights.fill(footRadius_);
     }
-    // 每条腿的抬脚和落地高度都取该腿最近一次稳定支撑时的足端高度
+    // 每条腿的抬脚和落地高度取该腿最近一次稳定支撑时的足端高度（未启用自适应时为足端半径），
+    // 落地再叠加控制线程给出的偏移（侧移时运动方向一侧抬高、另一侧降低）
+    const auto offsets = getFootTouchDownOffsets();
     feet_array_t<scalar_array_t> liftOff;
     feet_array_t<scalar_array_t> touchDown;
     for (size_t leg = 0; leg < heights.size(); ++leg) {
       liftOff[leg] = scalar_array_t(modeSchedule.modeSequence.size(), heights[leg]);
-      touchDown[leg] = liftOff[leg];
+      touchDown[leg] = scalar_array_t(modeSchedule.modeSequence.size(), heights[leg] + offsets[leg]);
     }
     getSwingTrajectoryPlanner()->update(modeSchedule, liftOff, touchDown);
   }

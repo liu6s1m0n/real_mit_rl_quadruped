@@ -149,6 +149,10 @@ struct OpenDogAlgorithm::Impl
   std::array<std::size_t, kNumLegs> contact_for_current{{1, 0, 3, 2}};
   /// 落地高度自适应：每条腿按自己最近一次稳定支撑的足端高度规划摆腿（按接触点序 LF/RF/LH/RH）。
   bool adaptive_touch_down = false;
+  /// 按命令速度修正落地高度，s（落地偏移 = 增益 × 机体系命令速度，运动方向一侧为正）；0 为关闭。
+  /// 侧移时机身每相向运动方向侧倾，运动方向一侧的脚先着地、另一侧晚落地且落地力大。
+  double lateral_touch_down_gain = 0.0;
+  double longitudinal_touch_down_gain = 0.0;
   /// 摆腿期望提前量，s：摆动腿发给电机的期望角度/速度取 t + swing_lead_time 时刻的规划，抵消实机摆腿跟踪滞后；0 为关闭。
   double swing_lead_time = 0.0;
   double foot_radius = 0.02;                               ///< 足端半径，即平地上足端球心高度，m。
@@ -230,6 +234,12 @@ bool OpenDogAlgorithm::configure()
       impl_->legged_interface->getPinocchioInterface());
     impl_->terrain_kinematics.reset(impl_->ee_kinematics->clone());
     impl_->terrain_kinematics->setPinocchioInterface(*impl_->terrain_pinocchio);
+    impl_->lateral_touch_down_gain = swing_settings.get<double>(
+      "swing_trajectory_config.lateralTouchDownGain", 0.0);
+    impl_->longitudinal_touch_down_gain = swing_settings.get<double>(
+      "swing_trajectory_config.longitudinalTouchDownGain", 0.0);
+    std::printf("[OpenDog][SWING] lateralTouchDownGain=%.3f s longitudinalTouchDownGain=%.3f s\n",
+      impl_->lateral_touch_down_gain, impl_->longitudinal_touch_down_gain);
     impl_->swing_lead_time = std::clamp(
       swing_settings.get<double>("swing_trajectory_config.swingLeadTime", 0.0), 0.0, 0.05);
     std::printf("[OpenDog][SWING] adaptiveTouchDown=%d footRadius=%.3f swingLeadTime=%.3f s\n",
@@ -510,6 +520,26 @@ bool OpenDogAlgorithm::compute(
     }
     impl_->wbc->setContactOverride(wbc_contact, probing, detection.probe_velocity);
   }
+  // 5c. 按命令速度修正各足落地高度（只作用于落地）：侧移时运动方向一侧抬高、另一侧降低，前后同理。
+  // 接触点序 LF/RF/LH/RH；偏移限幅 ±1 cm，非踏步模式为 0。
+  if (impl_->lateral_touch_down_gain != 0.0 || impl_->longitudinal_touch_down_gain != 0.0) {
+    std::array<ocs2::scalar_t, kNumLegs> offsets{};
+    if (locomotion) {
+      const double yaw = impl_->observation.state(9);
+      const double vx = input.desired.body_velocity_world.x();
+      const double vy = input.desired.body_velocity_world.y();
+      const double vx_body = std::cos(yaw) * vx + std::sin(yaw) * vy;
+      const double vy_body = -std::sin(yaw) * vx + std::cos(yaw) * vy;
+      constexpr std::array<double, kNumLegs> side{{1.0, -1.0, 1.0, -1.0}};   // 左为正
+      constexpr std::array<double, kNumLegs> front{{1.0, 1.0, -1.0, -1.0}};  // 前为正
+      for (std::size_t contact = 0; contact < kNumLegs; ++contact) {
+        offsets[contact] = std::clamp(
+          impl_->lateral_touch_down_gain * vy_body * side[contact] +
+          impl_->longitudinal_touch_down_gain * vx_body * front[contact], -0.01, 0.01);
+      }
+    }
+    impl_->legged_interface->getSwitchedModelReferenceManagerPtr()->setFootTouchDownOffsets(offsets);
+  }
   const auto wbc_start = std::chrono::steady_clock::now();
   const auto wbc_solution = impl_->wbc->update(
     optimized_state, optimized_input, impl_->measured_rbd_state,
@@ -521,21 +551,36 @@ bool OpenDogAlgorithm::compute(
     optimized_state, info);
   const auto velocity = ocs2::centroidal_model::getJointVelocities(
     optimized_input, info);
-  // 摆腿滞后补偿：实机摆腿比规划慢约 20–30 ms，摆动腿改发 t + swing_lead_time 时刻的期望角度和速度；
-  // 支撑腿、WBC 前馈力矩、计划模式和触地检测仍用 t 时刻
-  ocs2::vector_t lead_position = position;
-  ocs2::vector_t lead_velocity = velocity;
-  if (impl_->swing_lead_time > 0.0) {
-    ocs2::vector_t lead_state;
-    ocs2::vector_t lead_input;
-    std::size_t lead_mode = 0;
-    impl_->mrt->evaluatePolicy(
-      impl_->observation.time + impl_->swing_lead_time, impl_->observation.state,
-      lead_state, lead_input, lead_mode);
-    lead_position = ocs2::centroidal_model::getJointAngles(lead_state, info);
-    lead_velocity = ocs2::centroidal_model::getJointVelocities(lead_input, info);
-  }
+  // 摆腿滞后补偿：实机摆腿比规划慢约 20–30 ms，摆动腿改发 t + lead 时刻的期望角度和速度；
+  // 支撑腿、WBC 前馈力矩、计划模式和触地检测仍用 t 时刻。
+  // lead 不越过该腿的计划落地时刻：越过时取到的是支撑期的关节速度（约 0），电机会在空中先刹车，
+  // 11-09 实机 0.01 s 时左前、左后落地晚了 10–20 ms。所以 lead = min(swing_lead_time, 距计划落地的时间)。
   const auto planned_stance_now = ocs2::legged_robot::modeNumber2StanceLeg(planned_mode);
+  std::array<ocs2::vector_t, kNumLegs> lead_position;
+  std::array<ocs2::vector_t, kNumLegs> lead_velocity;
+  if (impl_->swing_lead_time > 0.0) {
+    const auto & schedule = impl_->mrt->getPolicy().modeSchedule_;
+    const double now = impl_->observation.time;
+    for (std::size_t contact = 0; contact < kNumLegs; ++contact) {
+      if (planned_stance_now[contact]) {continue;}
+      double touch_down = now + impl_->swing_lead_time;
+      for (std::size_t event = 0; event < schedule.eventTimes.size(); ++event) {
+        if (schedule.eventTimes[event] > now &&
+          ocs2::legged_robot::modeNumber2StanceLeg(schedule.modeSequence[event + 1])[contact])
+        {
+          touch_down = schedule.eventTimes[event];
+          break;
+        }
+      }
+      const double lead = std::clamp(touch_down - now, 0.0, impl_->swing_lead_time);
+      ocs2::vector_t lead_state;
+      ocs2::vector_t lead_input;
+      std::size_t lead_mode = 0;
+      impl_->mrt->evaluatePolicy(now + lead, impl_->observation.state, lead_state, lead_input, lead_mode);
+      lead_position[contact] = ocs2::centroidal_model::getJointAngles(lead_state, info);
+      lead_velocity[contact] = ocs2::centroidal_model::getJointVelocities(lead_input, info);
+    }
+  }
 
   // 6. 填写状态估计输出；世界系加速度减去重力
   output.valid = true;
@@ -572,9 +617,9 @@ bool OpenDogAlgorithm::compute(
       probe_velocity = impl_->leg_jacobian[contact_index].fullPivLu().solve(
         Eigen::Vector3d(0.0, 0.0, -detection.probe_velocity));
     }
-    const bool swing_leg = !planned_stance_now[contact_index];
-    const auto & leg_position = swing_leg ? lead_position : position;
-    const auto & leg_velocity = swing_leg ? lead_velocity : velocity;
+    const bool lead_leg = lead_position[contact_index].size() > 0;
+    const ocs2::vector_t & leg_position = lead_leg ? lead_position[contact_index] : position;
+    const ocs2::vector_t & leg_velocity = lead_leg ? lead_velocity[contact_index] : velocity;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t opendog_index = opendog_leg * kJointsPerLeg + joint;
       command.position_desired(static_cast<Eigen::Index>(joint)) =

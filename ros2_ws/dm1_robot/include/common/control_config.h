@@ -24,8 +24,8 @@ namespace control_config
   {
     inline constexpr float forward = 0.18F;  ///< 选择慢速前进档时的目标前进速度；增大后同一慢档命令要求走得更快。
     inline constexpr float forward_fast = 0.36F;  ///< 选择快速前进档时的目标前进速度；应大于慢档。
-    inline constexpr float backward = 0.18F;  ///< 后退档的速度大小；下游自动添加后退方向的负号，这里填写正数。
-    inline constexpr float lateral = 0.15F;  ///< 左移和右移档共用的横移速度大小；左右方向由命令选择。
+    inline constexpr float backward = 0.15F;  ///< 后退档的速度大小；下游自动添加后退方向的负号，这里填写正数。
+    inline constexpr float lateral = 0.12F;  ///< 左移和右移档共用的横移速度大小；左右方向由命令选择。
     inline constexpr float yaw_rate = 0.20F;  ///< 左右转向档共用的转向速度大小；增大后要求更快地改变朝向。
     inline constexpr int watchdog_ms = 500;  ///< 开启 watchdog 的运动命令多久未刷新后自动停止；当前键盘/GUI 是锁存命令，默认不启用此超时。
   }

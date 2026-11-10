@@ -348,7 +348,7 @@ TEST(HardwareRunnerIsolation, OpenDogStandUpCancelsBackwardAndUsesOwnSettings)
   config.replace(
     "opendog_reference.info", "comHeight                           0.32",
     "comHeight                           0.31");
-  config.replace("opendog_task.info", "backward         0.18", "backward         0.07");
+  config.replace("opendog_task.info", "backward         0.15", "backward         0.07");
   OpenDogRobotRunner runner(config.path.string(), 0.002F);
   ASSERT_TRUE(runner.configure());
   runner.reset();
