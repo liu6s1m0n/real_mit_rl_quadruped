@@ -153,6 +153,9 @@ struct OpenDogAlgorithm::Impl
   /// 侧移时机身每相向运动方向侧倾，运动方向一侧的脚先着地、另一侧晚落地且落地力大。
   double lateral_touch_down_gain = 0.0;
   double longitudinal_touch_down_gain = 0.0;
+  /// 运动时后腿额外降低落地目标，m/(m/s)：后腿偏移 -= 增益 × |水平命令速度|；0 为关闭。
+  /// 实机侧移、后退、前进时后腿都晚落地 18–48 ms（原地基本准时）。
+  double rear_touch_down_speed_gain = 0.0;
   /// 摆腿期望提前量，s：摆动腿发给电机的期望角度/速度取 t + swing_lead_time 时刻的规划，抵消实机摆腿跟踪滞后；0 为关闭。
   double swing_lead_time = 0.0;
   double foot_radius = 0.02;                               ///< 足端半径，即平地上足端球心高度，m。
@@ -238,8 +241,11 @@ bool OpenDogAlgorithm::configure()
       "swing_trajectory_config.lateralTouchDownGain", 0.0);
     impl_->longitudinal_touch_down_gain = swing_settings.get<double>(
       "swing_trajectory_config.longitudinalTouchDownGain", 0.0);
-    std::printf("[OpenDog][SWING] lateralTouchDownGain=%.3f s longitudinalTouchDownGain=%.3f s\n",
-      impl_->lateral_touch_down_gain, impl_->longitudinal_touch_down_gain);
+    impl_->rear_touch_down_speed_gain = swing_settings.get<double>(
+      "swing_trajectory_config.rearTouchDownSpeedGain", 0.0);
+    std::printf(
+      "[OpenDog][SWING] lateralTouchDownGain=%.3f s longitudinalTouchDownGain=%.3f s rearTouchDownSpeedGain=%.3f s\n",
+      impl_->lateral_touch_down_gain, impl_->longitudinal_touch_down_gain, impl_->rear_touch_down_speed_gain);
     impl_->swing_lead_time = std::clamp(
       swing_settings.get<double>("swing_trajectory_config.swingLeadTime", 0.0), 0.0, 0.05);
     std::printf("[OpenDog][SWING] adaptiveTouchDown=%d footRadius=%.3f swingLeadTime=%.3f s\n",
@@ -522,7 +528,9 @@ bool OpenDogAlgorithm::compute(
   }
   // 5c. 按命令速度修正各足落地高度（只作用于落地）：侧移时运动方向一侧抬高、另一侧降低，前后同理。
   // 接触点序 LF/RF/LH/RH；偏移限幅 ±1 cm，非踏步模式为 0。
-  if (impl_->lateral_touch_down_gain != 0.0 || impl_->longitudinal_touch_down_gain != 0.0) {
+  if (impl_->lateral_touch_down_gain != 0.0 || impl_->longitudinal_touch_down_gain != 0.0 ||
+    impl_->rear_touch_down_speed_gain != 0.0)
+  {
     std::array<ocs2::scalar_t, kNumLegs> offsets{};
     if (locomotion) {
       const double yaw = impl_->observation.state(9);
@@ -533,9 +541,11 @@ bool OpenDogAlgorithm::compute(
       constexpr std::array<double, kNumLegs> side{{1.0, -1.0, 1.0, -1.0}};   // 左为正
       constexpr std::array<double, kNumLegs> front{{1.0, 1.0, -1.0, -1.0}};  // 前为正
       for (std::size_t contact = 0; contact < kNumLegs; ++contact) {
+        const double rear = front[contact] < 0.0 ?
+          -impl_->rear_touch_down_speed_gain * std::hypot(vx_body, vy_body) : 0.0;
         offsets[contact] = std::clamp(
           impl_->lateral_touch_down_gain * vy_body * side[contact] +
-          impl_->longitudinal_touch_down_gain * vx_body * front[contact], -0.01, 0.01);
+          impl_->longitudinal_touch_down_gain * vx_body * front[contact] + rear, -0.01, 0.01);
       }
     }
     impl_->legged_interface->getSwitchedModelReferenceManagerPtr()->setFootTouchDownOffsets(offsets);

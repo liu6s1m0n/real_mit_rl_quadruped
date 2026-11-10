@@ -34,7 +34,11 @@ public:
     standing_up_ = false;
     anchor_valid_ = false;
     velocity_integral_.setZero();
+    height_integral_ = 0.0;
+    last_update_time_ = -1.0;
   }
+  /// 当前高度积分修正，m；仅供日志和测试。
+  double heightCorrection() const noexcept {return height_integral_;}
   /// 当前速度外环积分修正（机体系 x/y），m/s；仅供日志和测试。
   const Eigen::Vector2d & velocityCorrection() const noexcept {return velocity_integral_;}
 
@@ -42,7 +46,7 @@ private:
   /// 生成从当前位姿到 pose 的两点轨迹，在 reaching_time 到达。
   ocs2::TargetTrajectories poseToTrajectory(
     const ocs2::vector_t & pose, const ocs2::SystemObservation & observation,
-    double reaching_time) const;
+    double reaching_time, double pitch_offset = 0.0, double height_offset = 0.0) const;
   double displacement_velocity_ = 0.0;  ///< 平移目标速度，m/s。
   double rotation_velocity_ = 0.0;      ///< 转向目标角速度，rad/s。
   double com_height_ = 0.0;             ///< 站立质心高度，m。
@@ -60,6 +64,16 @@ private:
   double velocity_limit_ = 0.06;        ///< 每个轴的修正上限，m/s。
   double velocity_leak_time_ = 0.5;     ///< 无平移命令时的衰减时间常数，s。
   Eigen::Vector2d velocity_integral_ = Eigen::Vector2d::Zero();  ///< 机体系 x/y 速度修正，m/s。
+  /// 高度积分：在各模式下积分 (comHeight − 机身高度)，叠加到高度目标，使站起、站立、踏步时机身高度一致；
+  /// 站起轨迹的爬升段不积分。增益为 0 时关闭。
+  double height_gain_ = 0.0;            ///< 积分增益，1/s。
+  double height_limit_ = 0.03;          ///< 修正上限，m。
+  double height_integral_ = 0.0;        ///< 高度目标修正，m。
+  double last_update_time_ = -1.0;      ///< 上次 update() 的时间，s。
+  /// 踏步时俯仰目标 = −pitch_velocity_gain_ × 机体系前进命令速度（rad/(m/s)），抵消前进低头、后退抬头。
+  double pitch_velocity_gain_ = 0.0;
+  /// 踏步时高度目标 −= height_velocity_gain_ × 机体系前进命令速度（m/(m/s)），抵消前进升高、后退下降。
+  double height_velocity_gain_ = 0.0;
   ocs2::TargetTrajectories stand_up_target_;  ///< 缓存的站立轨迹，站立期间保持不变。
 };
 

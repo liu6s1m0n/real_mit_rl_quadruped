@@ -36,16 +36,20 @@ OpenDogReference::OpenDogReference(
   velocity_gain_ = std::max(0.0, settings.get<double>("velocityIntegral.gain", velocity_gain_));
   velocity_limit_ = std::max(0.0, settings.get<double>("velocityIntegral.limit", velocity_limit_));
   velocity_leak_time_ = std::max(1e-3, settings.get<double>("velocityIntegral.leakTime", velocity_leak_time_));
+  height_gain_ = std::max(0.0, settings.get<double>("heightIntegral.gain", height_gain_));
+  height_limit_ = std::max(0.0, settings.get<double>("heightIntegral.limit", height_limit_));
+  pitch_velocity_gain_ = settings.get<double>("pitchVelocityGain", pitch_velocity_gain_);
+  height_velocity_gain_ = settings.get<double>("heightVelocityGain", height_velocity_gain_);
 }
 
 ocs2::TargetTrajectories OpenDogReference::poseToTrajectory(
   const ocs2::vector_t & pose, const ocs2::SystemObservation & observation,
-  double reaching_time) const
+  double reaching_time, double pitch_offset, double height_offset) const
 {
-  // pose 为 (x, y, z, yaw, pitch, roll)；起点高度取站立高度，pitch/roll 取 0。
+  // pose 为 (x, y, z, yaw, pitch, roll)；起点高度取站立高度（含高度积分修正），pitch 取 pitch_offset，roll 取 0。
   ocs2::vector_t current_pose = observation.state.segment<6>(6);
-  current_pose(2) = com_height_;
-  current_pose(4) = 0.0;
+  current_pose(2) = com_height_ + height_integral_ + height_offset;
+  current_pose(4) = pitch_offset;
   current_pose(5) = 0.0;
   ocs2::vector_array_t states(2, ocs2::vector_t::Zero(observation.state.size()));
   states[0] << ocs2::vector_t::Zero(6), current_pose, default_joints_;
@@ -59,6 +63,18 @@ ocs2::TargetTrajectories OpenDogReference::update(
 {
   // 趴卧初始化和趴下由 runner 的关节插值完成，不经过这里；算法只接收
   // StandUp、BalanceStand 和 Locomotion。
+  // 高度积分（2026-11-10）：实机站起结束只有约 0.30 m、踏步时 0.33–0.34 m（目标 0.32），
+  // 各模式稳态高度不同。站起爬升段之外都积分 (comHeight − 机身高度)，叠加到高度目标上。
+  const double dt = last_update_time_ < 0.0 ? 0.0 :
+    std::clamp(observation.time - last_update_time_, 0.0, 0.1);
+  last_update_time_ = observation.time;
+  const bool climbing = desired.mode == ControlMode::StandUp &&
+    (!standing_up_ || observation.time < stand_up_target_.timeTrajectory.back());
+  if (height_gain_ > 0.0 && !climbing) {
+    height_integral_ = std::clamp(
+      height_integral_ + height_gain_ * (com_height_ - observation.state(8)) * dt,
+      -height_limit_, height_limit_);
+  }
   if (desired.mode == ControlMode::StandUp) {
     // 首次进入时以当前状态为起点生成站立轨迹，之后保持该轨迹直到离开 StandUp。
     if (!standing_up_) {
@@ -72,7 +88,9 @@ ocs2::TargetTrajectories OpenDogReference::update(
         {current, target}, ocs2::vector_array_t(2, ocs2::vector_t::Zero(observation.input.size()))};
       standing_up_ = true;
     }
-    return stand_up_target_;
+    auto target = stand_up_target_;
+    target.stateTrajectory.back()(8) += height_integral_;
+    return target;
   }
   standing_up_ = false;
   if (desired.mode != ControlMode::Locomotion) {
@@ -82,6 +100,7 @@ ocs2::TargetTrajectories OpenDogReference::update(
   ocs2::vector_t pose(6);
   pose << desired.body_position_world.cast<double>(),
     double(desired.body_rpy.z()), double(desired.body_rpy.y()), double(desired.body_rpy.x());
+  pose(2) += height_integral_;
   if (desired.mode == ControlMode::Locomotion) {
     // 运动模式：水平目标取按期望速度积分的锚点再外推一个预测时长，轨迹各点带期望线速度。
     // 锚点不随当前位置重置，速度跟不上或原地漂移时误差会累积，MPC 据此追回；
@@ -134,7 +153,15 @@ ocs2::TargetTrajectories OpenDogReference::update(
     anchor_yaw_ = current_yaw + std::clamp(yaw_lead, -kMaximumYawAnchorLead, kMaximumYawAnchorLead);
     pose.head<2>() = anchor_xy_ + horizon_ * reference_xy;
     pose(3) = anchor_yaw_ + horizon_ * yaw_rate;
-    auto target = poseToTrajectory(pose, observation, observation.time + horizon_);
+    // 前进/后退的俯仰前馈（2026-11-10）：实机前进低头约 0.3°、后退抬头约 0.5°（相对原地），
+    // 目标俯仰取 −增益 × 机体系前进命令速度。
+    const double pitch_offset = -pitch_velocity_gain_ * to_body(velocity_xy).x();
+    pose(4) += pitch_offset;
+    // 高度前馈（2026-11-10）：实机前进高约 1 cm、后退低约 1.3 cm（相对原地），高度积分太慢跟不上短时运动。
+    const double height_offset = -height_velocity_gain_ * to_body(velocity_xy).x();
+    pose(2) += height_offset;
+    auto target = poseToTrajectory(
+      pose, observation, observation.time + horizon_, pitch_offset, height_offset);
     for (auto & state : target.stateTrajectory) {
       state.head<3>() = desired.body_velocity_world.cast<double>();
       state.head<2>() = reference_xy;

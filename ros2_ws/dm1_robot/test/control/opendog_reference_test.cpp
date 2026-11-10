@@ -3,6 +3,7 @@
  */
 #include <pinocchio/fwd.hpp>
 
+#include <cmath>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -50,7 +51,12 @@ TEST(OpenDogReference, KeepsOriginalVelocityTrajectoryFieldOrder)
   EXPECT_DOUBLE_EQ(target.timeTrajectory.back(), state.time + horizon);
   EXPECT_NEAR(target.stateTrajectory.back()(6), 1.0 + 0.2 * horizon, 1e-7);
   EXPECT_NEAR(target.stateTrajectory.back()(7), 2.0 - 0.1 * horizon, 1e-7);
-  EXPECT_NEAR(target.stateTrajectory.back()(8), 0.28, 1e-7);
+  // 高度前馈：目标高度 −= heightVelocityGain × 机体系前进命令速度（偏航 0.4 rad）
+  boost::property_tree::ptree reference_settings;
+  boost::property_tree::read_info(config("opendog_reference.info"), reference_settings);
+  const double height_gain = reference_settings.get<double>("heightVelocityGain", 0.0);
+  const double forward = std::cos(0.4) * 0.2 + std::sin(0.4) * -0.1;
+  EXPECT_NEAR(target.stateTrajectory.back()(8), 0.28 - height_gain * forward, 1e-6);
   EXPECT_NEAR(target.stateTrajectory.back()(9), 0.4 + 0.3 * horizon, 1e-7);
   EXPECT_NEAR(target.stateTrajectory.back()(0), 0.2, 1e-7);
   EXPECT_NEAR(target.stateTrajectory.back()(1), -0.1, 1e-7);
@@ -129,6 +135,42 @@ TEST(OpenDogReference, LocomotionVelocityIntegralCompensatesPersistentLag)
   desired.mode = ControlMode::BalanceStand;
   reference.update(desired, state);
   EXPECT_DOUBLE_EQ(reference.velocityCorrection().norm(), 0.0);
+}
+
+// 高度积分：机身低于站立高度时，修正量逐步增大并叠加到高度目标；踏步时俯仰目标随前进速度前馈。
+TEST(OpenDogReference, HeightIntegralAndPitchFeedforward)
+{
+  boost::property_tree::ptree settings;
+  boost::property_tree::read_info(config("opendog_reference.info"), settings);
+  const double gain = settings.get<double>("heightIntegral.gain", 0.0);
+  const double limit = settings.get<double>("heightIntegral.limit", 0.03);
+  const double pitch_gain = settings.get<double>("pitchVelocityGain", 0.0);
+  const double height_gain = settings.get<double>("heightVelocityGain", 0.0);
+  double com_height = 0.0;
+  ocs2::loadData::loadCppDataType(config("opendog_reference.info"), "comHeight", com_height);
+  OpenDogReference reference(config("opendog_reference.info"), config("opendog_task.info"));
+  auto state = observation();
+  state.state(8) = com_height - 0.02;   // 机身比目标低 2 cm
+  state.state(9) = 0.0;
+  DesiredState<float> desired;
+  desired.valid = true;
+  desired.mode = ControlMode::Locomotion;
+  desired.body_position_world.z() = static_cast<float>(com_height);
+  desired.body_velocity_world << 0.2F, 0.0F, 0.0F;
+  reference.update(desired, state);
+  state.time += 0.1;
+  auto target = reference.update(desired, state);
+  const double expected = std::min(gain * 0.02 * 0.1, limit);
+  EXPECT_NEAR(reference.heightCorrection(), expected, 1e-9);
+  EXPECT_NEAR(target.stateTrajectory.back()(8), com_height + expected - height_gain * 0.2, 1e-6);
+  EXPECT_NEAR(target.stateTrajectory.back()(10), -pitch_gain * 0.2, 1e-6);
+  for (int i = 0; i < 200; ++i) {
+    state.time += 0.1;
+    reference.update(desired, state);
+  }
+  EXPECT_NEAR(reference.heightCorrection(), gain > 0.0 ? limit : 0.0, 1e-9);
+  reference.reset();
+  EXPECT_DOUBLE_EQ(reference.heightCorrection(), 0.0);
 }
 
 // 站立期间轨迹保持首次生成时的起始时间，不随每帧刷新。
