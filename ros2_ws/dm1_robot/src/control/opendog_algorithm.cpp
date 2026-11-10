@@ -149,6 +149,8 @@ struct OpenDogAlgorithm::Impl
   std::array<std::size_t, kNumLegs> contact_for_current{{1, 0, 3, 2}};
   /// 落地高度自适应：每条腿按自己最近一次稳定支撑的足端高度规划摆腿（按接触点序 LF/RF/LH/RH）。
   bool adaptive_touch_down = false;
+  /// 摆腿期望提前量，s：摆动腿发给电机的期望角度/速度取 t + swing_lead_time 时刻的规划，抵消实机摆腿跟踪滞后；0 为关闭。
+  double swing_lead_time = 0.0;
   double foot_radius = 0.02;                               ///< 足端半径，即平地上足端球心高度，m。
   std::array<double, kNumLegs> terrain_height{{0.02, 0.02, 0.02, 0.02}};
   std::array<double, kNumLegs> stance_time{{0.0, 0.0, 0.0, 0.0}};  ///< 各足连续计划支撑的时长，s。
@@ -228,8 +230,10 @@ bool OpenDogAlgorithm::configure()
       impl_->legged_interface->getPinocchioInterface());
     impl_->terrain_kinematics.reset(impl_->ee_kinematics->clone());
     impl_->terrain_kinematics->setPinocchioInterface(*impl_->terrain_pinocchio);
-    std::printf("[OpenDog][SWING] adaptiveTouchDown=%d footRadius=%.3f\n",
-      impl_->adaptive_touch_down ? 1 : 0, impl_->foot_radius);
+    impl_->swing_lead_time = std::clamp(
+      swing_settings.get<double>("swing_trajectory_config.swingLeadTime", 0.0), 0.0, 0.05);
+    std::printf("[OpenDog][SWING] adaptiveTouchDown=%d footRadius=%.3f swingLeadTime=%.3f s\n",
+      impl_->adaptive_touch_down ? 1 : 0, impl_->foot_radius, impl_->swing_lead_time);
   }
   // 真实触地检测（可选，task 文件 contactDetection 段；缺省关闭，触地即计划）
   {
@@ -517,6 +521,21 @@ bool OpenDogAlgorithm::compute(
     optimized_state, info);
   const auto velocity = ocs2::centroidal_model::getJointVelocities(
     optimized_input, info);
+  // 摆腿滞后补偿：实机摆腿比规划慢约 20–30 ms，摆动腿改发 t + swing_lead_time 时刻的期望角度和速度；
+  // 支撑腿、WBC 前馈力矩、计划模式和触地检测仍用 t 时刻
+  ocs2::vector_t lead_position = position;
+  ocs2::vector_t lead_velocity = velocity;
+  if (impl_->swing_lead_time > 0.0) {
+    ocs2::vector_t lead_state;
+    ocs2::vector_t lead_input;
+    std::size_t lead_mode = 0;
+    impl_->mrt->evaluatePolicy(
+      impl_->observation.time + impl_->swing_lead_time, impl_->observation.state,
+      lead_state, lead_input, lead_mode);
+    lead_position = ocs2::centroidal_model::getJointAngles(lead_state, info);
+    lead_velocity = ocs2::centroidal_model::getJointVelocities(lead_input, info);
+  }
+  const auto planned_stance_now = ocs2::legged_robot::modeNumber2StanceLeg(planned_mode);
 
   // 6. 填写状态估计输出；世界系加速度减去重力
   output.valid = true;
@@ -553,16 +572,20 @@ bool OpenDogAlgorithm::compute(
       probe_velocity = impl_->leg_jacobian[contact_index].fullPivLu().solve(
         Eigen::Vector3d(0.0, 0.0, -detection.probe_velocity));
     }
+    const bool swing_leg = !planned_stance_now[contact_index];
+    const auto & leg_position = swing_leg ? lead_position : position;
+    const auto & leg_velocity = swing_leg ? lead_velocity : velocity;
     for (std::size_t joint = 0; joint < kJointsPerLeg; ++joint) {
       const std::size_t opendog_index = opendog_leg * kJointsPerLeg + joint;
       command.position_desired(static_cast<Eigen::Index>(joint)) =
-        static_cast<float>(position(static_cast<Eigen::Index>(opendog_index)));
-      const double joint_velocity = velocity(static_cast<Eigen::Index>(opendog_index)) +
+        static_cast<float>(leg_position(static_cast<Eigen::Index>(opendog_index)));
+      const double joint_velocity = leg_velocity(static_cast<Eigen::Index>(opendog_index)) +
         probe_velocity(static_cast<Eigen::Index>(joint));
       command.velocity_desired(static_cast<Eigen::Index>(joint)) = static_cast<float>(joint_velocity);
-      // WBC 力矩不含关节摩擦，踏步时按期望转速方向补上库仑摩擦。站立时 dq_des 只是零附近的噪声，
-      // 补偿会随符号来回跳（11-09 实机 1.5 Nm/0.1 rad/s 站立时电机自激振荡），所以只在踏步模式下补。
-      const double friction = locomotion ?
+      // WBC 力矩不含关节摩擦，踏步时按期望转速方向给计划支撑的腿补上库仑摩擦。站立时 dq_des 只是零附近的噪声，
+      // 补偿会随符号来回跳（11-09 实机 1.5 Nm/0.1 rad/s 站立时电机自激振荡），所以只在踏步模式下补；
+      // 摆腿本来就跟得上计划，补偿只会把脚更快地送到地面（11-09 实机前腿着地 0.39→0.47 m/s），所以摆腿不补。
+      const double friction = (locomotion && impl_->contact_planned[contact_index]) ?
         impl_->friction_torque * std::tanh(joint_velocity / impl_->friction_velocity) : 0.0;
       command.torque_feedforward(static_cast<Eigen::Index>(joint)) = static_cast<float>(
         torque(static_cast<Eigen::Index>(opendog_index)) + friction);

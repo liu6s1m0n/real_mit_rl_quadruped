@@ -20,7 +20,7 @@ hardware_output
   {
     torque            1.5     ; N·m（11-09：0.5→1.0 实机 roll σ 0.71→0.60→0.46°；每相摇摆仍 ±0.9°、滞后 150 ms，与仿真摩擦 2.0 Nm 时一致，加到 1.5）
     velocity          0.15    ; rad/s，|dq_des| 远大于此值时补满。零速附近斜率 torque/velocity 不能超过约 10：
-                              ; 11-09 实机 1.5/0.1=15 时站立自激振荡，1.0/0.1=10 稳定；只在踏步模式下补偿
+                              ; 11-09 实机 1.5/0.1=15 时站立自激振荡，1.0/0.1=10 稳定；只在踏步模式下补偿，且只补计划支撑的腿
   }
 }
 
@@ -55,7 +55,7 @@ model_settings
 
   verboseCppAd                  true      ; 是否打印CppAD信息
   recompileLibrariesCppAd       false     ; 是否重新编译CppAD库
-  modelFolderCppAd              /tmp/legged_control/dm1_opendog_zero20261102 ; CppAD库缓存目录。2026-11-02 零位改为 OpenDog 零位后 URDF 变了，必须换新目录重新生成；旧目录 ..._mass14705035_com2 是旧零位的库，不能再用
+  modelFolderCppAd              /tmp/legged_control/dm1_opendog_com20261109 ; CppAD库缓存目录。URDF 改动后必须换新目录重新生成：2026-11-09 机身质心后移换为 com20261109；更早的 zero20261102（零位）、..._mass14705035_com2 都不能再用
 }
 
 swing_trajectory_config
@@ -67,7 +67,8 @@ swing_trajectory_config
   swingApexPhase                0.4       ; 摆腿最高点在摆腿时间中的比例（2026-11-09 新增，原 OCS2 固定 0.5）：下降段加长，仿真着地速度约 −20%，抬脚高度不变
   adaptiveTouchDown             1         ; 落地高度自适应（2026-11-09 新增，0 关闭）：每条腿按自己最近一次稳定支撑的足端高度规划抬脚和落地；实机前脚地面估计比后脚高约 0.6 cm，统一高度时前脚提前 6–12 ms、以约 0.38 m/s 着地
   touchDownOffset               0.0       ; 落地目标相对地面偏移[m]（2026-11-09 新增，范围 ±0.02）：仿真里 −0.005 让前脚提前 24 ms、以 0.41 m/s 着地，冲击变大；实机只有后腿晚落地，交给 contactDetection 处理，这里保持 0
-  touchDownOffsetRear          -0.005     ; 后腿额外落地目标偏移[m]（2026-11-09 新增，范围 ±0.02）：实机两条后腿每步比计划晚落地 25–35 ms（10:59 影子检测 RL +36 / RR +22 ms），着地后 30 ms 内 WBC 竖直力约 100 N；前腿准时，不动
+  touchDownOffsetRear          -0.003     ; 后腿额外落地目标偏移[m]（2026-11-09 新增，范围 ±0.02）：实机两条后腿每步比计划晚落地 25–35 ms；−0.005 时 RL +13 / RR −8 ms，RR 以 0.50 m/s 着地，偏多，改为 −0.003；前腿准时，不动
+  swingLeadTime                 0.01      ; 摆腿期望提前量[s]（2026-11-09 新增，0 关闭，上限 0.05）：摆动腿发给电机的期望角度/速度取 t+此值 时刻的规划。实机摆腿跟踪滞后约 20–30 ms，着地 0.42–0.48 m/s（规划 0.05）；先试 0.01，再试 0.02
 }
 
 ; DDP设置：连续时间最优控制求解
