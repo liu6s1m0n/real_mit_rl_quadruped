@@ -442,10 +442,10 @@ int HardwareBridge::runKeyboardControl(
     if (arbiter.takeHelpRequest()) {
       imu_log::print(
         imu_log::Level::Info,
-        "OpenDog：2 连续原地踏步，3 左前/右后单次踏步，4 右前/左后单次踏步。\n");
+        "OpenDog：2 连续原地踏步，3 零点标定动作（站立后有效，约 32 s），4 右前/左后单次踏步。\n");
       imu_log::print(
         imu_log::Level::Info,
-        "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，3 双腿支撑测试，"
+        "按键：Shift+U 使能，0 失能，1 站立，2 原地踏步，3 零点标定动作，4 单次踏步，"
         "P 趴下，W/S 前进/后退，A/D 左移/右移，Q/E 旋转，"
         "空格停止，Esc 退出，H 帮助。\n");
     }

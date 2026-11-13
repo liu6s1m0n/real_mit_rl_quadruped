@@ -5,20 +5,23 @@
 # Keep it 0 unless a joint is measured to be off; reset all to 0 after every --set-zero.
 # Firmware zero = OpenDog mechanical zero (write it with --set-zero while the robot hangs):
 #   hip level; thigh motor connector aligned with the thigh screw (thigh horizontal, pointing back);
-#   calf straightened backwards (aligned by eye, there is no hard stop).
-# 2026-11-05 rear calf trims, from the IMU-level fit of 31 static stands (11-04/11-05 logs):
-#   RL_calf off by -3.97 deg -> +0.0693, RR_calf off by +3.27 deg -> +0.0571 (front calves < 1 deg, kept 0).
-#   Fixes the 2.4 cm (FL+RR)-(FR+RL) foot twist; zero = -off * DIRECTION.
+#   calf straightened backwards against its mechanical stop.
+# Trims (2026-11-13): least-squares fit of the key-3 zero calibration motion (feet planted, body heave/pitch/roll/yaw;
+#   ~/dm1_diag_20261113_000618), on top of the 11-12 calf trims from the stance level check
+#   (FR/FL/RR/RL calf -0.0481/-0.0308/+0.0480/+0.0307). Joint corrections in deg (true = reading + correction):
+#   FR -2.7 -3.8 -0.3 | FL +0.1 -2.4 -3.4 | RR +1.0 -3.7 +2.4 | RL +1.4 -0.7 -0.3.
+#   Leave-one-segment-out spread is about 1 deg; the four hips are only determined relative to each other.
+#   Re-run key 3 with these values: a correct calibration fits to near zero.
 # Normal startup expects the prone pose (0, -0.203, -2.22) rad, not the zero pose.
-FR_hip    can0 4 0x14  1 0.0
-FR_thigh  can0 5 0x15 -1 0.0
-FR_calf   can0 6 0x16 -1 0.0
-FL_hip    can0 1 0x11  1 0.0
-FL_thigh  can0 2 0x12  1 0.0
-FL_calf   can0 3 0x13  1 0.0
-RR_hip    can1 4 0x14 -1 0.0
-RR_thigh  can1 5 0x15 -1 0.0
-RR_calf   can1 6 0x16 -1 0.0571
-RL_hip    can1 1 0x11 -1 0.0
-RL_thigh  can1 2 0x12  1 0.0
-RL_calf   can1 3 0x13  1 0.0693
+FR_hip    can0 4 0x14  1 0.0467
+FR_thigh  can0 5 0x15 -1 -0.0662
+FR_calf   can0 6 0x16 -1 -0.0536
+FL_hip    can0 1 0x11  1 -0.0017
+FL_thigh  can0 2 0x12  1 0.0417
+FL_calf   can0 3 0x13  1 0.0293
+RR_hip    can1 4 0x14 -1 0.0181
+RR_thigh  can1 5 0x15 -1 -0.0648
+RR_calf   can1 6 0x16 -1 0.0899
+RL_hip    can1 1 0x11 -1 0.0241
+RL_thigh  can1 2 0x12  1 0.0117
+RL_calf   can1 3 0x13  1 0.0362

@@ -4,6 +4,7 @@
 #include "control/opendog_robot_runner.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include "common/console_log.hpp"
 #include "common/control_config.h"
@@ -14,6 +15,44 @@ namespace
 constexpr float kJointInitializationDuration = 1.2F;
 // P 趴下：从站立姿态平滑折叠到趴卧姿态的时长。
 constexpr float kProneDownDuration = 3.0F;
+
+// 零点标定动作：四脚不动，机身逐项做一个来回。每段 5 s，偏移 = 幅值 × 平滑的一正一负波形，
+// 段首段尾速度为 0；前后各留 1 s 静止。轴：0/1/2 = 世界系 x/y/z（x/y 按起始航向旋转），3/4/5 = 横滚/俯仰/偏航。
+// 参考轨迹在这期间按四脚不动反解关节目标（DesiredState::zero_calibration），否则默认站姿的关节权重
+// 会抵消平移和升降（2026-11-13 实机命令前后 ±4、左右 ±3 cm，只动了 0.2/0 cm）。
+struct CalibrationSegment
+{
+  int axis;
+  float amplitude;  ///< m 或 rad
+  const char * name;
+};
+constexpr float kCalibrationSettle = 1.0F;
+constexpr float kCalibrationSegmentDuration = 5.0F;
+constexpr std::array<CalibrationSegment, 6> kCalibrationSegments{{
+  {2, 0.04F, "升降 ±4 cm"},
+  {4, 0.175F, "俯仰 ±10°"},
+  {3, 0.14F, "横滚 ±8°"},
+  {0, 0.04F, "前后 ±4 cm"},
+  {1, 0.03F, "左右 ±3 cm"},
+  {5, 0.21F, "偏航 ±12°"}}};
+constexpr float kCalibrationDuration =
+  2.0F * kCalibrationSettle + kCalibrationSegmentDuration * kCalibrationSegments.size();
+
+// 一正一负的平滑波形，起止点的值和速度都为 0，峰值为 1。
+constexpr float kTwoPi = 6.28318530718F;
+constexpr float kPeakScale = 1.0F / 0.6495F;  // sin(x)(1-cos x)/2 的最大值约 0.6495
+float calibrationWave(float phase)
+{
+  return kPeakScale * std::sin(kTwoPi * phase) * 0.5F * (1.0F - std::cos(kTwoPi * phase));
+}
+
+// calibrationWave 对 phase 的导数。
+float calibrationWaveRate(float phase)
+{
+  const float c = std::cos(kTwoPi * phase);
+  const float s = std::sin(kTwoPi * phase);
+  return kPeakScale * 0.5F * kTwoPi * (c * (1.0F - c) + s * s);
+}
 
 // 启动回零/趴下的关节目标：趴卧姿态。电机零位是 OpenDog 机械零位（小腿伸直），
 // 不能作为着地目标。
@@ -66,6 +105,83 @@ void OpenDogRobotRunner::reset() noexcept
   zeroFeedforward(prone_feedforward_);
   initialization_duration_ = kJointInitializationDuration;
   prone_down_active_ = false;
+  zero_calibration_active_ = false;
+}
+
+bool OpenDogRobotRunner::startZeroCalibration()
+{
+  const float standing_height = algorithm_.commandSettings().standing_height;
+  const bool standing = !initialization_active_ &&
+    (desired_.mode == ControlMode::StandUp || desired_.mode == ControlMode::BalanceStand) &&
+    estimate_.position_world.z() > 0.85F * standing_height;
+  if (!standing) {
+    imu_log::print(
+      imu_log::Level::Warning,
+      "[OpenDog][ZERO_CAL] 只能在站立静止时开始：先按 1 站起并站稳（踏步中先按空格停下）。\n");
+    return false;
+  }
+  holdCurrentPose(ControlMode::BalanceStand);
+  zero_calibration_origin_ = Vec3<float>(
+    estimate_.position_world.x(), estimate_.position_world.y(), standing_height);
+  zero_calibration_yaw_ = estimate_.rpy.z();
+  zero_calibration_start_ = -1.0F;
+  zero_calibration_active_ = true;
+  imu_log::print(
+    imu_log::Level::Info,
+    "[OpenDog][ZERO_CAL] 开始零点标定动作，约 %.0f s：四脚保持不动，机身依次升降、俯仰、横滚、前后、左右、偏航。"
+    "空格可随时中止。\n",
+    static_cast<double>(kCalibrationDuration));
+  return true;
+}
+
+void OpenDogRobotRunner::updateZeroCalibration(float timestamp)
+{
+  if (zero_calibration_start_ < 0.0F) {
+    zero_calibration_start_ = timestamp;
+    zero_calibration_segment_ = -1;
+  }
+  const float elapsed = timestamp - zero_calibration_start_;
+  std::array<float, 6> offset{};
+  std::array<float, 6> rate{};
+  const float active = elapsed - kCalibrationSettle;
+  if (active >= 0.0F) {
+    const auto segment = static_cast<std::size_t>(active / kCalibrationSegmentDuration);
+    if (segment < kCalibrationSegments.size()) {
+      const float phase = (active - segment * kCalibrationSegmentDuration) / kCalibrationSegmentDuration;
+      const auto axis = static_cast<std::size_t>(kCalibrationSegments[segment].axis);
+      offset[axis] = kCalibrationSegments[segment].amplitude * calibrationWave(phase);
+      rate[axis] = kCalibrationSegments[segment].amplitude * calibrationWaveRate(phase) /
+        kCalibrationSegmentDuration;
+      if (static_cast<int>(segment) != zero_calibration_segment_) {
+        zero_calibration_segment_ = static_cast<int>(segment);
+        imu_log::print(
+          imu_log::Level::Info, "[OpenDog][ZERO_CAL] %zu/%zu %s\n",
+          segment + 1, kCalibrationSegments.size(), kCalibrationSegments[segment].name);
+      }
+    }
+  }
+  const float c = std::cos(zero_calibration_yaw_);
+  const float s = std::sin(zero_calibration_yaw_);
+  desired_.mode = ControlMode::BalanceStand;
+  // 速度只给参考轨迹算关节参考速度（摩擦补偿方向），站立模式下不进 MPC 目标。
+  desired_.body_velocity_world = Vec3<float>(c * rate[0] - s * rate[1], s * rate[0] + c * rate[1], rate[2]);
+  desired_.body_angular_velocity = Vec3<float>(rate[3], rate[4], rate[5]);
+  desired_.body_position_world = zero_calibration_origin_ +
+    Vec3<float>(c * offset[0] - s * offset[1], s * offset[0] + c * offset[1], offset[2]);
+  desired_.body_rpy = Vec3<float>(offset[3], offset[4], zero_calibration_yaw_ + offset[5]);
+  if (elapsed >= kCalibrationDuration) {
+    zero_calibration_active_ = false;
+    desired_.body_velocity_world.setZero();
+    desired_.body_angular_velocity.setZero();
+    desired_.body_rpy = Vec3<float>(0.0F, 0.0F, zero_calibration_yaw_);
+    desired_.body_position_world = zero_calibration_origin_;
+    imu_log::print(
+      imu_log::Level::Warning,
+      "\n================================================================\n"
+      "[OpenDog][ZERO_CAL] 零点标定动作完成，已回到起始站姿。\n"
+      "  用 scripts/zero_calibration.py 解算本次 CSV。\n"
+      "================================================================\n\n");
+  }
 }
 
 void OpenDogRobotRunner::startProneDown()
@@ -77,6 +193,7 @@ void OpenDogRobotRunner::startProneDown()
   initialization_complete_ = false;
   stand_up_pending_ = false;
   prone_down_active_ = true;
+  zero_calibration_active_ = false;
   initialization_duration_ = kProneDownDuration;
   desired_.mode = ControlMode::ProneDown;
   imu_log::print(
@@ -85,9 +202,16 @@ void OpenDogRobotRunner::startProneDown()
     static_cast<double>(kProneDownDuration));
 }
 
-/// 锁定当前水平位置和航向，避免切换模式时机身被拉回旧目标。
+/// 锁定当前水平位置和航向，避免切换模式时机身被拉回旧目标；同时结束标定动作。
 void OpenDogRobotRunner::holdCurrentPose(ControlMode mode)
 {
+  if (zero_calibration_active_) {
+    zero_calibration_active_ = false;
+    desired_.body_rpy.x() = 0.0F;
+    desired_.body_rpy.y() = 0.0F;
+    desired_.body_position_world.z() = algorithm_.commandSettings().standing_height;
+    imu_log::print(imu_log::Level::Info, "[OpenDog][ZERO_CAL] 标定动作已中止。\n");
+  }
   desired_.mode = mode;
   desired_.body_velocity_world.setZero();
   desired_.body_angular_velocity.setZero();
@@ -134,6 +258,13 @@ bool OpenDogRobotRunner::handleCommands(
     arbiter.takeStopRequest();
     requestStandUp();
   }
+  if (arbiter.takeZeroCalibrationRequest() && !stand_up) {
+    if (arbiter.motionActive()) {
+      imu_log::print(imu_log::Level::Warning, "[OpenDog][ZERO_CAL] 踏步中不能开始标定：先按空格停下。\n");
+    } else if (!zero_calibration_active_) {
+      startZeroCalibration();
+    }
+  }
   if (arbiter.takeProneDownRequest()) {
     if (initialization_active_) {
       imu_log::print(
@@ -151,6 +282,7 @@ bool OpenDogRobotRunner::handleCommands(
       imu_log::print(imu_log::Level::Warning, "OpenDog 运动请求已取消：先完成回零并按 1 站立。\n");
       return active;
     }
+    if (zero_calibration_active_) {holdCurrentPose(ControlMode::BalanceStand);}
     // 速度档位在机身系定义，按当前 IMU 姿态旋转到世界系后交给参考轨迹。
     algorithm_.setMotionRequest(arbiter.motion(), motion_sequence_);
     const auto velocity = teleop::velocityForMotion(
@@ -167,6 +299,8 @@ bool OpenDogRobotRunner::handleCommands(
 bool OpenDogRobotRunner::compute(const ControlInputSnapshot & input, ControlOutput & output)
 {
   if (initialization_active_) {return computeJointInitialization(input, output);}
+  if (zero_calibration_active_) {updateZeroCalibration(input.timestamp);}
+  desired_.zero_calibration = zero_calibration_active_;
   auto snapshot = input;
   desired_.timestamp = input.timestamp;
   snapshot.desired = desired_;
@@ -247,7 +381,7 @@ const char * OpenDogRobotRunner::stateLabel() const noexcept
   switch (desired_.mode) {
     case ControlMode::JointPd: return "OPENDOG_JOINT_PD";
     case ControlMode::StandUp: return "OPENDOG_STAND_UP";
-    case ControlMode::BalanceStand: return "OPENDOG_STANCE";
+    case ControlMode::BalanceStand: return zero_calibration_active_ ? "OPENDOG_ZERO_CAL" : "OPENDOG_STANCE";
     case ControlMode::Locomotion: return "OPENDOG_LOCOMOTION";
     case ControlMode::ProneDown: return "OPENDOG_PRONE_DOWN";
     default: return "OPENDOG_PASSIVE";

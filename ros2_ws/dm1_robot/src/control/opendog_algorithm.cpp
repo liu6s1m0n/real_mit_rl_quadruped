@@ -133,6 +133,8 @@ struct OpenDogAlgorithm::Impl
   /// 关节库仑摩擦补偿：前馈加 friction_torque·tanh(dq_des / friction_velocity)，0 表示不补偿。
   float friction_torque = 0.0F;
   float friction_velocity = 0.1F;                          ///< 补偿的过渡速度，rad/s。
+  /// 按参考轨迹的关节速度判断方向（站起爬升、零点标定）时的过渡速度，rad/s；参考速度无噪声，可以比 friction_velocity 小得多。
+  float reference_friction_velocity = 0.03F;
   /// 各腿小腿（KFE）单独的 kp，按 FR/FL/RR/RL 存放，缺省等于 joint_kp。
   std::array<float, kNumLegs> calf_kp{{4.0F, 4.0F, 4.0F, 4.0F}};
   /// OCS2 质心模型观测：state 依次为归一化质心动量(6)、机身位置(3)、
@@ -310,8 +312,10 @@ bool OpenDogAlgorithm::configure()
     "hardware_output.frictionCompensation.torque", impl_->friction_torque);
   impl_->friction_velocity = std::max(1e-3F, output_settings.get<float>(
     "hardware_output.frictionCompensation.velocity", impl_->friction_velocity));
-  std::printf("[OpenDog][OUTPUT] frictionCompensation torque=%.2f Nm velocity=%.2f rad/s\n",
-    impl_->friction_torque, impl_->friction_velocity);
+  impl_->reference_friction_velocity = std::max(1e-3F, output_settings.get<float>(
+    "hardware_output.frictionCompensation.referenceVelocity", impl_->reference_friction_velocity));
+  std::printf("[OpenDog][OUTPUT] frictionCompensation torque=%.2f Nm velocity=%.2f rad/s referenceVelocity=%.2f rad/s\n",
+    impl_->friction_torque, impl_->friction_velocity, impl_->reference_friction_velocity);
   // 站立高度和键盘速度档位
   ocs2::loadData::loadCppDataType(reference, "comHeight", impl_->command_settings.standing_height);
   auto & velocity = impl_->command_settings.velocity;
@@ -640,8 +644,17 @@ bool OpenDogAlgorithm::compute(
       // WBC 力矩不含关节摩擦，踏步时按期望转速方向给计划支撑的腿补上库仑摩擦。站立时 dq_des 只是零附近的噪声，
       // 补偿会随符号来回跳（11-09 实机 1.5 Nm/0.1 rad/s 站立时电机自激振荡），所以只在踏步模式下补；
       // 摆腿本来就跟得上计划，补偿只会把脚更快地送到地面（11-09 实机前腿着地 0.39→0.47 m/s），所以摆腿不补。
-      const double friction = (locomotion && impl_->contact_planned[contact_index]) ?
-        impl_->friction_torque * std::tanh(joint_velocity / impl_->friction_velocity) : 0.0;
+      // 站起爬升和零点标定动作例外：关节缓慢转动，静摩擦让站起结束只到 0.305 m（目标 0.32）、标定平移和升降
+      // 只走到命令的 20–40%（11-13 实机，仿真加 2.0 Nm 摩擦可复现）。这两种情况的方向取参考轨迹规定的
+      // 关节速度，它是解析值、没有噪声；普通站立时为 0，不补偿。
+      double friction = 0.0;
+      if (input.desired.zero_calibration || input.desired.mode == ControlMode::StandUp) {
+        friction = impl_->friction_torque * std::tanh(
+          impl_->reference->referenceJointVelocity()(static_cast<Eigen::Index>(opendog_index)) /
+          impl_->reference_friction_velocity);
+      } else if (locomotion && impl_->contact_planned[contact_index]) {
+        friction = impl_->friction_torque * std::tanh(joint_velocity / impl_->friction_velocity);
+      }
       command.torque_feedforward(static_cast<Eigen::Index>(joint)) = static_cast<float>(
         torque(static_cast<Eigen::Index>(opendog_index)) + friction);
     }

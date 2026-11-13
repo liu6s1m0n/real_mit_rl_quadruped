@@ -7,7 +7,7 @@ namespace teleop
 {
 
 /**
- * 按键映射：U 使能，0 失能，1 站立，2 原地踏步，3/4 对角单步，P 趴下，
+ * 按键映射：U 使能，0 失能，1 站立，2 原地踏步，3 零点标定动作，4 对角单步，P 趴下，
  * W/S 前进/后退，A/D 左移/右移，Q/E 左转/右转，空格停止，Esc 退出，H 帮助。
  */
 std::optional<OperatorCommand> decodeKey(int key)
@@ -27,8 +27,7 @@ std::optional<OperatorCommand> decodeKey(int key)
     command.type = CommandType::Motion;
     command.motion = Motion::MarchInPlace;
   } else if (key == '3') {
-    command.type = CommandType::Motion;
-    command.motion = Motion::TwoLegStand;
+    command.type = CommandType::ZeroCalibration;
   } else if (key == '4') {
     command.type = CommandType::Motion;
     command.motion = Motion::TwoLegStandReverse;
@@ -134,6 +133,9 @@ void OperatorCommandArbiter::apply(const OperatorCommand & command) noexcept
     case CommandType::Help:
       help_requested_ = true;
       return;
+    case CommandType::ZeroCalibration:
+      if (state_ == MotorOutputState::Enabled) {zero_calibration_requested_ = true;}
+      return;
   }
 }
 
@@ -177,6 +179,7 @@ void OperatorCommandArbiter::lock() noexcept
   enable_requested_ = false;
   stand_up_requested_ = false;
   prone_down_requested_ = false;
+  zero_calibration_requested_ = false;
   stop_requested_ = true;
 }
 

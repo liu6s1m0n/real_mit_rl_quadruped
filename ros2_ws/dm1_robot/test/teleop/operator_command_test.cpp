@@ -31,14 +31,9 @@ TEST(OperatorCommandTest, MapsKeyboardKeysAndDirections)
   EXPECT_FLOAT_EQ(march_velocity.lateral, 0.0F);
   EXPECT_FLOAT_EQ(march_velocity.yaw, 0.0F);
 
-  const auto two_leg = teleop::decodeKey('3');
-  ASSERT_TRUE(two_leg.has_value());
-  EXPECT_EQ(two_leg->type, CommandType::Motion);
-  EXPECT_EQ(two_leg->motion, teleop::Motion::TwoLegStand);
-  const auto two_leg_velocity = teleop::velocityForMotion(two_leg->motion);
-  EXPECT_FLOAT_EQ(two_leg_velocity.forward, 0.0F);
-  EXPECT_FLOAT_EQ(two_leg_velocity.lateral, 0.0F);
-  EXPECT_FLOAT_EQ(two_leg_velocity.yaw, 0.0F);
+  const auto zero_calibration = teleop::decodeKey('3');
+  ASSERT_TRUE(zero_calibration.has_value());
+  EXPECT_EQ(zero_calibration->type, CommandType::ZeroCalibration);
   const auto two_leg_reverse = teleop::decodeKey('4');
   ASSERT_TRUE(two_leg_reverse.has_value());
   EXPECT_EQ(two_leg_reverse->type, CommandType::Motion);
@@ -95,6 +90,24 @@ TEST(OperatorCommandTest, ProneDownRequestRequiresEnabledMotors)
   arbiter.apply(*teleop::decodeKey('2'));
   EXPECT_TRUE(arbiter.motionActive());
   EXPECT_EQ(arbiter.motion(), teleop::Motion::MarchInPlace);
+}
+
+// 3 键零点标定请求只在电机使能后有效，取走后清除，锁定时丢弃。
+TEST(OperatorCommandTest, ZeroCalibrationRequestRequiresEnabledMotors)
+{
+  teleop::OperatorCommandArbiter arbiter;
+  arbiter.apply(*teleop::decodeKey('3'));
+  EXPECT_FALSE(arbiter.takeZeroCalibrationRequest());
+
+  arbiter.apply(*teleop::decodeKey('U'));
+  arbiter.markEnabled();
+  arbiter.apply(*teleop::decodeKey('3'));
+  EXPECT_TRUE(arbiter.takeZeroCalibrationRequest());
+  EXPECT_FALSE(arbiter.takeZeroCalibrationRequest());
+
+  arbiter.apply(*teleop::decodeKey('3'));
+  arbiter.lock();
+  EXPECT_FALSE(arbiter.takeZeroCalibrationRequest());
 }
 
 // 锁定状态拒绝运动命令，重复使能请求是幂等的。

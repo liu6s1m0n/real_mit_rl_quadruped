@@ -33,7 +33,8 @@ enum class CommandType : std::uint8_t
   Stop,            ///< 停止运动，保持当前姿态。
   Quit,            ///< 退出程序。
   Help,            ///< 打印帮助。
-  KeyboardFailure  ///< 键盘输入线程故障。
+  KeyboardFailure,  ///< 键盘输入线程故障。
+  ZeroCalibration   ///< 零点标定动作（站立后有效）：四脚不动，机身依次升降、俯仰、横滚、平移、偏航。
 };
 
 /// 运动命令。
@@ -144,6 +145,13 @@ public:
     return requested;
   }
 
+  bool takeZeroCalibrationRequest() noexcept
+  {
+    const bool requested = zero_calibration_requested_;
+    zero_calibration_requested_ = false;
+    return requested;
+  }
+
   bool takeHelpRequest() noexcept
   {
     const bool requested = help_requested_;
@@ -186,6 +194,7 @@ private:
   bool prone_down_requested_ = false;                     ///< 待处理的趴下请求。
   bool stop_requested_ = false;                           ///< 待处理的停止请求。
   bool help_requested_ = false;                           ///< 待处理的帮助请求。
+  bool zero_calibration_requested_ = false;               ///< 待处理的零点标定请求。
   bool quit_requested_ = false;                           ///< 已请求退出。
 };
 

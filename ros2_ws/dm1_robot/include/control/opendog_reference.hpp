@@ -36,9 +36,13 @@ public:
     velocity_integral_.setZero();
     height_integral_ = 0.0;
     last_update_time_ = -1.0;
+    reference_joint_velocity_.setZero();
   }
   /// 当前高度积分修正，m；仅供日志和测试。
   double heightCorrection() const noexcept {return height_integral_;}
+  /// 参考轨迹本身规定的关节速度（OpenDog 腿序），rad/s：站起爬升段为线性插值的匀速，
+  /// 零点标定动作为四脚不动反解的速度；其余时候为 0。供摩擦补偿判断转动方向。
+  const ocs2::vector_t & referenceJointVelocity() const noexcept {return reference_joint_velocity_;}
   /// 当前速度外环积分修正（机体系 x/y），m/s；仅供日志和测试。
   const Eigen::Vector2d & velocityCorrection() const noexcept {return velocity_integral_;}
 
@@ -74,6 +78,7 @@ private:
   double pitch_velocity_gain_ = 0.0;
   /// 踏步时高度目标 −= height_velocity_gain_ × 机体系前进命令速度（m/(m/s)），抵消前进升高、后退下降。
   double height_velocity_gain_ = 0.0;
+  ocs2::vector_t reference_joint_velocity_ = ocs2::vector_t::Zero(12);  ///< 见 referenceJointVelocity()。
   ocs2::TargetTrajectories stand_up_target_;  ///< 缓存的站立轨迹，站立期间保持不变。
 };
 

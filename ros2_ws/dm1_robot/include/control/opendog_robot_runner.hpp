@@ -59,6 +59,10 @@ private:
   void startProneDown();
   /// 从记录的初始关节角平滑插值到趴卧姿态。
   bool computeJointInitialization(const ControlInputSnapshot & input, ControlOutput & output);
+  /// 零点标定动作：站立且静止时开始，四脚不动，机身按固定轨迹依次升降、俯仰、横滚、前后/左右平移、偏航。
+  bool startZeroCalibration();
+  /// 按时间更新标定动作的机身目标；动作结束后回到起始姿态并转为普通站立。
+  void updateZeroCalibration(float timestamp);
   OpenDogAlgorithm algorithm_;                                   ///< 估计器 + MPC + WBC。
   DesiredState<float> desired_;                                  ///< 当前期望机身状态。
   StateEstimate<float> estimate_;                                ///< 最近一次算法状态估计。
@@ -75,4 +79,9 @@ private:
   std::array<Vec3<float>, kNumLegs> prone_feedforward_;
   float initialization_duration_ = 1.2F;  ///< 本次插值时长，s。
   bool prone_down_active_ = false;        ///< 当前插值是 P 趴下而不是启动初始化。
+  bool zero_calibration_active_ = false;  ///< 正在执行零点标定动作。
+  float zero_calibration_start_ = -1.0F;  ///< 标定动作开始时间，s；-1 表示下一帧开始计时。
+  Vec3<float> zero_calibration_origin_ = Vec3<float>::Zero();  ///< 标定动作的起始机身位置（世界系）。
+  float zero_calibration_yaw_ = 0.0F;     ///< 标定动作的起始偏航，rad。
+  int zero_calibration_segment_ = -1;     ///< 已打印提示的标定段，-1 为尚未开始。
 };

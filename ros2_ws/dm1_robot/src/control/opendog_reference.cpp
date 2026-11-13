@@ -7,6 +7,7 @@
 #include "control/opendog_reference.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 
@@ -20,6 +21,55 @@ namespace
 constexpr double kMaximumAnchorLead = 0.15;
 /// 运动模式偏航锚点最多领先当前偏航的角度，rad。
 constexpr double kMaximumYawAnchorLead = 0.3;
+
+/// 机身系足端位置，OpenDog URDF 腿序 LF/LH/RF/RH；几何同 hardware_bridge.cpp 的 footPositionBody。
+Eigen::Vector3d footPositionBody(int leg, const Eigen::Vector3d & q)
+{
+  const double side = leg < 2 ? 1.0 : -1.0;
+  const double longitudinal = leg % 2 == 1 ? -1.0 : 1.0;
+  const Eigen::Vector3d hip_location(longitudinal * 0.16175, side * 0.059997, -0.061498);
+  const Eigen::Vector3d hip_to_thigh(longitudinal * 0.049998, side * 0.019503, 0.0);
+  const Eigen::Vector3d thigh_to_calf(-0.2, side * 0.07825, 0.0);
+  const Eigen::Vector3d calf_to_foot(-0.17362, 0.0, -0.14312);
+  const Eigen::Matrix3d rotation_hip = Eigen::AngleAxisd(q[0], Eigen::Vector3d::UnitX()).toRotationMatrix();
+  const Eigen::Matrix3d rotation_thigh = rotation_hip * Eigen::AngleAxisd(q[1], Eigen::Vector3d::UnitY());
+  const Eigen::Matrix3d rotation_calf = rotation_thigh * Eigen::AngleAxisd(q[2], Eigen::Vector3d::UnitY());
+  return hip_location + rotation_hip * hip_to_thigh + rotation_thigh * thigh_to_calf +
+         rotation_calf * calf_to_foot;
+}
+
+/// 基座位姿 (x, y, z, yaw, pitch, roll) 的旋转矩阵（ZYX 欧拉角）。
+Eigen::Matrix3d poseRotation(const ocs2::vector_t & pose)
+{
+  return (Eigen::AngleAxisd(pose(3), Eigen::Vector3d::UnitZ()) *
+         Eigen::AngleAxisd(pose(4), Eigen::Vector3d::UnitY()) *
+         Eigen::AngleAxisd(pose(5), Eigen::Vector3d::UnitX())).toRotationMatrix();
+}
+
+/// 四脚世界坐标保持不动时，基座在 pose 下的关节角；从 seed 开始做几步牛顿迭代。
+ocs2::vector_t plantedJoints(
+  const ocs2::vector_t & pose, const std::array<Eigen::Vector3d, 4> & feet_world, const ocs2::vector_t & seed)
+{
+  const Eigen::Matrix3d rotation = poseRotation(pose);
+  ocs2::vector_t joints = seed;
+  for (int leg = 0; leg < 4; ++leg) {
+    const Eigen::Vector3d target = rotation.transpose() * (feet_world[leg] - pose.head<3>());
+    Eigen::Vector3d q = joints.segment<3>(3 * leg);
+    for (int iteration = 0; iteration < 5; ++iteration) {
+      const Eigen::Vector3d error = target - footPositionBody(leg, q);
+      if (error.norm() < 1e-6) {break;}
+      Eigen::Matrix3d jacobian;
+      for (int j = 0; j < 3; ++j) {
+        Eigen::Vector3d dq = Eigen::Vector3d::Zero();
+        dq[j] = 1e-6;
+        jacobian.col(j) = (footPositionBody(leg, q + dq) - footPositionBody(leg, q - dq)) / 2e-6;
+      }
+      q += jacobian.partialPivLu().solve(error);
+    }
+    joints.segment<3>(3 * leg) = q;
+  }
+  return joints;
+}
 }  // namespace
 
 OpenDogReference::OpenDogReference(
@@ -68,9 +118,11 @@ ocs2::TargetTrajectories OpenDogReference::update(
   const double dt = last_update_time_ < 0.0 ? 0.0 :
     std::clamp(observation.time - last_update_time_, 0.0, 0.1);
   last_update_time_ = observation.time;
+  reference_joint_velocity_.setZero();
   const bool climbing = desired.mode == ControlMode::StandUp &&
     (!standing_up_ || observation.time < stand_up_target_.timeTrajectory.back());
-  if (height_gain_ > 0.0 && !climbing) {
+  // 零点标定动作主动升降机身，积分会抵消升降幅度，期间暂停。
+  if (height_gain_ > 0.0 && !climbing && !desired.zero_calibration) {
     height_integral_ = std::clamp(
       height_integral_ + height_gain_ * (com_height_ - observation.state(8)) * dt,
       -height_limit_, height_limit_);
@@ -90,6 +142,12 @@ ocs2::TargetTrajectories OpenDogReference::update(
     }
     auto target = stand_up_target_;
     target.stateTrajectory.back()(8) += height_integral_;
+    // 爬升段关节按线性插值匀速转动。
+    const auto & times = stand_up_target_.timeTrajectory;
+    if (observation.time < times.back()) {
+      reference_joint_velocity_ = (stand_up_target_.stateTrajectory.back().tail(12) -
+        stand_up_target_.stateTrajectory.front().tail(12)) / (times.back() - times.front());
+    }
     return target;
   }
   standing_up_ = false;
@@ -172,7 +230,30 @@ ocs2::TargetTrajectories OpenDogReference::update(
   const auto delta = (pose - observation.state.segment<6>(6)).eval();
   const auto reaching_time = observation.time + std::max(
     std::abs(delta(3)) / rotation_velocity_, delta.head<2>().norm() / displacement_velocity_);
-  return poseToTrajectory(pose, observation, reaching_time);
+  auto target = poseToTrajectory(pose, observation, reaching_time);
+  if (desired.zero_calibration) {
+    // 零点标定动作：关节参考按四脚不动反解，否则默认站姿的关节权重会抵消机身平移和升降。
+    const ocs2::vector_t current_pose = observation.state.segment<6>(6);
+    const ocs2::vector_t current_joints = observation.state.tail(12);
+    const Eigen::Matrix3d rotation = poseRotation(current_pose);
+    std::array<Eigen::Vector3d, 4> feet_world;
+    for (int leg = 0; leg < 4; ++leg) {
+      feet_world[leg] = current_pose.head<3>() +
+        rotation * footPositionBody(leg, current_joints.segment<3>(3 * leg));
+    }
+    for (auto & state : target.stateTrajectory) {
+      state.tail(12) = plantedJoints(state.segment<6>(6), feet_world, current_joints);
+    }
+    // 标定动作的机身速度（runner 给出解析值）对应的关节速度，供摩擦补偿判断转动方向。
+    // 位姿顺序 (x, y, z, yaw, pitch, roll)；角速度近似当作欧拉角速度（动作中横滚/俯仰不超过 10°）。
+    constexpr double kStep = 0.01;
+    ocs2::vector_t rate(6);
+    rate << desired.body_velocity_world.cast<double>(), double(desired.body_angular_velocity.z()),
+      double(desired.body_angular_velocity.y()), double(desired.body_angular_velocity.x());
+    const ocs2::vector_t joints = plantedJoints(pose, feet_world, current_joints);
+    reference_joint_velocity_ = (plantedJoints(pose + kStep * rate, feet_world, joints) - joints) / kStep;
+  }
+  return target;
 }
 
 OpenDogGaitCommand::OpenDogGaitCommand(
