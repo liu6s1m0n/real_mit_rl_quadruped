@@ -57,7 +57,7 @@ model_settings
 
   verboseCppAd                  true      ; 是否打印CppAD信息
   recompileLibrariesCppAd       false     ; 是否重新编译CppAD库
-  modelFolderCppAd              /tmp/legged_control/dm1_opendog_com20261109 ; CppAD库缓存目录。URDF 改动后必须换新目录重新生成：2026-11-09 机身质心后移换为 com20261109；更早的 zero20261102（零位）、..._mass14705035_com2 都不能再用
+  modelFolderCppAd              /tmp/legged_control/dm1_opendog_com20261113 ; CppAD库缓存目录。URDF 改动后必须换新目录重新生成：2026-11-13 机身质心 x 回到 CAD 原值换为 com20261113；11-09 com20261109（质心后移）、更早的 zero20261102（零位）、..._mass14705035_com2 都不能再用
 }
 
 swing_trajectory_config
