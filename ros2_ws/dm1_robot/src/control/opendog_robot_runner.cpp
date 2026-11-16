@@ -13,8 +13,12 @@ namespace
 {
 // DM1 真机启动时关节插值到趴卧姿态的时长，单位 s。
 constexpr float kJointInitializationDuration = 1.2F;
-// P 趴下：从站立姿态平滑折叠到趴卧姿态的时长。
-constexpr float kProneDownDuration = 3.0F;
+// P 趴下：从站立姿态平滑折叠到趴卧姿态的时长和位置增益。
+// 2026-11-16：原 3 s、kp 4，kp 4 撑不住体重，站立前馈一卸载机身就往下掉（实机最大 22 cm/s 砸到肚子）；
+// 仿真（关节摩擦 2 Nm）5 s、kp 30 时最大下降速度 21.6→8.9 cm/s、触地冲击 6.6→2.5 m/s²。
+// 趴下从实测关节角起步，切换时位置误差为 0，提高 kp 不会跳变；完成后回到 JointPd 的常规 kp。
+constexpr float kProneDownDuration = 5.0F;
+constexpr float kProneDownKp = 30.0F;
 
 // 零点标定动作：四脚不动，机身逐项做一个来回。每段 5 s，偏移 = 幅值 × 平滑的一正一负波形，
 // 段首段尾速度为 0；前后各留 1 s 静止。轴：0/1/2 = 世界系 x/y/z（x/y 按起始航向旋转），3/4/5 = 横滚/俯仰/偏航。
@@ -347,8 +351,9 @@ bool OpenDogRobotRunner::computeJointInitialization(
     command.position_desired = initial_joint_positions_[leg] + blend * travel;
     command.velocity_desired = blend_rate * travel;
     // 启动回零时 prone_feedforward_ 为 0，行为不变；趴下时从站立前馈卸载到 0。
-    command.torque_feedforward = (1.0F - blend) * prone_feedforward_[leg];
-    command.kp.setConstant(settings.joint_kp);
+    // 前馈按 blend 的 smoothstep 卸载，起止都平缓。
+    command.torque_feedforward = (1.0F - blend * blend * (3.0F - 2.0F * blend)) * prone_feedforward_[leg];
+    command.kp.setConstant(prone_down_active_ ? kProneDownKp : settings.joint_kp);
     command.kd.setConstant(settings.joint_kd);
     command.timestamp = input.timestamp;
     command.sequence = output_sequence_;
