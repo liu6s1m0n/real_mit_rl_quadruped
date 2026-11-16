@@ -1,5 +1,3 @@
-# MY_ROBOT
-
 面向达妙 DM1 四足机器人的 ROS 2 工程，C++ 实现，控制算法为 OpenDog WBC+NMPC：
 Kalman 状态估计、OCS2 SQP 非线性模型预测控制（NMPC）和加权全身控制（WBC）。
 同一套算法既跑 MuJoCo 仿真，也通过达妙 MIT 电机协议驱动真机。
