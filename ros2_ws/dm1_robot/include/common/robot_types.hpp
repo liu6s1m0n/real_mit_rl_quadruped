@@ -183,7 +183,7 @@ struct DesiredState
   Vec3<T> body_angular_velocity = Vec3<T>::Zero();  ///< rad/s, body frame
   T timestamp = 0.0;
   bool valid = false;
-  bool zero_calibration = false;  ///< 零点标定动作：参考轨迹暂停高度积分，关节参考按四脚不动反解。
+  bool zero_calibration = false;  ///< 零点标定动作：参考轨迹的关节参考按四脚不动反解。
 };
 
 static_assert(kNumJoints == 12, "DM1 controller expects exactly 12 joints");

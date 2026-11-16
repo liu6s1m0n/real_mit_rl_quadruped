@@ -33,18 +33,11 @@ public:
   {
     standing_up_ = false;
     anchor_valid_ = false;
-    velocity_integral_.setZero();
-    height_integral_ = 0.0;
-    last_update_time_ = -1.0;
     reference_joint_velocity_.setZero();
   }
-  /// 当前高度积分修正，m；仅供日志和测试。
-  double heightCorrection() const noexcept {return height_integral_;}
   /// 参考轨迹本身规定的关节速度（OpenDog 腿序），rad/s：站起爬升段为线性插值的匀速，
   /// 零点标定动作为四脚不动反解的速度；其余时候为 0。供摩擦补偿判断转动方向。
   const ocs2::vector_t & referenceJointVelocity() const noexcept {return reference_joint_velocity_;}
-  /// 当前速度外环积分修正（机体系 x/y），m/s；仅供日志和测试。
-  const Eigen::Vector2d & velocityCorrection() const noexcept {return velocity_integral_;}
 
 private:
   /// 生成从当前位姿到 pose 的两点轨迹，在 reaching_time 到达。
@@ -62,18 +55,6 @@ private:
   double anchor_time_ = 0.0;            ///< 锚点上次更新的时间，s。
   Eigen::Vector2d anchor_xy_ = Eigen::Vector2d::Zero();  ///< 按期望速度积分的水平位置锚点，m。
   double anchor_yaw_ = 0.0;             ///< 按期望角速度积分的偏航锚点，rad。
-  /// 速度外环积分：有平移命令时按 (命令速度 − 质心速度) 在机体系积分，叠加到发给 MPC 的速度参考上，
-  /// 补偿持续的方向性偏差；停止平移命令后按 velocity_leak_time_ 衰减到 0。增益为 0 时关闭。
-  double velocity_gain_ = 0.0;          ///< 积分增益，1/s。
-  double velocity_limit_ = 0.06;        ///< 每个轴的修正上限，m/s。
-  double velocity_leak_time_ = 0.5;     ///< 无平移命令时的衰减时间常数，s。
-  Eigen::Vector2d velocity_integral_ = Eigen::Vector2d::Zero();  ///< 机体系 x/y 速度修正，m/s。
-  /// 高度积分：在各模式下积分 (comHeight − 机身高度)，叠加到高度目标，使站起、站立、踏步时机身高度一致；
-  /// 站起轨迹的爬升段不积分。增益为 0 时关闭。
-  double height_gain_ = 0.0;            ///< 积分增益，1/s。
-  double height_limit_ = 0.03;          ///< 修正上限，m。
-  double height_integral_ = 0.0;        ///< 高度目标修正，m。
-  double last_update_time_ = -1.0;      ///< 上次 update() 的时间，s。
   /// 踏步时俯仰目标 = −pitch_velocity_gain_ × 机体系前进命令速度（rad/(m/s)），抵消前进低头、后退抬头。
   double pitch_velocity_gain_ = 0.0;
   /// 踏步时高度目标 −= height_velocity_gain_ × 机体系前进命令速度（m/(m/s)），抵消前进升高、后退下降。

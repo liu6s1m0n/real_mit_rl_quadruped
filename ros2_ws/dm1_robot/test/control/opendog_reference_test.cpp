@@ -97,61 +97,18 @@ TEST(OpenDogReference, LocomotionYawAnchorIntegratesCommandedRate)
   EXPECT_NEAR(target.stateTrajectory.back()(9), 0.4 + 0.3 * horizon, 1e-6);
 }
 
-// 速度外环积分：有平移命令且质心速度跟不上时，修正量在机体系累积并叠加到速度参考，受上限约束；
-// 停止平移命令后衰减，离开运动模式清零。
-TEST(OpenDogReference, LocomotionVelocityIntegralCompensatesPersistentLag)
+// 踏步时俯仰和高度目标随机体系前进命令速度前馈；轨迹各点速度参考等于命令速度。
+TEST(OpenDogReference, PitchAndHeightFeedforward)
 {
   boost::property_tree::ptree settings;
   boost::property_tree::read_info(config("opendog_reference.info"), settings);
-  const double gain = settings.get<double>("velocityIntegral.gain", 0.0);
-  const double limit = settings.get<double>("velocityIntegral.limit", 0.06);
-  OpenDogReference reference(config("opendog_reference.info"), config("opendog_task.info"));
-  auto state = observation();
-  state.state(9) = 0.0;  // 偏航 0，机体系与世界系一致
-  DesiredState<float> desired;
-  desired.valid = true;
-  desired.mode = ControlMode::Locomotion;
-  desired.body_position_world.z() = 0.28F;
-  desired.body_velocity_world << 0.1F, 0.0F, 0.0F;
-  reference.update(desired, state);
-  state.time += 0.2;
-  auto target = reference.update(desired, state);
-  const double expected = std::min(gain * 0.1 * 0.2, limit);
-  EXPECT_NEAR(reference.velocityCorrection().x(), expected, 1e-9);
-  EXPECT_NEAR(reference.velocityCorrection().y(), 0.0, 1e-9);
-  EXPECT_NEAR(target.stateTrajectory.back()(0), 0.1 + expected, 1e-6);
-  // 长时间跟不上时修正量被限幅
-  for (int i = 0; i < 100; ++i) {
-    state.time += 0.1;
-    reference.update(desired, state);
-  }
-  EXPECT_NEAR(reference.velocityCorrection().x(), gain > 0.0 ? limit : 0.0, 1e-9);
-  // 停止平移命令后衰减
-  desired.body_velocity_world.setZero();
-  state.time += 2.0;
-  reference.update(desired, state);
-  EXPECT_LT(reference.velocityCorrection().x(), 0.1 * limit + 1e-12);
-  // 离开运动模式清零
-  desired.mode = ControlMode::BalanceStand;
-  reference.update(desired, state);
-  EXPECT_DOUBLE_EQ(reference.velocityCorrection().norm(), 0.0);
-}
-
-// 高度积分：机身低于站立高度时，修正量逐步增大并叠加到高度目标；踏步时俯仰目标随前进速度前馈。
-TEST(OpenDogReference, HeightIntegralAndPitchFeedforward)
-{
-  boost::property_tree::ptree settings;
-  boost::property_tree::read_info(config("opendog_reference.info"), settings);
-  const double gain = settings.get<double>("heightIntegral.gain", 0.0);
-  const double limit = settings.get<double>("heightIntegral.limit", 0.03);
   const double pitch_gain = settings.get<double>("pitchVelocityGain", 0.0);
   const double height_gain = settings.get<double>("heightVelocityGain", 0.0);
   double com_height = 0.0;
   ocs2::loadData::loadCppDataType(config("opendog_reference.info"), "comHeight", com_height);
   OpenDogReference reference(config("opendog_reference.info"), config("opendog_task.info"));
   auto state = observation();
-  state.state(8) = com_height - 0.02;   // 机身比目标低 2 cm
-  state.state(9) = 0.0;
+  state.state(9) = 0.0;  // 偏航 0，机体系与世界系一致
   DesiredState<float> desired;
   desired.valid = true;
   desired.mode = ControlMode::Locomotion;
@@ -159,18 +116,11 @@ TEST(OpenDogReference, HeightIntegralAndPitchFeedforward)
   desired.body_velocity_world << 0.2F, 0.0F, 0.0F;
   reference.update(desired, state);
   state.time += 0.1;
-  auto target = reference.update(desired, state);
-  const double expected = std::min(gain * 0.02 * 0.1, limit);
-  EXPECT_NEAR(reference.heightCorrection(), expected, 1e-9);
-  EXPECT_NEAR(target.stateTrajectory.back()(8), com_height + expected - height_gain * 0.2, 1e-6);
+  const auto target = reference.update(desired, state);
+  EXPECT_NEAR(target.stateTrajectory.back()(8), com_height - height_gain * 0.2, 1e-6);
   EXPECT_NEAR(target.stateTrajectory.back()(10), -pitch_gain * 0.2, 1e-6);
-  for (int i = 0; i < 200; ++i) {
-    state.time += 0.1;
-    reference.update(desired, state);
-  }
-  EXPECT_NEAR(reference.heightCorrection(), gain > 0.0 ? limit : 0.0, 1e-9);
-  reference.reset();
-  EXPECT_DOUBLE_EQ(reference.heightCorrection(), 0.0);
+  EXPECT_NEAR(target.stateTrajectory.back()(0), 0.2, 1e-6);
+  EXPECT_NEAR(target.stateTrajectory.back()(1), 0.0, 1e-6);
 }
 
 // 站立期间轨迹保持首次生成时的起始时间，不随每帧刷新。

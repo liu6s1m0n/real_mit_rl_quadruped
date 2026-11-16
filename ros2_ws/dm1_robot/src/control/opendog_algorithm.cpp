@@ -135,8 +135,6 @@ struct OpenDogAlgorithm::Impl
   float friction_velocity = 0.1F;                          ///< 补偿的过渡速度，rad/s。
   /// 按参考轨迹的关节速度判断方向（站起爬升、零点标定）时的过渡速度，rad/s；参考速度无噪声，可以比 friction_velocity 小得多。
   float reference_friction_velocity = 0.03F;
-  /// 摆腿是否也补摩擦（0/1）：缺省 0，见 7. 段注释。
-  bool friction_swing = false;
   /// 各腿小腿（KFE）单独的 kp，按 FR/FL/RR/RL 存放，缺省等于 joint_kp。
   std::array<float, kNumLegs> calf_kp{{4.0F, 4.0F, 4.0F, 4.0F}};
   /// OCS2 质心模型观测：state 依次为归一化质心动量(6)、机身位置(3)、
@@ -314,12 +312,10 @@ bool OpenDogAlgorithm::configure()
     "hardware_output.frictionCompensation.torque", impl_->friction_torque);
   impl_->friction_velocity = std::max(1e-3F, output_settings.get<float>(
     "hardware_output.frictionCompensation.velocity", impl_->friction_velocity));
-  impl_->friction_swing = output_settings.get<int>("hardware_output.frictionCompensation.swing", 0) != 0;
   impl_->reference_friction_velocity = std::max(1e-3F, output_settings.get<float>(
     "hardware_output.frictionCompensation.referenceVelocity", impl_->reference_friction_velocity));
-  std::printf("[OpenDog][OUTPUT] frictionCompensation torque=%.2f Nm velocity=%.2f rad/s referenceVelocity=%.2f rad/s swing=%d\n",
-    impl_->friction_torque, impl_->friction_velocity, impl_->reference_friction_velocity,
-    impl_->friction_swing ? 1 : 0);
+  std::printf("[OpenDog][OUTPUT] frictionCompensation torque=%.2f Nm velocity=%.2f rad/s referenceVelocity=%.2f rad/s\n",
+    impl_->friction_torque, impl_->friction_velocity, impl_->reference_friction_velocity);
   // 站立高度和键盘速度档位
   ocs2::loadData::loadCppDataType(reference, "comHeight", impl_->command_settings.standing_height);
   auto & velocity = impl_->command_settings.velocity;
@@ -656,7 +652,7 @@ bool OpenDogAlgorithm::compute(
         friction = impl_->friction_torque * std::tanh(
           impl_->reference->referenceJointVelocity()(static_cast<Eigen::Index>(opendog_index)) /
           impl_->reference_friction_velocity);
-      } else if (locomotion && (impl_->contact_planned[contact_index] || impl_->friction_swing)) {
+      } else if (locomotion && impl_->contact_planned[contact_index]) {
         friction = impl_->friction_torque * std::tanh(joint_velocity / impl_->friction_velocity);
       }
       command.torque_feedforward(static_cast<Eigen::Index>(joint)) = static_cast<float>(
